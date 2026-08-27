@@ -307,33 +307,75 @@ expect_ok_json "seed grep corpus" '{"content": "alpha BETA\ngamma\n"}' \
   $CFS write $ROOT/g1.md --new
 expect_ok_json "seed second file" '{"content": "delta\nbeta two\n"}' \
   $CFS write $ROOT/g2.md --new
-$CFS grep "beta" --path $ROOT | grep -q "g2.md" && ok "grep finds a match" \
+$CFS grep -r "beta" $ROOT | grep -q "g2.md" && ok "grep finds a match" \
   || bad "grep finds a match"
-$CFS grep "beta" --path $ROOT | grep -q "g1.md" && bad "grep is case-sensitive by default" \
+$CFS grep -r "beta" $ROOT | grep -q "g1.md" && bad "grep is case-sensitive by default" \
   || ok "grep is case-sensitive by default"
-$CFS grep "beta" --path $ROOT -i | grep -q "g1.md" && ok "grep -i matches case-insensitively" \
+$CFS grep -ri "beta" $ROOT | grep -q "g1.md" && ok "grep -i matches case-insensitively" \
   || bad "grep -i matches case-insensitively"
-$CFS grep "al.ha|delta" --path $ROOT | grep -q "g1.md" && ok "grep supports regex alternation" \
-  || bad "grep supports regex alternation"
-$CFS grep "gamma" --path $ROOT -C 1 | grep -q "alpha BETA" && ok "grep -C shows context" \
+# Real grep's dialect, not a lookalike's: alternation needs -E.
+$CFS grep -rE "al.ha|delta" $ROOT | grep -q "g1.md" && ok "grep -E alternation" \
+  || bad "grep -E alternation"
+$CFS grep -r "al.ha|delta" $ROOT >/dev/null 2>&1 \
+  && bad "BRE leaves | literal, as in real grep" \
+  || ok "BRE leaves | literal, as in real grep"
+$CFS grep -r -C 1 "gamma" $ROOT | grep -q "alpha BETA" && ok "grep -C shows context" \
   || bad "grep -C shows context"
 # -l must list paths without any matched content lines.
-OUT=$($CFS grep "beta" --path $ROOT -i -l)
+OUT=$($CFS grep -ril "beta" $ROOT)
 if echo "$OUT" | grep -q "g1.md" && ! echo "$OUT" | grep -q "alpha"; then
   ok "grep -l prints paths without content"
 else bad "grep -l prints paths without content"; fi
-$CFS grep "nothingmatchesthis" --path $ROOT | grep -qi "no matches" \
-  && ok "grep reports no matches cleanly" || bad "grep reports no matches cleanly"
-expect_err "invalid regex rejected" "Invalid regular expression" \
-  $CFS grep "unclosed[" --path $ROOT
+# Paths that come back must be store paths, usable as the next command's input.
+$CFS grep -rn "gamma" $ROOT | grep -q "^$ROOT/g1.md:2:" \
+  && ok "matches are reported at store paths" || bad "matches are reported at store paths"
+# A lone file prints no filename, exactly as grep does.
+$CFS grep "gamma" $ROOT/g1.md | grep -qx "gamma" \
+  && ok "single-file search omits the filename" || bad "single-file search omits the filename"
+
+# Exit codes are grep's own: 0 matched, 1 did not, 2 could not run.
+$CFS grep -r "nothingmatchesthis" $ROOT >/dev/null 2>&1
+[ $? -eq 1 ] && ok "no match exits 1" || bad "no match exits 1"
+$CFS grep -r "alpha" $ROOT >/dev/null 2>&1
+[ $? -eq 0 ] && ok "a match exits 0" || bad "a match exits 0"
+OUT=$($CFS grep "unclosed[" $ROOT/g1.md 2>&1); [ $? -eq 2 ] \
+  && ok "invalid regex exits 2" || bad "invalid regex exits 2"
+echo "$OUT" | grep -qi "Invalid regular expression" \
+  && ok "invalid regex reports grep's own message" \
+  || bad "invalid regex reports grep's own message"
+
+# A directory without -r is grep's error, not a papered-over convenience.
+OUT=$($CFS grep "alpha" $ROOT 2>&1)
+echo "$OUT" | grep -qi "Is a directory" && ok "directory without -r errors as grep does" \
+  || bad "directory without -r errors as grep does"
+# The mirror is an implementation detail and must never surface in output.
+echo "$OUT" | grep -qi "cfs-mirror" && bad "mirror path never leaks" || ok "mirror path never leaks"
+
+expect_err "a path outside the store is named" "No such path in the store" \
+  $CFS grep -r "alpha" $ROOT/nosuchdir
+# An unclassifiable option is grep's own business to reject...
+$CFS grep -Q "alpha" $ROOT 2>&1 | grep -qi "unknown option" \
+  && ok "unknown option is left for grep to reject" \
+  || bad "unknown option is left for grep to reject"
+# ...unless cfs mistook its value for a path, which it must own up to by name.
+$CFS grep -Q "pattern" alpha 2>&1 | grep -q -- "-Q" \
+  && ok "a misread option value names the option" \
+  || bad "a misread option value names the option"
+
 # grep must see a file written moments ago -- the async-index failure it exists to avoid
 expect_ok_json "write a file then immediately grep it" '{"content": "freshlywritten\n"}' \
   $CFS write $ROOT/g3.md --new
-$CFS grep "freshlywritten" --path $ROOT | grep -q "g3.md" \
+$CFS grep -r "freshlywritten" $ROOT | grep -q "g3.md" \
   && ok "grep finds a just-written file" || bad "grep finds a just-written file"
+# ... and must stop seeing one that has since been deleted, or the rev-keyed
+# mirror is serving matches for content that no longer exists.
+$CFS delete $ROOT/g3.md --rev "$(revof $ROOT/g3.md)" >/dev/null 2>&1
+$CFS grep -r "freshlywritten" $ROOT >/dev/null 2>&1 \
+  && bad "a deleted file leaves the mirror" || ok "a deleted file leaves the mirror"
+
 python -c "open('bin0.tmp','wb').write(bytes(range(256)))"
 $CFS upload $ROOT/blob0.bin --from bin0.tmp --new >/dev/null 2>&1
-$CFS grep "." --path $ROOT >/dev/null 2>&1 && ok "grep skips binaries without erroring" \
+$CFS grep -r "." $ROOT >/dev/null 2>&1 && ok "grep skips binaries without erroring" \
   || bad "grep skips binaries without erroring"
 
 echo "=== diff ==="
@@ -531,7 +573,7 @@ withholds() {
 
 withholds "list"        $CFS list $ROOT --depth 5
 withholds "search"      $CFS search "freshlywritten" --path $ROOT
-withholds "grep"        $CFS grep "alpha" --path $ROOT
+withholds "grep"        $CFS grep -r "alpha" $ROOT
 withholds "history"     $CFS history $ROOT/g1.md
 withholds "read --rev"  $CFS read $ROOT/g1.md --rev "$(prev_rev $ROOT/g1.md)"
 

@@ -35,7 +35,7 @@ $CFS diff <path> --from R [--to B]        # ALWAYS use this to refresh a rev you
                                           #   already hold. NEVER history+read for that.
 $CFS history <path>                       # old revs for restore. NOT a currency check.
 $CFS restore <path> --rev R               # roll back to an earlier revision
-$CFS grep <regex> [--path P] [-i] [-C N] [-l]   # regex search: exact and immediate
+$CFS grep [OPTION]... PATTERN [PATH]...   # real GNU grep, over the store
 $CFS search <query> [--path P] [--names-only]   # Dropbox index: async, no regex
 $CFS delete <path> --rev R                # --force for directories
 $CFS rename <old> <new>
@@ -122,12 +122,17 @@ Restoring adds a new revision rather than erasing anything, so it is itself reve
 
 ## Finding things
 
+`grep` **is** GNU grep. Store paths go in, store paths come out, and in between the real binary runs — so every flag, exit code and dialect rule is the one you already know, with nothing to learn and nothing to translate.
+
 ```bash
-$CFS grep 'hotel|flight' --path /memory -i -C 2
-$CFS grep 'TODO' -l                      # matching paths only
+$CFS grep -rniE 'hotel|flight' /memory
+$CFS grep -rl --include='*.md' TODO
+$CFS grep -c alpha /memory/hawaii-2026/bookings.md
 ```
 
-`grep` fetches files and matches locally, so it is exact and immediate. `search` uses Dropbox's index: cheaper on a large tree, but no regex, and it indexes asynchronously so it will not find a file written moments ago. Prefer `grep`.
+That includes the parts that bite. Alternation needs `-E`, because the default dialect is BRE. A directory without `-r` is `Is a directory`. Exit status is 0 matched, 1 did not, 2 could not run. **The one deviation:** given no path, grep would read stdin, so instead the whole store is searched recursively.
+
+Files are fetched and matched locally, so a file written moments ago is found immediately. The first `grep` of a conversation pays for the fetch; later ones re-fetch only what changed. `search` uses Dropbox's index: cheaper on a large tree, but no regex, and it indexes asynchronously so it will *not* see that just-written file. Prefer `grep`.
 
 ## Memory conventions
 

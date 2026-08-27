@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Offline tests for the logic that does not need Dropbox."""
 
+import contextlib
 import io
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 import urllib.error
 
@@ -418,6 +421,191 @@ class TestWriteMode(unittest.TestCase):
         with self.assertRaises(cfs.CfsError):
             cfs.write_mode(args, "/f")
 
+
+class _ByteStream:
+    """Stands in for sys.stdout, which cmd_grep writes to via .buffer."""
+
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+    def text(self):
+        return self.buffer.getvalue().decode("utf-8", "replace")
+
+
+class TestGrepArgvSplit(unittest.TestCase):
+    """Telling a path operand from an option value is the whole job; if this
+    is wrong, grep searches the wrong thing or rewrites a pattern."""
+
+    def split(self, argv):
+        return cfs.GrepArgv(argv)
+
+    def test_first_operand_is_the_pattern(self):
+        parsed = self.split(["alpha", "/memory"])
+        self.assertEqual(parsed.operands, [0, 1])
+        self.assertEqual(parsed.path_indices(), [1])
+
+    def test_dash_e_makes_every_operand_a_path(self):
+        # The case the option table exists for: identical tokens, one a
+        # pattern and one a path.
+        parsed = self.split(["-e", "/memory", "-r", "/memory"])
+        self.assertTrue(parsed.pattern_is_an_option)
+        self.assertEqual(parsed.path_indices(), [3])
+
+    def test_long_pattern_option_with_equals(self):
+        parsed = self.split(["--regexp=alpha", "/memory"])
+        self.assertEqual(parsed.path_indices(), [1])
+
+    def test_separated_option_value_is_not_an_operand(self):
+        parsed = self.split(["-i", "-C", "2", "alpha", "/memory"])
+        self.assertEqual(parsed.path_indices(), [4])
+
+    def test_attached_option_value(self):
+        self.assertEqual(self.split(["-C2", "alpha", "/m"]).path_indices(), [2])
+
+    def test_cluster_ending_in_an_arg_taking_option(self):
+        self.assertEqual(self.split(["-inC", "2", "alpha", "/m"]).path_indices(), [3])
+
+    def test_cluster_with_attached_value(self):
+        self.assertEqual(self.split(["-inC2", "alpha", "/m"]).path_indices(), [2])
+
+    def test_long_option_value_separated_and_attached(self):
+        self.assertEqual(self.split(["--include", "*.md", "a", "/m"]).path_indices(), [3])
+        self.assertEqual(self.split(["--include=*.md", "a", "/m"]).path_indices(), [2])
+
+    def test_numeric_context_shorthand_is_not_an_operand(self):
+        self.assertEqual(self.split(["-5", "alpha", "/m"]).path_indices(), [2])
+
+    def test_double_dash_ends_options(self):
+        parsed = self.split(["--", "-alpha", "/m"])
+        self.assertEqual(parsed.operands, [1, 2])
+        self.assertEqual(parsed.path_indices(), [2])
+
+    def test_option_value_beginning_with_a_dash(self):
+        # -foo is -e's value, not a cluster of f, o, o.
+        parsed = self.split(["-e", "-foo", "/m"])
+        self.assertEqual(parsed.path_indices(), [2])
+        self.assertEqual(parsed.unknown, [])
+
+    def test_recursion_is_read_from_the_options_not_the_pattern(self):
+        for argv in (["-r", "a"], ["-Rn", "a"], ["--recursive", "a"], ["-inr", "a"]):
+            self.assertTrue(self.split(argv).recursive, argv)
+        for argv in (["a"], ["-in", "a"], ["-e", "-r", "/m"]):
+            self.assertFalse(self.split(argv).recursive, argv)
+
+    def test_unknown_options_are_recorded_not_guessed_at(self):
+        self.assertEqual(self.split(["--frobnicate", "a"]).unknown, ["--frobnicate"])
+        self.assertEqual(self.split(["-Q", "a"]).unknown, ["-Q"])
+
+    def test_known_options_are_not_reported_unknown(self):
+        for argv in (["-rniI", "a"], ["--color=auto", "a"], ["--null-data", "a"]):
+            self.assertEqual(self.split(argv).unknown, [], argv)
+
+
+class TestStoreScope(unittest.TestCase):
+    def test_no_paths_means_the_whole_store(self):
+        self.assertEqual(cfs.store_scope([]), "/")
+
+    def test_common_ancestor_of_several_paths(self):
+        self.assertEqual(cfs.store_scope(["/memory/a.md", "/memory/b.md"]), "/memory")
+
+    def test_divergent_paths_fall_back_to_the_root(self):
+        self.assertEqual(cfs.store_scope(["/memory/a.md", "/notes/b.md"]), "/")
+
+    def test_single_path_is_its_own_scope(self):
+        # May name a file; list_tree retries at the parent if Dropbox says so.
+        self.assertEqual(cfs.store_scope(["/memory/a.md"]), "/memory/a.md")
+
+
+class TestGrepAgainstAMirror(unittest.TestCase):
+    """End to end against real GNU grep, with the mirror hand-built so no
+    Dropbox call is needed."""
+
+    def setUp(self):
+        if not shutil.which("grep"):
+            self.skipTest("GNU grep not installed")
+        self.root = tempfile.mkdtemp(prefix="cfs-mirror-test")
+        os.makedirs(os.path.join(self.root, "memory"))
+        self._write("memory/a.md", "alpha BETA\ngamma\n")
+        self._write("memory/b.md", "delta\nalpha again\n")
+        self._write("memory/notes.txt", "alpha in a txt file\n")
+        self._patch("mirror_root", lambda: self.root)
+        self._patch("mirror_sync", lambda scope: None)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _write(self, rel, text):
+        with open(os.path.join(self.root, rel), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+
+    def _patch(self, name, replacement):
+        original = getattr(cfs, name)
+        setattr(cfs, name, replacement)
+        self.addCleanup(setattr, cfs, name, original)
+
+    def run_grep(self, argv):
+        """cmd_grep writes bytes to the underlying buffers, as grep does."""
+        out, err = _ByteStream(), _ByteStream()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cfs.cmd_grep(argv)
+        return code, out.text(), err.text()
+
+    def test_single_file_prints_content_without_a_path(self):
+        # Real grep omits the filename here, so output rewriting must not
+        # blindly prefix every line.
+        code, out, _ = self.run_grep(["alpha", "/memory/a.md"])
+        self.assertEqual((code, out), (0, "alpha BETA\n"))
+
+    def test_recursive_search_reports_store_paths(self):
+        code, out, _ = self.run_grep(["-rn", "alpha", "/memory"])
+        self.assertEqual(code, 0)
+        self.assertIn("/memory/a.md:1:alpha BETA", out)
+        self.assertNotIn(self.root, out)
+
+    def test_no_path_searches_the_whole_store_recursively(self):
+        code, out, _ = self.run_grep(["-n", "delta"])
+        self.assertEqual(code, 0)
+        self.assertIn("/memory/b.md:1:delta", out)
+
+    def test_no_match_exits_one_and_prints_nothing(self):
+        self.assertEqual(self.run_grep(["nothingmatchesthis"]), (1, "", ""))
+
+    def test_gnu_flags_reach_the_real_binary(self):
+        self.assertIn("BETA", self.run_grep(["-i", "beta", "/memory/a.md"])[1])
+        self.assertEqual(self.run_grep(["-c", "alpha", "/memory/a.md"])[1], "1\n")
+        self.assertIn("alpha", self.run_grep(["-w", "alpha", "/memory/a.md"])[1])
+
+    def test_include_filter_applies(self):
+        _, out, _ = self.run_grep(["-rl", "--include=*.md", "alpha", "/memory"])
+        self.assertIn("/memory/a.md", out)
+        self.assertNotIn("notes.txt", out)
+
+    def test_alternation_needs_dash_e_exactly_as_in_real_grep(self):
+        # The point of the rewrite: grep's own dialect rules, not a lookalike.
+        self.assertEqual(self.run_grep(["-r", "delta|gamma", "/memory"])[0], 1)
+        self.assertEqual(self.run_grep(["-rE", "delta|gamma", "/memory"])[0], 0)
+
+    def test_directory_without_dash_r_errors_as_grep_would(self):
+        code, _, err = self.run_grep(["alpha", "/memory"])
+        self.assertEqual(code, 2)
+        self.assertIn("Is a directory", err)
+        self.assertNotIn(self.root, err)
+
+    def test_missing_path_is_named(self):
+        with self.assertRaises(cfs.CfsError) as ctx:
+            self.run_grep(["alpha", "/memory/nope.md"])
+        self.assertIn("/memory/nope.md", str(ctx.exception))
+
+    def test_misclassified_unknown_option_names_itself_as_the_suspect(self):
+        # -Q is not a grep option; if it took a value, "alpha" would be it.
+        with self.assertRaises(cfs.CfsError) as ctx:
+            self.run_grep(["-Q", "pattern", "alpha"])
+        self.assertIn("-Q", str(ctx.exception))
+
+    def test_pattern_is_required(self):
+        with self.assertRaises(cfs.CfsError) as ctx:
+            self.run_grep([])
+        self.assertIn("needs a pattern", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

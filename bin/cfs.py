@@ -26,6 +26,7 @@ import os
 import random
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -1008,81 +1009,259 @@ BINARY_SUFFIXES = {
     ".gz", ".tar", ".mp3", ".mp4", ".mov", ".wav", ".bin", ".woff", ".woff2",
 }
 
+# `grep` is GNU grep, not an imitation of it: the store is mirrored to a temp
+# directory and the real binary runs over it. Everything below is plumbing that
+# carries store paths across that boundary and back.
+#
+# Rewriting a path operand means knowing which argv tokens are operands -- in
+# `grep -e /memory -r /memory` only grep's option table separates the pattern
+# from the path. That table is finite and long stable, so it is enumerated.
+# Anything unlisted is assumed to take no value; when that is wrong the value
+# is mistaken for a path, fails to exist, and is reported by name. Never
+# silent.
+GREP_SHORT_WITH_ARG = set("ABCDdefm")
+GREP_SHORT_NO_ARG = set("EFGPiyvwxcLloqsbnHhTZzaIrRUuV")
+GREP_LONG_WITH_ARG = {
+    "--after-context", "--before-context", "--context", "--binary-files",
+    "--devices", "--directories", "--exclude", "--exclude-from",
+    "--exclude-dir", "--file", "--group-separator", "--include", "--label",
+    "--max-count", "--regexp",
+}
+GREP_LONG_NO_ARG = {
+    "--extended-regexp", "--fixed-strings", "--basic-regexp", "--perl-regexp",
+    "--ignore-case", "--no-ignore-case", "--invert-match", "--word-regexp",
+    "--line-regexp", "--count", "--files-with-matches", "--files-without-match",
+    "--only-matching", "--quiet", "--silent", "--no-messages", "--byte-offset",
+    "--line-number", "--line-buffered", "--with-filename", "--no-filename",
+    "--initial-tab", "--null", "--null-data", "--recursive", "--binary",
+    "--dereference-recursive", "--text", "--unix-byte-offsets",
+    "--color", "--colour", "--version", "--help",
+}
+# These supply the pattern themselves, so every operand is a path.
+GREP_SHORT_PATTERN_OPTS = set("ef")
+GREP_LONG_PATTERN_OPTS = {"--regexp", "--file"}
+GREP_LONG_RECURSIVE = {"--recursive", "--dereference-recursive"}
+GREP_SHORT_RECURSIVE = set("rR")
 
-def cmd_grep(args) -> str:
-    """Regex search by fetching files and matching locally.
 
-    Dropbox's own search is full-text but has no regex, no context lines, and
-    indexes asynchronously -- so it cannot find a file written moments ago,
-    which is exactly when a search mid-conversation is most likely. Fetching and
-    matching locally is exact and immediate; the tree is small enough that the
-    cost is worth the correctness.
+class GrepArgv:
+    """grep's argv, split into options and operands.
+
+    Operands are held as indices rather than values because the caller rewrites
+    them in place. That is also what keeps `-f` and `--exclude-from` reading
+    from the sandbox rather than the store: their values are option values, so
+    they are never operands and never rewritten.
     """
-    try:
-        pattern = re.compile(args.pattern, re.IGNORECASE if args.ignore_case else 0)
-    except re.error as exc:
-        raise CfsError(f"Invalid regular expression: {exc}")
 
-    root = normalise(args.path)
-    result = rpc("/2/files/list_folder", {"path": api_path(root), "recursive": True})
+    def __init__(self, argv: list[str]):
+        self.argv = list(argv)
+        self.operands: list[int] = []
+        self.unknown: list[str] = []
+        self.pattern_is_an_option = False
+        self.recursive = False
+        self._split()
+
+    def _split(self) -> None:
+        argv = self.argv
+        i = 0
+        while i < len(argv):
+            token = argv[i]
+            if token == "--":
+                self.operands.extend(range(i + 1, len(argv)))
+                return
+            if token.startswith("--") and len(token) > 2:
+                name = token.split("=", 1)[0]
+                self.pattern_is_an_option |= name in GREP_LONG_PATTERN_OPTS
+                self.recursive |= name in GREP_LONG_RECURSIVE
+                if name in GREP_LONG_WITH_ARG:
+                    if "=" not in token:
+                        i += 1  # the value is the next token
+                elif name not in GREP_LONG_NO_ARG:
+                    self.unknown.append(name)
+            elif token.startswith("-") and len(token) > 1:
+                if not token[1:].isdigit():  # -NUM is self-contained: -5 is -C 5
+                    i += self._split_cluster(token)
+            elif token != "-":
+                self.operands.append(i)
+            i += 1
+
+    def _split_cluster(self, token: str) -> int:
+        """Consume one bundle of short options; 1 if it also eats the next token."""
+        for pos, char in enumerate(token[1:], 1):
+            self.pattern_is_an_option |= char in GREP_SHORT_PATTERN_OPTS
+            self.recursive |= char in GREP_SHORT_RECURSIVE
+            if char in GREP_SHORT_WITH_ARG:
+                # The rest of the cluster is the value, unless the cluster ends
+                # here, in which case the value is the next token.
+                return 1 if pos == len(token) - 1 else 0
+            if char not in GREP_SHORT_NO_ARG:
+                self.unknown.append("-" + char)
+        return 0
+
+    def path_indices(self) -> list[int]:
+        """Operands that are paths: all of them, unless the first is the pattern."""
+        if self.pattern_is_an_option:
+            return self.operands
+        return self.operands[1:]
+
+
+def mirror_root() -> str:
+    return os.path.join(tempfile.gettempdir(), "cfs-mirror")
+
+
+def manifest_file() -> str:
+    """The rev manifest, kept outside the mirror -- anything inside it is corpus
+    that grep -r would search and report as a file in the store."""
+    return mirror_root() + "-revs.json"
+
+
+def mirror_path(store_path: str) -> str:
+    """Store path -> its location in the mirror, joined with forward slashes so
+    grep echoes back a prefix that string replacement can strip on any platform."""
+    return mirror_root() + normalise(store_path)
+
+
+def store_scope(paths: list[str]) -> str:
+    """The shallowest store directory containing every path operand.
+
+    Only this subtree is mirrored, so grepping one area does not drag the whole
+    store across the network. A lone operand may name a file; list_tree retries
+    at the parent when Dropbox says so.
+    """
+    if not paths:
+        return "/"
+    parts = [normalise(p).strip("/").split("/") for p in paths]
+    shared: list[str] = []
+    for group in zip(*parts):
+        if len(set(group)) != 1:
+            break
+        shared.append(group[0])
+    return "/" + "/".join(shared)
+
+
+def mirror_sync(scope: str) -> None:
+    """Materialise the store under `scope` into the mirror directory.
+
+    Keyed on Dropbox revs: one recursive list_folder says what changed, so
+    repeated greps within a conversation re-download nothing. Files that have
+    left the store are removed from the mirror, since a stale copy would
+    otherwise yield matches for content that no longer exists.
+    """
+    os.makedirs(mirror_root(), exist_ok=True)
+    # Store content on disk is new with the mirror; hold it to the same
+    # owner-only footing as the token cache.
+    os.chmod(mirror_root(), 0o700)
+    manifest_path = manifest_file()
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError):
+        manifest = {}
+
+    live = {}
+    for entry in list_tree(scope):
+        if entry[".tag"] != "file":
+            continue
+        path = entry["path_display"]
+        if os.path.splitext(path)[1].lower() not in BINARY_SUFFIXES:
+            live[path] = entry["rev"]
+
+    for path, rev in live.items():
+        local = mirror_path(path)
+        if manifest.get(path) == rev and os.path.exists(local):
+            continue
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        try:
+            data, _ = content_download({"path": api_path(path)})
+        except CfsError:
+            continue  # unreadable; skip it rather than abort the whole search
+        with open(local, "wb") as fh:
+            fh.write(data)
+
+    prefix = "/" if scope == "/" else scope + "/"
+    for path in [p for p in manifest if p.startswith(prefix) and p not in live]:
+        try:
+            os.remove(mirror_path(path))
+        except OSError:
+            pass
+        manifest.pop(path)
+    manifest.update(live)
+
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+
+def list_tree(scope: str) -> list[dict]:
+    """Every entry under `scope`, retrying at the parent if it names a file."""
+    try:
+        result = rpc("/2/files/list_folder", {"path": api_path(scope), "recursive": True})
+    except CfsError:
+        parent = os.path.dirname(normalise(scope).rstrip("/")) or "/"
+        if parent == scope:
+            raise
+        return list_tree(parent)
     entries = list(result["entries"])
     while result.get("has_more"):
         result = rpc("/2/files/list_folder/continue", {"cursor": result["cursor"]})
         entries.extend(result["entries"])
+    return entries
 
-    files = [
-        e
-        for e in entries
-        if e[".tag"] == "file"
-        and os.path.splitext(e["path_display"])[1].lower() not in BINARY_SUFFIXES
-    ]
-    files.sort(key=lambda e: e["path_display"].lower())
 
-    truncated = len(files) > args.max_files
-    files = files[: args.max_files]
+def rewrite_grep_output(data: bytes) -> bytes:
+    """Mirror paths -> store paths.
 
-    lines: list[str] = []
-    matched_files = 0
-    for entry in files:
-        try:
-            data, _ = content_download({"path": api_path(entry["path_display"])})
-            text = data.decode("utf-8")
-        except (CfsError, UnicodeDecodeError):
-            continue  # unreadable or not text; skip rather than abort the search
+    Replacement rather than prefixing each line: grep omits the filename when
+    searching a single file, so prefixing would corrupt content. Bytes
+    throughout, because a match may contain anything at all.
+    """
+    root = os.fsencode(mirror_root())
+    return data.replace(root, b"").replace(root.replace(b"\\", b"/"), b"")
 
-        hits = [
-            (i, line)
-            for i, line in enumerate(text.split("\n"), 1)
-            if pattern.search(line)
-        ]
-        if not hits:
-            continue
-        matched_files += 1
-        if args.files_only:
-            lines.append(entry["path_display"])
-            continue
 
-        body = text.split("\n")
-        shown: set[int] = set()
-        lines.append(f"{entry['path_display']}:")
-        for num, line in hits:
-            lo = max(1, num - args.context)
-            hi = min(len(body), num + args.context)
-            for n in range(lo, hi + 1):
-                if n in shown:
-                    continue
-                shown.add(n)
-                marker = ":" if n == num else "-"
-                lines.append(f"  {n}{marker} {body[n - 1]}")
-        lines.append("")
+def cmd_grep(raw_argv: list[str]) -> int:
+    """Run real GNU grep against a mirror of the store."""
+    parsed = GrepArgv(raw_argv)
+    argv = parsed.argv
+    path_idx = parsed.path_indices()
 
-    if not matched_files:
-        return f"No matches for {args.pattern!r} under {root}."
+    if not parsed.operands and not parsed.pattern_is_an_option:
+        raise CfsError("grep needs a pattern. Usage: grep [OPTION]... PATTERN [PATH]...")
 
-    header = f"{matched_files} file(s) matched {args.pattern!r}:"
-    if truncated:
-        header += f" (searched the first {args.max_files} files only)"
-    return header + "\n" + "\n".join(lines).rstrip()
+    mirror_sync(store_scope([argv[i] for i in path_idx]))
+
+    for i in path_idx:
+        local = mirror_path(argv[i])
+        if not os.path.exists(local):
+            hint = ""
+            if parsed.unknown:
+                hint = (
+                    f" -- cfs does not recognise {', '.join(sorted(set(parsed.unknown)))}, "
+                    "so if that option takes a value, cfs mistook the value for a path"
+                )
+            raise CfsError(f"No such path in the store: {argv[i]}{hint}")
+        argv[i] = local
+
+    if not path_idx:
+        # Real grep would read stdin here. There is no stdin worth reading, so
+        # the whole store is the corpus instead -- the one deliberate deviation.
+        if not parsed.recursive:
+            argv.insert(0, "-r")
+        argv.append(mirror_root())
+
+    try:
+        proc = subprocess.run(["grep"] + argv, capture_output=True)
+    except FileNotFoundError:
+        raise CfsError("grep is not installed in this sandbox.") from None
+    try:
+        sys.stdout.buffer.write(rewrite_grep_output(proc.stdout))
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        # Piping into `head` closes the pipe early. Real grep dies quietly on
+        # SIGPIPE; a traceback here would look like a failed search.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return proc.returncode
+    sys.stderr.buffer.write(rewrite_grep_output(proc.stderr))
+    return proc.returncode
 
 
 # Deliberately tight: a diff earns its place only when it is small enough to
@@ -1390,16 +1569,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser(
-        "grep", help="regex search across file contents (exact, immediate)"
-    )
-    p.add_argument("pattern")
-    p.add_argument("--path", default="/", help="subtree to search")
-    p.add_argument("-i", "--ignore-case", action="store_true")
-    p.add_argument("-C", "--context", type=int, default=0, help="lines of context")
-    p.add_argument("-l", "--files-only", action="store_true", help="paths only")
-    p.add_argument("--max-files", type=int, default=200)
-    p.set_defaults(func=cmd_grep)
+    # Listed for --help only. main() routes grep before argparse sees it, so
+    # that every flag reaches the real binary exactly as it was typed.
+    sub.add_parser(
+        "grep", help="GNU grep over the store: grep [OPTION]... PATTERN [PATH]...",
+        add_help=False,
+    ).add_argument("argv", nargs=argparse.REMAINDER)
 
     p = sub.add_parser("diff", help="show what changed since a rev you hold")
     p.add_argument("path")
@@ -1442,6 +1617,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # grep bypasses argparse entirely: its flags are GNU grep's, and argparse
+    # would reject or reinterpret them before the real binary ever ran.
+    if sys.argv[1:2] == ["grep"]:
+        try:
+            return cmd_grep(sys.argv[2:])
+        except CfsError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2  # grep's own code for "the search did not run"
+
     args = build_parser().parse_args()
     try:
         print(args.func(args))

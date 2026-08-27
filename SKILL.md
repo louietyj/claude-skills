@@ -14,34 +14,34 @@ A persistent filesystem, yours alone, that survives across conversations. Backed
 ## Setup (once per conversation)
 
 ```bash
-CFS_PY=/mnt/skills/user/durable-filesystem/bin/cfs.py
-[ -f "$CFS_PY" ] || CFS_PY=$(ls /mnt/skills/*/durable-filesystem/bin/cfs.py 2>/dev/null | head -1)
-[ -f "$CFS_PY" ] || CFS_PY=$(find /mnt /opt /home -name cfs.py 2>/dev/null | head -1)
-[ -f "$CFS_PY" ] && CFS="python3 $CFS_PY" || echo "CFS NOT FOUND"
-$CFS list /
+bash /mnt/skills/user/durable-filesystem/setup.sh
 ```
 
-On `CFS NOT FOUND`, **stop**. Don't guess a path, fall back to local files, or use the connector — tell the user the skill files are missing. Every command below will fail, and any "memory" you produce without them is fiction.
+Puts `cfs` on PATH and proves it can reach the store. Idempotent — re-run it rather than working out whether it already ran.
+
+The sandbox reboots between turns but keeps its disk for the length of a conversation, so one run covers every later turn. **Never re-derive the path or set a `$CFS` variable**: shell variables die with the bash call that set them, so a command that worked last turn silently becomes `python3: can't open file` the next. Just call `cfs`.
+
+If setup **fails**, stop. Don't guess a path, fall back to local files, or use the connector — tell the user the skill files are missing. Every command below will fail, and any "memory" you produce without them is fiction.
 
 ## Commands
 
 ```bash
-$CFS list [path] [--depth N]              # names and sizes (no revs — read for those)
-$CFS read <path> [--lines 1-40] [--full]  # content AND the rev you need to write
-$CFS read <path> --rev R                  # an old version; can NOT license a write
-$CFS write <path> (--new | --rev R) --stdin  # raw content on stdin
-$CFS edit <path> --rev R [--tag T] [--all]   # ONE SEARCH/REPLACE block on stdin
-$CFS diff <path> --from R [--to B]        # ALWAYS use this to refresh a rev you
-                                          #   already hold. NEVER history+read for that.
-$CFS history <path>                       # old revs for restore. NOT a currency check.
-$CFS restore <path> --rev R               # roll back to an earlier revision
-$CFS grep [OPTION]... PATTERN [PATH]...   # real GNU grep, over the store
-$CFS search <query> [--path P] [--names-only]   # Dropbox index: async, no regex
-$CFS delete <path> --rev R                # --force for directories
-$CFS rename <old> <new>
-$CFS copy <src> <dst>
-$CFS upload <path> --from <local> (--new | --rev R)   # binaries, generated files
-$CFS download <path> --to <local>
+cfs list [path] [--depth N]              # names and sizes (no revs — read for those)
+cfs read <path> [--lines 1-40] [--full]  # content AND the rev you need to write
+cfs read <path> --rev R                  # an old version; can NOT license a write
+cfs write <path> (--new | --rev R) --stdin  # raw content on stdin
+cfs edit <path> --rev R [--tag T] [--all]   # ONE SEARCH/REPLACE block on stdin
+cfs diff <path> --from R [--to B]        # ALWAYS use this to refresh a rev you
+                                         #   already hold. NEVER history+read for that.
+cfs history <path>                       # old revs for restore. NOT a currency check.
+cfs restore <path> --rev R               # roll back to an earlier revision
+cfs grep [OPTION]... PATTERN [PATH]...   # real GNU grep, over the store
+cfs search <query> [--path P] [--names-only]   # Dropbox index: async, no regex
+cfs delete <path> --rev R                # --force for directories
+cfs rename <old> <new>
+cfs copy <src> <dst>
+cfs upload <path> --from <local> (--new | --rev R)   # binaries, generated files
+cfs download <path> --to <local>
 ```
 
 ## The rev rule
@@ -61,7 +61,7 @@ The loop is **read (or diff) → get rev → write with that rev**. Dropbox veri
 Never hand-escape JSON. A quoted heredoc (`<<'EOF'`) passes content through untouched — literal newlines, quotes, `$`, backticks, backslashes.
 
 ```bash
-$CFS write /memory/hawaii.md --new --stdin <<'EOF'
+cfs write /memory/hawaii.md --new --stdin <<'EOF'
 # Hawaii 2026
 
 Multiple paragraphs, "quotes" and $vars, all verbatim.
@@ -71,7 +71,7 @@ EOF
 `edit` takes a **SEARCH/REPLACE block**, the shape of a git merge conflict:
 
 ```bash
-$CFS edit /memory/hawaii.md --rev 0165932a <<'EOF'
+cfs edit /memory/hawaii.md --rev 0165932a <<'EOF'
 <<<<<<< SEARCH
 - Hotel: unbooked
 =======
@@ -87,7 +87,7 @@ Three markers, each used **once**: open, divide, close. Do not repeat `=======` 
 When the file **contains conflict markers of its own**, `edit` refuses and tells you to add `--tag`, which suffixes all three markers so only your lines are structural:
 
 ```bash
-$CFS edit /notes/merge.md --rev 0165932a --tag @@X@@ <<'EOF'
+cfs edit /notes/merge.md --rev 0165932a --tag @@X@@ <<'EOF'
 <<<<<<< SEARCH @@X@@
 <<<<<<< HEAD
 ours
@@ -111,9 +111,9 @@ There is deliberately **no way to read the SEARCH text from a file**: an edit mu
 Every file keeps 30 days of revisions, so a bad write is a rollback, not a loss:
 
 ```bash
-$CFS history /memory/hawaii.md               # revisions, newest first
-$CFS read /memory/hawaii.md --rev 0165931f   # the full older version
-$CFS restore /memory/hawaii.md --rev 0165931f
+cfs history /memory/hawaii.md               # revisions, newest first
+cfs read /memory/hawaii.md --rev 0165931f   # the full older version
+cfs restore /memory/hawaii.md --rev 0165931f
 ```
 
 Restoring adds a new revision rather than erasing anything, so it is itself reversible — use it instead of rebuilding a damaged file by hand.
@@ -125,14 +125,22 @@ Restoring adds a new revision rather than erasing anything, so it is itself reve
 `grep` **is** GNU grep. Store paths go in, store paths come out, and in between the real binary runs — so every flag, exit code and dialect rule is the one you already know, with nothing to learn and nothing to translate.
 
 ```bash
-$CFS grep -rniE 'hotel|flight' /memory
-$CFS grep -rl --include='*.md' TODO
-$CFS grep -c alpha /memory/hawaii-2026/bookings.md
+cfs grep -rniE 'hotel|flight' /memory
+cfs grep -rl --include='*.md' TODO
+cfs grep -c alpha /memory/hawaii-2026/bookings.md
 ```
 
 That includes the parts that bite. Alternation needs `-E`, because the default dialect is BRE. A directory without `-r` is `Is a directory`. Exit status is 0 matched, 1 did not, 2 could not run. **The one deviation:** given no path, grep would read stdin, so instead the whole store is searched recursively.
 
-Files are fetched and matched locally, so a file written moments ago is found immediately. The first `grep` of a conversation pays for the fetch; later ones re-fetch only what changed. `search` uses Dropbox's index: cheaper on a large tree, but no regex, and it indexes asynchronously so it will *not* see that just-written file. Prefer `grep`.
+Files are fetched and matched locally, so a file written moments ago is found immediately. The first `grep` of a conversation pays for the fetch; later ones re-fetch only what changed.
+
+**Searching by name is a different command.** grep matches content, never filenames: `--include` only filters which files it opens, and it filters *after* the fetch, so narrowing by glob saves nothing. Ask the Dropbox index instead — no download at all:
+
+```bash
+cfs search INDEX --names-only
+```
+
+That index is asynchronous, so it will not see a file written moments ago; if you just wrote it, you already know its path. For content, prefer `grep`.
 
 ## Memory conventions
 

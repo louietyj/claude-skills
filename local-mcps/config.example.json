@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "tomtom": {
+      "type": "http",
+      "url": "https://mcp.tomtom.com/maps",
+      "headers": { "tomtom-api-key": "YOUR_KEY_HERE" },
+      "description": "geocoding, routing, live traffic, EV range, places search"
+    },
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time", "--local-timezone", "Europe/London"],
+      "description": "current time in any timezone, and timezone conversion"
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "/tmp/example.db"],
+      "env": { "SOME_TOKEN": "${SOME_TOKEN:-}" },
+      "description": "query and modify a local SQLite database"
+    }
+  }
+}

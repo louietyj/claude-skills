@@ -1,0 +1,13 @@
+# The share link to the config. The config holds API keys, so the link is a
+# read capability on them.
+config-url.txt
+!config-url.example.txt
+
+# A bundled config, if you use that route instead of the link. Same reasoning.
+config.json
+!config.example.json
+
+# Packaged skill -- reaches the config, so it is a secret too.
+*.zip
+
+__pycache__/

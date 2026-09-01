@@ -1,0 +1,6 @@
+# A share link to the config on the durable filesystem. One URL, comments and
+# blank lines ignored, first URL wins.
+#
+# In Dropbox: right-click mcp.json -> Copy link. Paste it as-is; lmcps rewrites
+# the query string to force a direct, uncached download.
+https://www.dropbox.com/scl/fi/xxxxxxxxxxxx/mcp.json?rlkey=xxxxxxxxxxxx&dl=0

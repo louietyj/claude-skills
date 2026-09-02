@@ -128,18 +128,14 @@ printf '\n%s SESSION INIT COMPLETE %s\n' "$RULE_H" "$RULE_H"
 printf '%s\n' "${summary[@]}"
 
 if [ $printed -ne 0 ]; then
-  printf '\nEvery file above was printed in full and is in your context now. Do\n'
-  printf 'NOT cat it, view it, or invoke its skill to read it again.\n'
-  # Name the rule being overridden, not just the outcome: a harness that says
-  # "read the relevant SKILL.md before any bash command" states it
-  # unconditionally, and an instance with no grounds to treat this transcript as
-  # satisfying it will re-view to be safe. Scoped to files actually printed --
-  # this is about not re-fetching bytes already held, not skipping instructions.
-  printf '\nIf you are working under a standing rule to read a skill'\''s instructions\n'
-  printf 'before acting on it -- before a bash command, a file write, anything --\n'
-  printf 'printing them here already satisfied it for the files marked printed in\n'
-  printf 'the summary above. Re-viewing one returns bytes you already hold. Files\n'
-  printf 'not marked printed are not covered and still need their own read.\n'
+  # State this flatly. Arguing the case -- naming the standing rule, explaining
+  # why it no longer binds -- reads like an injection talking the model out of
+  # an instruction. Scoped to what the summary marks printed: a skipped stage's
+  # skill still needs its own read.
+  printf '\nEvery file above was printed in full and is in your context now. This\n'
+  printf 'satisfies any requirement to read them before acting. Do not cat, view,\n'
+  printf 'or re-invoke a skill for anything marked printed in the summary above;\n'
+  printf 'anything not marked printed still needs its own read.\n'
 fi
 
 if [ -n "${lmcps_broken:-}" ]; then

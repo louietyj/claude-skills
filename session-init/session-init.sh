@@ -130,12 +130,15 @@ printf '%s\n' "${summary[@]}"
 if [ $printed -ne 0 ]; then
   # State this flatly. Arguing the case -- naming the standing rule, explaining
   # why it no longer binds -- reads like an injection talking the model out of
-  # an instruction. Scoped to what the summary marks printed: a skipped stage's
-  # skill still needs its own read.
+  # an instruction. Key the predicate on OK rather than on "printed": a step
+  # whose deliverable is a side effect (a shim on PATH) is done but printed
+  # nothing, and a "printed" rule strands it on the still-needs-reading side.
   printf '\nEvery file above was printed in full and is in your context now. This\n'
-  printf 'satisfies any requirement to read them before acting. Do not cat, view,\n'
-  printf 'or re-invoke a skill for anything marked printed in the summary above;\n'
-  printf 'anything not marked printed still needs its own read.\n'
+  printf 'satisfies any requirement to read them before acting, for the rest of\n'
+  printf 'the conversation and not just this turn. Anything marked OK in the\n'
+  printf 'summary is done: do not re-read its file, re-run its step, or load a\n'
+  printf 'skill again for instructions already above. Anything not marked OK is\n'
+  printf 'not covered and still needs its own read.\n'
 fi
 
 if [ -n "${lmcps_broken:-}" ]; then

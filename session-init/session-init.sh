@@ -56,10 +56,15 @@ skip() {  # $1 = why
   failed=1
 }
 
+# Scope this to the steps, never to the commands. The transcript contains
+# `cfs read` and the printed instructions contain `lmcps tools` -- a ban phrased
+# as "any command shown below" forbids the exact two tools this boot exists to
+# hand over, including the `cfs read` the closing line asks for.
 printf '%s SESSION INIT %s\n' "$RULE_H" "$RULE_H"
 printf 'What follows is a transcript of %d steps that HAVE ALREADY RUN. It is not\n' "$TOTAL"
-printf 'a plan. Do not re-run any command it shows; do not re-read any file it\n'
-printf 'prints. Read it, then answer.\n'
+printf 'a plan. Do not repeat those steps, and do not re-read the files they print.\n'
+printf '`cfs` and `lmcps` are yours to use from here: what is ruled out is redoing\n'
+printf 'the boot, not using the tools it just set up. Read this, then answer.\n'
 
 DFS=$(find_skill durable-filesystem) || DFS=''
 LMCPS=$(find_skill local-mcps) || LMCPS=''

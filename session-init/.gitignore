@@ -1,0 +1,4 @@
+# Packaged skill.
+*.zip
+
+__pycache__/

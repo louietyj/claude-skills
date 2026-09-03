@@ -60,10 +60,9 @@ than probing incrementally.
 
 ## Where the config comes from
 
-`/mcp.json` on the user's durable filesystem, in Claude Code's `mcpServers`
-schema. **Read `references/config.md`, beside this file, before adding or
-changing a server** — there is a required non-standard key whose absence fails
-silently.
+`/mcp.json` on the user's durable filesystem. Adding a server, changing one, or
+wondering why one never gets picked? Read `references/config.md` — there is a
+required non-standard key whose absence fails silently.
 
 ## Limits
 

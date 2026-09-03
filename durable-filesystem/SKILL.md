@@ -108,7 +108,7 @@ There is deliberately **no way to read the SEARCH text from a file**: an edit mu
 
 ## Recovering from a bad write
 
-Every file keeps 30 days of revisions, so a bad write is a rollback, not a loss: `cfs history <path>` lists them newest first, `cfs restore <path> --rev R` rolls back. Restoring adds a new revision rather than erasing one, so it is itself reversible — use it instead of rebuilding a damaged file by hand. `references/recovery.md`, beside this file, has the rest.
+Wrote the wrong thing? Everything is versioned, 30 days back, and a rollback is itself reversible. Never rebuild a damaged file by hand — read `references/recovery.md` to inspect history and undo.
 
 ## Finding things
 

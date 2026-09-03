@@ -6,6 +6,8 @@ Runs MCP servers that claude.ai's remote connectors cannot reach, from the code-
 SKILL.md                 the skill Claude reads; commands, costs, limits
 bin/lmcps.py             the CLI (stdlib only — the sandbox cannot pip install)
 setup.sh                 puts `lmcps` on PATH and prints the configured servers
+routine/refresh.py       rebuilds the tool index; runs on the cloud box, not here
+routine/make-setup-script.py   prints the cloud environment's setup script
 user-preferences.md      text to paste into claude.ai personal preferences
 package.py               builds local-mcps.zip for upload
 config-url.txt           share link to the config — gitignored, and a secret
@@ -38,17 +40,33 @@ Two latent bugs in the original were fixed on the way:
 - **JSON-RPC ids are strings now** (`lmcps-init`, `lmcps-call`). They were fixed integers `1` and `2`, which can collide with a server-initiated request's id.
 - **Server→client requests are answered, not skipped.** The original's read loop discarded anything that wasn't the response it wanted. A server that blocks waiting on `roots/list` would hang until the timeout with nothing to report. There is now a dispatch loop: `roots/list` gets an empty list, anything else gets a polite `-32601`. `test_a_server_request_is_answered_rather_than_skipped` fails by timing out if that dispatch is removed — it was checked.
 
-## Design: there is no catalog
+## Design: the catalog, and why it came back
 
-An earlier design had `lmcps sync` enumerate every server's `tools/list` into a durable catalog, invalidated on a hash of the config, so that `lmcps servers` could be cheap. That mattered because the preferences text makes `servers` run at the top of every conversation, and spawning N servers at ~10–25s each would make the instruction something to resent and then ignore.
+An earlier design had `lmcps sync` enumerate every server's `tools/list` into a durable catalog, invalidated on a hash of the config, so that `lmcps servers` could be cheap. It was deleted, for a good reason: the preferences text makes `servers` run at the top of every conversation, and spawning N servers at ~10-25s each to build a catalog there would make the instruction something to resent and then ignore.
 
-The catalog is gone, because `servers` never needed it. Its output is names, transports and a capability one-liner — and the one-liner is better as a hand-written `description` in the config than as a machine-joined list of tool names. You are copy-pasting the server block out of a README anyway, and *"geocoding, routing, live traffic, EV range"* is a better trigger than eighteen tool names.
+It is back, because a **free cloud cron** moved that cost off the boot path entirely. A Claude Code routine fires every five hours to refresh a session limit; `routine/refresh.py` rides along, spawns every server on that box, and leaves `/mcp-catalog.json` beside the config. Measured cold on that box: ~18s for three servers, which nobody waits for. `lmcps servers` then reads the result over a share link, exactly as it reads the config.
 
-That deletes the catalog file, the `sync` verb, the config-hash invalidation, the stale-hash warning, and the write path. What it costs is that `lmcps tools` spawns instead of reading a cache — which is fine, and better in two ways: it's only paid once Claude has decided to use that server and is about to spawn it for `call` regardless, and a live `tools/list` can never be stale the way a cached schema silently rots.
+What makes it safe this time is that **the catalog is display-only**. It holds tool names and descriptions. No schemas, no `instructions`. `lmcps tools` still spawns and is still live, `--schema` included.
 
-Within a conversation, `tools` results are cached under `$LMCPS_HOME`. That needs no invalidation story at all: the sandbox disk lives exactly as long as the conversation, so the cache expires on its own and a schema can never be stale by more than one conversation. Measured on `@modelcontextprotocol/server-everything`: 23s cold, 0.5s cached.
+Descriptions are stored **whole** and truncated to 80 columns only when printed. The index is cheap to store and expensive to rebuild, so the fidelity is worth keeping: the display budget is then a rendering decision that can be changed without waiting five hours for a refetch. Truncation collapses whitespace rather than cutting at the first newline, because a tool's `description` is frequently a paragraph whose first line is a fragment.
 
-Losing the catalog also made the config **read-only** — `sync` was the only writer. That in turn removed the dependency on `durable-filesystem`: the config is fetched over a plain Dropbox share link with `urllib`, so `local-mcps` needs nothing else installed to work.
+That single constraint answers the objection the original deletion rested on -- *a live `tools/list` can never be stale the way a cached schema silently rots* -- because nothing the model acts on is ever served from the cache. A stale catalog can mislead about **what exists**, never about **how to call it**. So there is no config-hash invalidation, no stale-schema warning, and no retry-on-invalid-params machinery; staleness is a display concern by construction rather than by promise.
+
+The split is the one claude.ai itself makes for deferred tool loading: **catalog** (what exists -- cheap, always in context) against **schema** (how to call -- expensive, fetched on demand). What was missing here was never phase 2; `tools --schema` has always existed. It was phase 1. Without a tool-level index, deciding whether a request is servable cost a spawn per server, so in practice the question went unasked and configured servers went unused. A hand-written per-server `description` is a good routing trigger and a poor answer to *"can this server do X?"*.
+
+`servers` closes with a blunt reminder that it has shown names only and that parameters must come from `tools --schema`. The redundancy is deliberate: a catalog reads like enough to call from, and a confabulated `lmcps call` costs a full server spawn to discover.
+
+Within a conversation, `tools` results are still cached under `$LMCPS_HOME`, and that still needs no invalidation story: the sandbox disk lives exactly as long as the conversation. Measured on `@modelcontextprotocol/server-everything`: 23s cold, 0.5s cached.
+
+The config stays **read-only** from the claude.ai side, and `local-mcps` still needs nothing else installed there -- both the config and the catalog arrive over plain Dropbox share links with `urllib`. The only writer is `refresh.py`, and it runs somewhere else entirely.
+
+### Nothing watches the cron
+
+The refresh job has no alerting channel and does not deserve one. It stamps `builtAt` into the catalog, and `servers` prints `(index last built 3d ago -- the refresh routine may be broken)` once that passes 24 hours. That surfaces a dead cron in the one place where it is actually costing something, and nowhere else.
+
+`builtBy` carries a hash of `refresh.py` itself, because the script is deployed by pasting it into a cloud environment's setup script -- so the running copy can drift from the repo, and the hash is what makes that visible.
+
+A failed run is inert by design: a server that fails to enumerate keeps its last-good entry (`--previous` carries the merge), so one npm-registry hiccup cannot blank the index for five hours, and `refresh.py` always exits 0 so it can never take down the routine whose real job is the session limit.
 
 ## Setup
 
@@ -60,6 +78,29 @@ Losing the catalog also made the config **read-only** — `sync` was the only wr
 6. Confirm code-execution network egress allows `dropbox.com` (for the config) plus whatever your servers need — `registry.npmjs.org` and `pypi.org` for `npx`/`uvx`.
 
 Changing a server afterwards is an edit to `mcp.json` and `lmcps refresh` in the conversation. No repackaging, no re-upload.
+
+### Setting up the refresh routine
+
+The tool index is optional — without it `servers` prints what it always printed — so this is a second pass, and the order matters: a Dropbox share link can only be made for a file that already exists.
+
+1. Run `refresh.py` once by hand, on a box that can reach both Dropbox and your servers. `/mcp-catalog.json` appears beside the config.
+2. Run it a **second** time, then confirm the file's share link still serves. The whole read path depends on `mode=overwrite` updating the file in place rather than replacing it; check that once here rather than discovering it silently broken weeks later.
+3. In Dropbox, right-click `/mcp-catalog.json` → **Copy link**, and add it to `mcp.json` as a top-level `catalogUrl`, beside `mcpServers`.
+
+   **A share link follows a rename.** If `/mcp-catalog.json` came into being by renaming `/mcp.json` rather than by a fresh upload, the link already in `config-url.txt` now points at the catalog — and its URL still *says* `mcp.json`, so it looks right. Both links must be re-checked against `get_shared_link_metadata`, not against what the URL reads. `lmcps` names this specific mix-up rather than reporting a config with no `mcpServers`, because the generic error sends you to inspect a config that is fine.
+4. `python package.py` and re-upload, so the skill knows to look for `catalogUrl`.
+5. Create a cloud environment (**Cron**), and paste `python routine/make-setup-script.py` output into its Setup script. Give it no connectors — the job authenticates to Dropbox directly and needs none.
+6. Point a scheduled routine at that environment. The prompt runs one line and reads nothing:
+
+   ```
+   Run exactly this, then respond with "hi". Do not read its output or do anything else.
+
+   lmcps-refresh || true
+   ```
+
+The `|| true` is not decoration. That routine's real job is refreshing a session limit; the index is a passenger, and a passenger must never be able to stop the car.
+
+Note what is **not** in this list: no new skill to upload, no new credential. `refresh.py` reads `credentials.json` out of the `durable-filesystem` skill's own mount — the one file it needs from that skill — and everything else it uses is already on the box.
 
 ### Who describes a server?
 
@@ -103,12 +144,14 @@ The share link is unlisted rather than secret — anyone with the URL can fetch 
 ## Testing
 
 ```
-python test_lmcps.py       # 43 offline tests, no network and no npx
-bash integration_test.sh   # 12 live tests against real npx and uvx servers
+python test_lmcps.py       # 67 offline tests, no network and no npx
+bash integration_test.sh   # 18 live tests against real npx and uvx servers
 TOMTOM_KEY=... bash integration_test.sh   # +2, against the real TomTom server
 ```
 
 The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, and that no `Authorization` header is ever invented.
+
+The catalog gets its own group, and it is mostly failure cases, because `servers` runs at the top of every conversation and every one of them has to degrade rather than break: a missing index, a corrupt one, a server the index has never seen, a server that left the config, a per-server build error, and a build older than a day. `$LMCPS_CATALOG` points the tests at a fixture so none of it touches the network. The build side is pinned separately — that a broken server cannot fail the build, that it keeps its last-good entry when `--previous` has one, and that no `inputSchema` ever reaches the catalog.
 
 The live suite covers the part a fake cannot, and earned its keep twice. Both bugs were in the print path that every server's output goes through, and neither was reachable from a fixture, because both needed a real server writing real prose:
 

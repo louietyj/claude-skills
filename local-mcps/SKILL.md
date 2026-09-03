@@ -38,13 +38,18 @@ a connector cannot send their auth header.
 ## Commands
 
 ```bash
-lmcps servers                          # configured servers; reads config, spawns nothing
+lmcps servers                          # configured servers + cached tool index; spawns nothing
 lmcps tools <server>                   # the server's own instructions, then its tools
 lmcps tools <server> --schema <tool>   # one tool's full input schema
 lmcps call <server> <tool> '{"a": 1}'  # invoke it
 lmcps describe <server>                # what a server says about itself, to write its `description`
 lmcps refresh                          # re-fetch config after editing it
 ```
+
+The index under each server in `servers` is tool **names and one-line blurbs
+only**, rebuilt every few hours off-box. It tells you what exists; it does not
+tell you how to call anything, and it can lag a config change. `tools` is the
+live source and the only one that carries parameters.
 
 Arguments are one JSON object, quoted. `--timeout SECS` (default 120) goes
 before the verb: `lmcps --timeout 240 call ...`.

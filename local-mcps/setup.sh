@@ -11,14 +11,22 @@ find_lmcps_py() {
   local candidate
   # Beside this script first -- that is where the CLI sits in an installed
   # skill, and it lets setup.sh run from a checkout. The rest are fallbacks.
+  #
+  # The `synced` entries are the Claude Code cloud box, where claude.ai skills
+  # land under $HOME (i.e. /root) rather than /mnt/skills. Its path carries two
+  # UUIDs and more than one bucket can exist, so the glob is sorted by mtime
+  # and the newest wins -- never whatever order the shell happens to return.
   for candidate in \
     "$(cd "$(dirname "$0")" && pwd)/bin/lmcps.py" \
     /mnt/skills/user/local-mcps/bin/lmcps.py \
-    /mnt/skills/*/local-mcps/bin/lmcps.py
+    /mnt/skills/*/local-mcps/bin/lmcps.py \
+    "$(ls -1dt "$HOME"/.claude/skills/synced/*/local-mcps/bin/lmcps.py \
+       2>/dev/null | head -1)"
   do
-    [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+    [ -n "$candidate" ] && [ -f "$candidate" ] && \
+      { printf '%s' "$candidate"; return 0; }
   done
-  candidate=$(find /mnt /opt /home -name lmcps.py -path '*local-mcps*' \
+  candidate=$(find /mnt /opt /home "$HOME" -name lmcps.py -path '*local-mcps*' \
     2>/dev/null | head -1)
   [ -n "$candidate" ] && { printf '%s' "$candidate"; return 0; }
   return 1

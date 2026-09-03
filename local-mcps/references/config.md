@@ -13,6 +13,12 @@ filesystem, via the `durable-filesystem` skill — then run `lmcps refresh`. The
 share link is served through a CDN, so a very recent edit can take a few minutes
 to show up; `refresh` already asks for an uncached copy.
 
+A top-level `catalogUrl` beside `mcpServers` holds a share link to
+`/mcp-catalog.json`, the tool index that `lmcps servers` prints under each
+server. It is optional: without it, `servers` prints server lines only. The
+index is rebuilt every few hours by `routine/refresh.py`, so a server added here
+shows `(tools not indexed)` until the next run — which is correct, not broken.
+
 **Every server needs a `description`.** It is a non-standard key `lmcps` adds to
 the schema, and it is what `lmcps servers` prints — the trigger conditions for
 this skill live there and nowhere else, so a server without one will never be

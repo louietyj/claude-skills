@@ -1,4 +1,5 @@
 {
+  "catalogUrl": "https://www.dropbox.com/scl/fi/.../mcp-catalog.json?rlkey=...",
   "mcpServers": {
     "tomtom": {
       "type": "http",

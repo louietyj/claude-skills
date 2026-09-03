@@ -8,6 +8,7 @@ code-execution sandbox.
     lmcps tools <server> [--schema TOOL]   # live tools/list
     lmcps call <server> <tool> '{"a": 1}'  # the thing that matters
     lmcps describe <server>                # material for a server's `description`
+    lmcps index                            # build the tool index; see routine/
     lmcps refresh                          # re-fetch the config, drop caches
 
 Config is Claude Code's `mcpServers` schema, so a block copied out of any
@@ -26,6 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -37,6 +39,14 @@ VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}")
 
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_INFO = {"name": "lmcps", "version": "1"}
+
+# The tool index. Names and descriptions only -- never schemas, so a stale index
+# can mislead about what exists but never about how to call it. Descriptions are
+# stored whole; BLURB_WIDTH is a display budget, not a storage one.
+CATALOG_VERSION = 1
+BLURB_WIDTH = 80
+MAX_INDEXED_TOOLS = 40
+STALE_AFTER = timedelta(hours=24)
 
 # The last handshake's result, carrying `serverInfo` and the server's own
 # `instructions`. Stashed rather than returned because only `tools` wants it.
@@ -91,17 +101,28 @@ def config_url():
     return None
 
 
-def fetch_config(url):
-    """Fetch the shared link. Dropbox serves these through a CDN that will
-    happily hand back a config you edited ten minutes ago, so force a miss."""
+def bust(url):
+    """Dropbox serves share links through a CDN that will happily hand back a
+    file you edited ten minutes ago, so force a miss."""
     parts = urllib.parse.urlsplit(url)
     q = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
     q = [(k, v) for k, v in q if k not in ("dl", "_")]
     q += [("dl", "1"), ("_", str(int(time.time())))]
-    busted = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
+
+
+def fetch_config(url):
     try:
-        with urllib.request.urlopen(busted, timeout=30) as r:
-            return r.read().decode("utf-8")
+        with urllib.request.urlopen(bust(url), timeout=30) as r:
+            text = r.read().decode("utf-8")
+        # A link whose file was deleted, moved out, or unshared still answers 200
+        # -- with Dropbox's own HTML, which otherwise surfaces as "not valid
+        # JSON" and reads like the config is malformed when it is untouched.
+        if text.lstrip()[:1] == "<":
+            die(f"the share link in config-url.txt no longer resolves to a file "
+                f"(deleted, moved, or unshared) -- it returned a web page. "
+                f"Re-share mcp.json and rebuild the skill. Link: {url}")
+        return text
     except urllib.error.HTTPError as e:
         die(f"config link returned HTTP {e.code}. Re-share the file and rebuild the skill.")
     except OSError as e:
@@ -109,17 +130,26 @@ def fetch_config(url):
 
 
 def parse_config(text, source):
+    """The whole config document, not just `mcpServers` -- `catalogUrl` sits
+    beside it at the top level and would otherwise need a second parse."""
     try:
-        cfg = json.loads(text)
+        doc = json.loads(text)
     except json.JSONDecodeError as e:
         die(f"config at {source} is not valid JSON: {e}")
-    servers = cfg.get("mcpServers")
-    if not isinstance(servers, dict):
+    if not isinstance(doc.get("mcpServers"), dict):
+        # A share link follows a rename, so a link made for mcp.json keeps
+        # working -- and keeps saying `mcp.json` -- once that file has become the
+        # catalog. The generic error sends you to inspect a config that is fine.
+        if isinstance(doc.get("servers"), dict) and "builtAt" in doc:
+            die(f"the link in config-url.txt serves the TOOL INDEX, not the config "
+                f"({source}). The two share links are swapped: config-url.txt must "
+                f"point at mcp.json, and the catalog link belongs in mcp.json's "
+                f"`catalogUrl`.")
         die(f"config at {source} has no `mcpServers` object")
-    return servers
+    return doc
 
 
-def load_servers(force_refresh=False):
+def load_config(force_refresh=False):
     explicit = os.environ.get("LMCPS_CONFIG")
     if explicit:
         p = Path(explicit)
@@ -133,10 +163,10 @@ def load_servers(force_refresh=False):
     url = config_url()
     if url:
         text = fetch_config(url)
-        servers = parse_config(text, url)  # validate before caching
+        doc = parse_config(text, url)  # validate before caching
         LMCPS_HOME.mkdir(parents=True, exist_ok=True)
         CONFIG_CACHE.write_text(text, encoding="utf-8")
-        return servers
+        return doc
 
     local = SKILL_DIR / "config.json"
     if local.is_file():
@@ -144,6 +174,95 @@ def load_servers(force_refresh=False):
 
     die("no config. Expected config-url.txt or config.json beside the skill, "
         "or $LMCPS_CONFIG. See SKILL.md.")
+
+
+def load_servers(force_refresh=False):
+    return load_config(force_refresh)["mcpServers"]
+
+
+# --- the tool index ---------------------------------------------------------
+#
+# Tool names and descriptions, built off-box by routine/refresh.py and read here
+# over a share link exactly as the config is. Display-only: `tools` still
+# enumerates live, so nothing the model calls is served from here.
+#
+# Every function below returns None rather than dying. `servers` runs at the top
+# of every conversation, so a missing or corrupt index must cost the index and
+# nothing else.
+
+CATALOG_CACHE = LMCPS_HOME / "catalog.json"
+
+
+def parse_catalog(text):
+    try:
+        cat = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(cat, dict) or not isinstance(cat.get("servers"), dict):
+        return None
+    return cat
+
+
+def read_catalog(path):
+    try:
+        return parse_catalog(Path(path).read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def load_catalog(doc):
+    explicit = os.environ.get("LMCPS_CATALOG")
+    if explicit:
+        return read_catalog(explicit)
+
+    if CATALOG_CACHE.is_file():
+        cached = read_catalog(CATALOG_CACHE)
+        if cached is not None:
+            return cached
+
+    url = doc.get("catalogUrl")
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(bust(url), timeout=30) as r:
+            text = r.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    cat = parse_catalog(text)
+    if cat is None:
+        return None
+    try:
+        LMCPS_HOME.mkdir(parents=True, exist_ok=True)
+        CATALOG_CACHE.write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # a cache that cannot be written is slow, not broken
+    return cat
+
+
+def catalog_age(catalog):
+    """How long ago the index was built, or None if it does not say."""
+    built = catalog.get("builtAt")
+    if not isinstance(built, str):
+        return None
+    try:
+        when = datetime.fromisoformat(built.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - when
+
+
+def stale_note(catalog):
+    """The only alarm a dead refresh routine gets. Nothing watches that job, so
+    it has to report itself where someone is looking."""
+    age = catalog_age(catalog)
+    if age is None or age < STALE_AFTER:
+        return None
+    days, hours = age.days, int(age.total_seconds() // 3600)
+    ago = f"{days}d" if days else f"{hours}h"
+    return f"(index last built {ago} ago -- the refresh routine may be broken)"
 
 
 def pick(servers, name):
@@ -337,11 +456,48 @@ def first_line(text):
     return (text or "").strip().splitlines()[0] if (text or "").strip() else ""
 
 
+def blurb(text, width=BLURB_WIDTH):
+    """Display only; the index stores descriptions whole. Collapses whitespace
+    rather than cutting at the first newline, because a tool's `description` is
+    often a paragraph whose first line is a fragment. ASCII "..." rather than an
+    ellipsis, to print through whatever encoding we are handed."""
+    s = " ".join((text or "").split())
+    return s if len(s) <= width else s[:width - 3] + "..."
+
+
+def print_index(name, entry):
+    """The tool lines under one server. Absent, failed and enormous all have to
+    print something, because this runs at the top of every conversation."""
+    if entry is None:
+        print(f"  (tools not indexed -- lmcps tools {name})")
+        return
+    if entry.get("error"):
+        print(f"  (index failed: {blurb(str(entry['error']))})")
+        return
+    tools = entry.get("tools") or []
+    if not tools:
+        print("  (no tools)")
+        return
+    for t in tools[:MAX_INDEXED_TOOLS]:
+        name_, said = t.get("name", ""), blurb(t.get("description"))
+        print(f"  {name_} -- {said}" if said else f"  {name_}")
+    if len(tools) > MAX_INDEXED_TOOLS:
+        print(f"  ... and {len(tools) - MAX_INDEXED_TOOLS} more "
+              f"(lmcps tools {name})")
+
+
 def cmd_servers(args):
-    servers = load_servers()
+    doc = load_config()
+    servers = doc["mcpServers"]
     if not servers:
         print("No servers configured.")
         return
+    # Never dies, and the config is authoritative: a server the index knows and
+    # the config does not is dropped, because printing it invites a call that
+    # fails on `unknown server`.
+    catalog = load_catalog(doc)
+    indexed = (catalog or {}).get("servers") or {}
+
     width = max(len(n) for n in servers)
     for name in sorted(servers):
         cfg = servers[name]
@@ -349,7 +505,23 @@ def cmd_servers(args):
         desc = first_line(cfg.get("description")) or \
             f"(no description -- run `lmcps tools {name}`)"
         print(f"{name.ljust(width)}  {ttype.ljust(6)}  {desc}")
-    print(f"\n`lmcps tools <server>` for a tool list, "
+        if catalog is not None:
+            print_index(name, indexed.get(name))
+
+    print()
+    if catalog is None:
+        print("No tool index available -- `lmcps tools <server>` lists one server's "
+              "tools live.")
+    else:
+        note = stale_note(catalog)
+        if note:
+            print(note)
+        # The redundancy is deliberate. A catalog without it reads like enough to
+        # call from, and a confabulated `lmcps call` costs a full spawn to find out.
+        print("The index above is tool names and one-line blurbs ONLY. You do NOT "
+              "know any\ntool's parameters. Run `lmcps tools <server> --schema "
+              "<tool>` before calling one,\nand do not guess.")
+    print(f"`lmcps tools <server>` for a tool list, "
           f"`lmcps call <server> <tool> '{{...}}'` to invoke one.")
 
 
@@ -358,6 +530,11 @@ def cmd_tools(args):
     cfg = pick(servers, args.server)
     entry = list_tools(args.server, cfg, refresh=args.refresh)
     tools = entry["tools"]
+
+    # The machine-readable form `index` consumes from its child processes.
+    if args.json:
+        print(json.dumps(entry))
+        return
 
     if args.schema:
         match = next((t for t in tools if t.get("name") == args.schema), None)
@@ -436,9 +613,80 @@ def cmd_call(args):
     print(text)
 
 
+def utcnow():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def enumerate_server(name, timeout):
+    """One server's tools, in a child process. `die` exits and the watchdog
+    calls os._exit, so an in-process loop would let one sick server end the
+    whole build; a process boundary buys per-server timeouts and containment for
+    the price of an interpreter start."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--timeout", str(timeout),
+           "tools", name, "--json", "--refresh"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout + 30)
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {timeout}s"
+    except OSError as e:
+        return None, f"could not run lmcps: {e}"
+    if p.returncode != 0:
+        # The child's `die` already prefixed itself; this string gets re-prefixed
+        # on the way out, and reads badly stuttered otherwise.
+        why = first_line(p.stderr.strip()).removeprefix("lmcps: ")
+        return None, why or f"exited {p.returncode}"
+    try:
+        entry = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return None, "did not return a tool list"
+    # Stored whole, truncated at display time: the index is expensive to rebuild,
+    # so the column budget stays a rendering decision rather than a stored one.
+    return [{"name": t.get("name", ""), "description": t.get("description") or ""}
+            for t in entry.get("tools") or []], None
+
+
+def cmd_index(args):
+    """Build the tool index. Pure: it spawns servers and emits JSON, and knows
+    nothing about where that JSON is kept -- routine/refresh.py does the I/O."""
+    servers = load_servers()
+    previous = {}
+    if args.previous:
+        previous = (read_catalog(args.previous) or {}).get("servers") or {}
+
+    now = utcnow()
+    out = {"version": CATALOG_VERSION, "builtAt": now,
+           "builtBy": args.built_by, "servers": {}}
+    failed = []
+    for name in sorted(servers):
+        tools, err = enumerate_server(name, args.per_server_timeout)
+        if err is None:
+            out["servers"][name] = {"builtAt": now, "tools": tools, "error": None}
+            continue
+        failed.append(name)
+        print(f"lmcps: '{name}' did not enumerate: {err}", file=sys.stderr)
+        # Merge, don't replace. One npm-registry hiccup must not blank an entry
+        # that was good an hour ago and will be good again next run.
+        kept = previous.get(name)
+        if isinstance(kept, dict) and kept.get("tools"):
+            out["servers"][name] = kept
+        else:
+            out["servers"][name] = {"builtAt": now, "tools": [], "error": err}
+
+    text = json.dumps(out, indent=2)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+    else:
+        print(text)
+    summary = (f"Indexed {len(servers) - len(failed)}/{len(servers)} server(s)"
+               + (f"; kept or flagged: {', '.join(failed)}" if failed else ""))
+    print(summary, file=sys.stderr)
+
+
 def cmd_refresh(args):
     for stale in LMCPS_HOME.glob("tools/*.json"):
         stale.unlink()
+    CATALOG_CACHE.unlink(missing_ok=True)
     servers = load_servers(force_refresh=True)
     print(f"Config refreshed: {len(servers)} server(s) -- "
           f"{', '.join(sorted(servers)) or '(none)'}")
@@ -457,8 +705,9 @@ def watchdog(seconds):
 
 def main():
     ap = argparse.ArgumentParser(prog="lmcps", description=__doc__.splitlines()[0])
-    ap.add_argument("--timeout", type=int, default=120,
-                    help="seconds before giving up (default: 120)")
+    ap.add_argument("--timeout", type=int, default=None,
+                    help="seconds before giving up (default: 120, or 600 for `index`, "
+                         "which spawns every server in turn)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("servers", help="configured servers; reads the config, spawns nothing"
@@ -468,6 +717,7 @@ def main():
     p.add_argument("server")
     p.add_argument("--schema", metavar="TOOL", help="full input schema for one tool")
     p.add_argument("--refresh", action="store_true", help="re-enumerate, ignoring the cache")
+    p.add_argument("--json", action="store_true", help="the raw tools/list entry")
     p.set_defaults(fn=cmd_tools)
 
     p = sub.add_parser("call", help="invoke a tool")
@@ -481,6 +731,14 @@ def main():
     p.add_argument("--refresh", action="store_true", help="re-enumerate, ignoring the cache")
     p.set_defaults(fn=cmd_describe)
 
+    p = sub.add_parser("index", help="build the tool index (see routine/refresh.py)")
+    p.add_argument("--previous", metavar="FILE", help="last build, for the merge")
+    p.add_argument("--out", metavar="FILE", help="write here instead of stdout")
+    p.add_argument("--built-by", default="lmcps", metavar="ID",
+                   help="stamped into the index, to spot a stale builder")
+    p.add_argument("--per-server-timeout", type=int, default=120, metavar="SECS")
+    p.set_defaults(fn=cmd_index)
+
     sub.add_parser("refresh", help="re-fetch the config and drop cached tool lists"
                    ).set_defaults(fn=cmd_refresh)
 
@@ -491,7 +749,9 @@ def main():
         stream.reconfigure(encoding="utf-8", errors="replace")
 
     args = ap.parse_args()
-    watchdog(args.timeout)
+    # One deadline covers one server, except for `index`, which is N of them.
+    watchdog(args.timeout if args.timeout is not None
+             else (600 if args.cmd == "index" else 120))
     args.fn(args)
 
 

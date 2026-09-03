@@ -61,6 +61,33 @@ check "uvx tools/list"            "get_current_time"  run tools time
 check "uvx tools/call"            "Asia/Singapore"    run call time get_current_time '{"timezone": "Asia/Singapore"}'
 check "uvx --schema"              "IANA timezone"     run tools time --schema get_current_time
 
+# `index` against real servers: the fake cannot show that two cold npx/uvx
+# spawns both survive one build, which is the whole job the cron does.
+CATALOG="$WORK/catalog.json"
+run index --out "$CATALOG" --built-by "integration-test" >/dev/null 2>&1
+check "index wrote a catalog"        '"builtBy": "integration-test"' cat "$CATALOG"
+check "index found the npx server"   "get-sum"          cat "$CATALOG"
+check "index found the uvx server"   "get_current_time" cat "$CATALOG"
+if grep -q inputSchema "$CATALOG"; then
+  echo "FAIL index carries no schemas"; fail=$((fail + 1))
+else
+  echo "ok   index carries no schemas"; pass=$((pass + 1))
+fi
+
+# A dead server must not cost a live one its entry, and must not fail the build.
+python - "$LMCPS_CONFIG" <<'PY'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["mcpServers"]["broken"] = {"command": "definitely-not-a-real-binary",
+                               "description": "cannot start"}
+json.dump(cfg, open(p, "w"), indent=2)
+PY
+run index --out "$WORK/catalog2.json" --previous "$CATALOG" >/dev/null 2>&1
+check "a broken server is flagged"     "definitely-not-a-real-binary" \
+      cat "$WORK/catalog2.json"
+check "a live server survives it"      "get-sum"  cat "$WORK/catalog2.json"
+
 # TomTom is the motivating case for the HTTP path and the only way to exercise a
 # non-allowlisted auth header against a real server. Opt-in: it needs a key.
 if [ -n "${TOMTOM_KEY:-}" ]; then

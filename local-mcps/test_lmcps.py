@@ -4,6 +4,7 @@ fake_mcp_server.py and the HTTP server is a stub in this process.
 
     python test_lmcps.py
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import unittest
 import zipfile
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -91,6 +93,18 @@ class TestConfigLoading(Base):
         r = self.run_lmcps("servers")
         self.assertEqual(r.returncode, 1)
         self.assertIn("no `mcpServers` object", r.stderr)
+
+    def test_the_catalog_served_as_the_config_names_the_mix_up(self):
+        """A share link follows a rename, so a link made for mcp.json keeps
+        working -- and keeps saying mcp.json -- once that file has become the
+        catalog. Observed in the wild."""
+        self.config_path.write_text(json.dumps(
+            {"version": 1, "builtAt": "2026-09-03T07:00:00Z", "servers": {}}),
+            encoding="utf-8")
+        r = self.run_lmcps("servers")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("TOOL INDEX", r.stderr)
+        self.assertIn("swapped", r.stderr)
 
     def test_explicit_config_path_must_exist(self):
         r = self.run_lmcps("servers", env={"LMCPS_CONFIG": str(self.tmp / "gone.json")})
@@ -342,8 +356,14 @@ class StubHandler(BaseHTTPRequestHandler):
         # fighting -- but asserting on the exact case sent would be a lie.
         StubHandler.seen_headers = {k.lower(): v for k, v in self.headers.items()}
         StubHandler.last_path = self.path
-        body = json.dumps({"mcpServers": {"fetched": {"type": "http", "url": "http://x.invalid",
-                                                      "description": "came over the wire"}}})
+        if StubHandler.mode == "deadlink":
+            # What Dropbox actually serves once the linked file is gone: 200, and
+            # a web page.
+            body = "<!DOCTYPE html><html><body>This link doesn't work</body></html>"
+        else:
+            body = json.dumps({"mcpServers": {"fetched": {
+                "type": "http", "url": "http://x.invalid",
+                "description": "came over the wire"}}})
         self.send_response(200)
         self.end_headers()
         self.wfile.write(body.encode())
@@ -466,6 +486,215 @@ class TestConfigOverHttp(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("fetched", r.stdout)
 
+    def test_a_link_whose_file_is_gone_says_so(self):
+        """Dropbox answers 200 with a web page once the linked file is deleted,
+        moved out, or unshared -- reported as "not valid JSON" until now."""
+        StubHandler.mode = "deadlink"
+        self.addCleanup(setattr, StubHandler, "mode", "json")
+        r = self.run_linked("servers")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no longer resolves to a file", r.stderr)
+        self.assertNotIn("not valid JSON", r.stderr)
+
+
+def catalog(servers, built_at="2099-01-01T00:00:00Z"):
+    return {"version": 1, "builtAt": built_at, "builtBy": "test", "servers": servers}
+
+
+def indexed(*names):
+    return {"builtAt": "2099-01-01T00:00:00Z", "error": None,
+            "tools": [{"name": n, "description": f"does {n}"} for n in names]}
+
+
+class TestCatalogDisplay(Base):
+    """`servers` with an index. Every degradation case has to print something and
+    none of them may fail: this runs at the top of every conversation."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog_path = self.tmp / "catalog.json"
+        self.write_config({"adder": fake_server(description="adds numbers")})
+
+    def run_with(self, cat):
+        self.catalog_path.write_text(json.dumps(cat) if isinstance(cat, dict) else cat,
+                                     encoding="utf-8")
+        return self.run_lmcps("servers", env={"LMCPS_CATALOG": str(self.catalog_path)})
+
+    def test_tool_lines_are_printed_under_their_server(self):
+        r = self.run_with(catalog({"adder": indexed("add", "boom")}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"adder\s+stdio\s+adds numbers")
+        self.assertIn("  add -- does add", r.stdout)
+        self.assertIn("  boom -- does boom", r.stdout)
+
+    def test_the_framing_says_parameters_are_not_known(self):
+        r = self.run_with(catalog({"adder": indexed("add")}))
+        self.assertIn("do not guess", r.stdout)
+        self.assertIn("--schema", r.stdout)
+
+    def test_a_missing_catalog_degrades_to_the_plain_listing(self):
+        r = self.run_lmcps("servers", env={"LMCPS_CATALOG": str(self.tmp / "nope.json")})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"adder\s+stdio\s+adds numbers")
+        self.assertIn("No tool index available", r.stdout)
+
+    def test_a_corrupt_catalog_degrades_rather_than_failing(self):
+        r = self.run_with("{not json at all")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"adder\s+stdio\s+adds numbers")
+        self.assertIn("No tool index available", r.stdout)
+
+    def test_a_server_the_config_dropped_is_not_printed(self):
+        r = self.run_with(catalog({"adder": indexed("add"), "ghost": indexed("haunt")}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("ghost", r.stdout)
+        self.assertNotIn("haunt", r.stdout)
+
+    def test_a_server_the_index_has_not_seen_says_so(self):
+        r = self.run_with(catalog({}))
+        self.assertIn("(tools not indexed -- lmcps tools adder)", r.stdout)
+
+    def test_a_per_server_error_is_surfaced(self):
+        r = self.run_with(catalog({"adder": {"tools": [], "error": "npx: not found"}}))
+        self.assertIn("(index failed: npx: not found)", r.stdout)
+
+    def test_a_stale_index_reports_the_routine_may_be_broken(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = self.run_with(catalog({"adder": indexed("add")}, built_at=old))
+        self.assertIn("3d ago", r.stdout)
+        self.assertIn("may be broken", r.stdout)
+
+    def test_a_fresh_index_says_nothing_about_staleness(self):
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = self.run_with(catalog({"adder": indexed("add")}, built_at=now))
+        self.assertNotIn("may be broken", r.stdout)
+
+    def test_blurbs_are_truncated_and_long_lists_are_capped(self):
+        entry = {"builtAt": "2099-01-01T00:00:00Z", "error": None,
+                 "tools": [{"name": f"t{i}", "description": "x " * 200} for i in range(45)]}
+        r = self.run_with(catalog({"adder": entry}))
+        self.assertIn("... and 5 more", r.stdout)
+        longest = max((l for l in r.stdout.splitlines() if l.startswith("  t")), key=len)
+        self.assertLessEqual(len(longest.split(" -- ", 1)[1]), 80)
+
+    def test_servers_still_spawns_nothing_with_an_index(self):
+        self.write_config({"adder": {"command": "definitely-not-a-real-binary",
+                                     "description": "adds numbers"}})
+        r = self.run_with(catalog({"adder": indexed("add")}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("  add -- does add", r.stdout)
+
+
+class TestIndexBuild(Base):
+    """`lmcps index`: spawn, enumerate, merge, emit. No store, ever."""
+
+    def build(self, *args, **kw):
+        r = self.run_lmcps("index", *args, **kw)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def test_builds_names_and_blurbs_from_a_live_server(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        out = json.loads(self.build().stdout)
+        self.assertEqual(out["version"], 1)
+        names = [t["name"] for t in out["servers"]["adder"]["tools"]]
+        self.assertIn("add", names)
+        add = next(t for t in out["servers"]["adder"]["tools"] if t["name"] == "add")
+        # Stored whole, including the second line that listings drop.
+        self.assertEqual(add["description"],
+                         "Add two numbers.\nSecond line ignored by listings.")
+
+    def test_carries_no_schemas(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        out = json.loads(self.build().stdout)
+        self.assertNotIn("inputSchema", json.dumps(out))
+
+    def test_built_by_is_stamped_through(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        out = json.loads(self.build("--built-by", "refresh.py@deadbeef").stdout)
+        self.assertEqual(out["builtBy"], "refresh.py@deadbeef")
+
+    def test_a_broken_server_does_not_stop_the_build(self):
+        self.write_config({"adder": fake_server(description="adds numbers"),
+                           "broken": {"command": "definitely-not-a-real-binary",
+                                      "description": "nope"}})
+        out = json.loads(self.build().stdout)
+        self.assertTrue(out["servers"]["adder"]["tools"])
+        self.assertTrue(out["servers"]["broken"]["error"])
+
+    def test_a_failed_server_keeps_its_last_good_entry(self):
+        self.write_config({"broken": {"command": "definitely-not-a-real-binary",
+                                      "description": "nope"}})
+        prev = self.tmp / "prev.json"
+        prev.write_text(json.dumps(catalog({"broken": indexed("worked-before")})),
+                        encoding="utf-8")
+        out = json.loads(self.build("--previous", str(prev)).stdout)
+        self.assertEqual([t["name"] for t in out["servers"]["broken"]["tools"]],
+                         ["worked-before"])
+
+    def test_a_server_that_left_the_config_is_dropped_from_the_merge(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        prev = self.tmp / "prev.json"
+        prev.write_text(json.dumps(catalog({"adder": indexed("add"),
+                                            "ghost": indexed("haunt")})),
+                        encoding="utf-8")
+        out = json.loads(self.build("--previous", str(prev)).stdout)
+        self.assertNotIn("ghost", out["servers"])
+
+    def test_out_writes_a_file_and_keeps_stdout_clean(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        dest = self.tmp / "catalog.json"
+        r = self.build("--out", str(dest))
+        self.assertEqual(r.stdout.strip(), "")
+        self.assertTrue(json.loads(dest.read_text(encoding="utf-8"))["servers"])
+
+    def test_tools_json_is_the_raw_entry(self):
+        self.write_config({"adder": fake_server(description="adds numbers")})
+        r = self.run_lmcps("tools", "adder", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        entry = json.loads(r.stdout)
+        self.assertIn("add", [t["name"] for t in entry["tools"]])
+        self.assertIn("inputSchema", entry["tools"][0])
+
+
+class TestRefreshBuild(Base):
+    """refresh.py's one piece of local logic. Everything else it does is Dropbox
+    HTTP, which needs the network; this is the part a fixture can reach."""
+
+    def setUp(self):
+        super().setUp()
+        spec = importlib.util.spec_from_file_location(
+            "refresh", HERE / "routine" / "refresh.py")
+        self.refresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.refresh)
+
+    def build(self, config, previous=None):
+        return json.loads(self.refresh.build(
+            str(LMCPS), json.dumps({"mcpServers": config}),
+            json.dumps(previous) if previous else None, "refresh.py@test", self.tmp))
+
+    def test_hands_the_config_to_index_and_takes_back_a_catalog(self):
+        out = self.build({"adder": fake_server(description="adds numbers")})
+        self.assertEqual(out["builtBy"], "refresh.py@test")
+        self.assertIn("add", [t["name"] for t in out["servers"]["adder"]["tools"]])
+
+    def test_previous_is_passed_through_for_the_merge(self):
+        out = self.build({"broken": {"command": "definitely-not-a-real-binary"}},
+                         previous=catalog({"broken": indexed("worked-before")}))
+        self.assertEqual([t["name"] for t in out["servers"]["broken"]["tools"]],
+                         ["worked-before"])
+
+    def test_the_setup_script_reproduces_refresh_py_verbatim(self):
+        """The heredoc must be quoted, or every $VAR in refresh.py is expanded at
+        write time -- silent mangling that only shows up five hours later."""
+        r = subprocess.run([sys.executable, str(HERE / "routine" / "make-setup-script.py")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("<<'REFRESH_PY_EOF'", r.stdout)
+        body = (HERE / "routine" / "refresh.py").read_text(encoding="utf-8")
+        self.assertIn(body, r.stdout.replace("\r\n", "\n"))
+        self.assertTrue(r.stdout.rstrip().endswith("exit 0"))
+
 
 class TestPackaging(Base):
     """The zip is the artefact that actually runs, and it runs on Linux."""
@@ -474,7 +703,9 @@ class TestPackaging(Base):
         super().setUp()
         self.skill = self.tmp / "skill"
         (self.skill / "bin").mkdir(parents=True)
-        for member in ("SKILL.md", "setup.sh", "bin/lmcps.py", "package.py"):
+        (self.skill / "references").mkdir(parents=True)
+        for member in ("SKILL.md", "setup.sh", "bin/lmcps.py", "package.py",
+                       "references/config.md"):
             shutil.copy(HERE / member, self.skill / member)
         # CRLF here too: config-url.txt is hand-pasted, so it routinely has it.
         (self.skill / "config-url.txt").write_bytes(

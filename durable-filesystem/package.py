@@ -12,7 +12,8 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "durable-filesystem"
-MEMBERS = ["SKILL.md", "setup.sh", "bin/cfs.py", "credentials.json"]
+MEMBERS = ["SKILL.md", "setup.sh", "bin/cfs.py", "credentials.json",
+           "references/recovery.md"]
 
 
 def main() -> int:

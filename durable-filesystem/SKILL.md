@@ -17,9 +17,9 @@ A persistent filesystem, yours alone, that survives across conversations. Backed
 bash /mnt/skills/user/durable-filesystem/setup.sh
 ```
 
-Puts `cfs` on PATH and proves it can reach the store. Idempotent — re-run it rather than working out whether it already ran.
+Puts `cfs` on PATH and proves it can reach the store. **`session-init` runs this for you — if this file reached you through its transcript, setup is done; do not run it again.**
 
-The sandbox reboots between turns but keeps its disk for the length of a conversation, so one run covers every later turn. **Never re-derive the path or set a `$CFS` variable**: shell variables die with the bash call that set them, so a command that worked last turn silently becomes `python3: can't open file` the next. Just call `cfs`.
+**Never re-derive the path or set a `$CFS` variable**: shell variables die with the bash call that set them, so a command that worked last turn silently becomes `python3: can't open file` the next. Just call `cfs`.
 
 If setup **fails**, stop. Don't guess a path, fall back to local files, or use the connector — tell the user the skill files are missing. Every command below will fail, and any "memory" you produce without them is fiction.
 
@@ -108,17 +108,7 @@ There is deliberately **no way to read the SEARCH text from a file**: an edit mu
 
 ## Recovering from a bad write
 
-Every file keeps 30 days of revisions, so a bad write is a rollback, not a loss:
-
-```bash
-cfs history /memory/hawaii.md               # revisions, newest first
-cfs read /memory/hawaii.md --rev 0165931f   # the full older version
-cfs restore /memory/hawaii.md --rev 0165931f
-```
-
-Restoring adds a new revision rather than erasing anything, so it is itself reversible — use it instead of rebuilding a damaged file by hand.
-
-`diff` shows a diff only when it is small enough to take in at a glance (~20 changed lines, under 5% of the file); past that it returns the current file, and `--force` overrides. Revision history follows the *path*, so a file deleted and recreated under the same name inherits the old one's revisions.
+Every file keeps 30 days of revisions, so a bad write is a rollback, not a loss: `cfs history <path>` lists them newest first, `cfs restore <path> --rev R` rolls back. Restoring adds a new revision rather than erasing one, so it is itself reversible — use it instead of rebuilding a damaged file by hand. `references/recovery.md`, beside this file, has the rest.
 
 ## Finding things
 

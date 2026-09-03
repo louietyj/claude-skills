@@ -12,7 +12,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "local-mcps"
-ALWAYS = ["SKILL.md", "setup.sh", "bin/lmcps.py"]
+ALWAYS = ["SKILL.md", "setup.sh", "bin/lmcps.py", "references/config.md"]
 
 
 def config_member():

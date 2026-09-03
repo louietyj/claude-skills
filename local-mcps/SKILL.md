@@ -60,15 +60,10 @@ than probing incrementally.
 
 ## Where the config comes from
 
-One JSON file on the user's durable filesystem, `/mcp.json`, in Claude Code's
-`mcpServers` schema. To add or change a server, edit it there — via the
-`durable-filesystem` skill — then run `lmcps refresh`.
-
-**Every server needs a `description`.** It is a non-standard key `lmcps` adds to
-the schema, and it is what `lmcps servers` prints — the trigger conditions for
-this skill live there and nowhere else, so a server without one will never be
-picked. `references/config.md`, beside this file, covers where the share link
-comes from and how to write that line with `lmcps describe`.
+`/mcp.json` on the user's durable filesystem, in Claude Code's `mcpServers`
+schema. **Read `references/config.md`, beside this file, before adding or
+changing a server** — there is a required non-standard key whose absence fails
+silently.
 
 ## Limits
 

@@ -7,9 +7,7 @@ description: A durable filesystem that persists across conversations, backed by 
 
 A persistent filesystem, yours alone, that survives across conversations. Backed by a scoped Dropbox app folder — nothing outside that folder is reachable.
 
-**Read this file to the end before your first write.** The command list is not the interface: writes need a `rev` proving you read the file first, `edit` takes a SEARCH/REPLACE block and refuses ambiguous matches. Neither is guessable from command names, and guessing costs a failed write — or a plausible one that lost someone else's edit.
-
-**Use this skill, never the Dropbox connector.** The connector sees the same files, but every write through it raises a permission dialog the user will almost certainly deny, wasting a turn and leaving the job half-done. This skill needs no approval.
+The command list is not the interface: writes need a `rev` proving you read the file first, `edit` takes a SEARCH/REPLACE block and refuses ambiguous matches. Neither is guessable from command names, and guessing costs a failed write — or a plausible one that lost someone else's edit.
 
 ## Setup (once per conversation)
 
@@ -120,11 +118,11 @@ cfs grep -rl --include='*.md' TODO
 cfs grep -c alpha /memory/hawaii-2026/bookings.md
 ```
 
-That includes the parts that bite. Alternation needs `-E`, because the default dialect is BRE. A directory without `-r` is `Is a directory`. Exit status is 0 matched, 1 did not, 2 could not run. **The one deviation:** given no path, grep would read stdin, so instead the whole store is searched recursively.
+**The one deviation:** given no path, grep would read stdin, so instead the whole store is searched recursively.
 
 Files are fetched and matched locally, so a file written moments ago is found immediately. The first `grep` of a conversation pays for the fetch; later ones re-fetch only what changed.
 
-**Searching by name is a different command.** grep matches content, never filenames: `--include` only filters which files it opens, and it filters *after* the fetch, so narrowing by glob saves nothing. Ask the Dropbox index instead — no download at all:
+**Searching by name is a different command.** `--include` only filters which files grep opens, and it filters *after* the fetch, so narrowing by glob saves nothing. Ask the Dropbox index instead — no download at all:
 
 ```bash
 cfs search INDEX --names-only

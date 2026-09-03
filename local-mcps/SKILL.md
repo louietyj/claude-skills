@@ -60,9 +60,9 @@ than probing incrementally.
 
 ## Where the config comes from
 
-`/mcp.json` on the user's durable filesystem. Adding a server, changing one, or
-wondering why one never gets picked? Read `references/config.md` — there is a
-required non-standard key whose absence fails silently.
+Adding a server, changing one, or wondering why one never gets picked? Read
+`references/config.md` — there is a required non-standard key whose absence
+fails silently.
 
 ## Limits
 

@@ -21,15 +21,15 @@ bash setup.sh
 
 It installs pinchtab globally if missing, locates a system Chrome or pulls puppeteer's bundled build, relaxes pinchtab's security gates (clipboard, state export, file scheme, all domains — safe defaults for a disposable sandbox but not for a personal machine), starts the pinchtab server, and navigates to `example.com` once as an end-to-end check. Output is a numbered transcript with a status summary; stages are independent, so a failure in one is reported rather than aborting the rest.
 
-## Cloak mode
+## Cloak mode (default)
+
+The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for — sites that reject a plain headless Chrome on fingerprint alone accept it. It costs a browser download on a cold sandbox, which is the right trade for a tool that gets reached for precisely when the ordinary fetch was refused. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
 
 ```bash
-bash setup.sh --cloak     # or HEADLESS_BROWSER_CLOAK=1
+bash setup.sh --no-cloak     # or HEADLESS_BROWSER_CLOAK=0
 ```
 
-Swaps the browser runtime for [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium build pinchtab 0.14.0 added support for, for sites that reject a plain headless Chrome on fingerprint alone. Off by default because it downloads a browser build — a minute or two against the ordinary path's seconds. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
-
-`browsers.default` is flipped to `cloak` only after the binary is confirmed on disk; if the install fails the script says so and falls back to plain Chrome rather than leaving the config pointing at a runtime that isn't there. To go back, `pinchtab config init` and re-run without the flag.
+opts out. `browsers.default` is flipped to `cloak` only after the binary is confirmed on disk, so a failed install falls back to plain Chrome — reported in the summary — rather than leaving the config pointing at a runtime that isn't there. The `--no-cloak` path resets `browsers.default` for the same reason: a sandbox where cloak already succeeded must not silently keep using it.
 
 ## Package for claude.ai
 

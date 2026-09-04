@@ -60,14 +60,14 @@ finish() {
   exit 0
 }
 
-CLOAK=0
+CLOAK=${HEADLESS_BROWSER_CLOAK:-1}
 for arg in "$@"; do
   case "$arg" in
-    --cloak) CLOAK=1 ;;
-    *) printf 'usage: setup.sh [--cloak]\n' >&2; exit 2 ;;
+    --cloak)    CLOAK=1 ;;
+    --no-cloak) CLOAK=0 ;;
+    *) printf 'usage: setup.sh [--cloak|--no-cloak]\n' >&2; exit 2 ;;
   esac
 done
-[ "${HEADLESS_BROWSER_CLOAK:-0}" = 1 ] && CLOAK=1
 
 printf '%s HEADLESS BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
@@ -110,10 +110,11 @@ note 'pinchtab install' "OK -- $REAL"
 begin 'find a browser runtime'
 BROWSER_NOTE=''
 
-# A patched Chromium for sites whose bot detection rejects a plain headless
-# Chrome outright. Opt-in because it pulls a browser build.
+# A patched Chromium that ordinary bot detection does not reject on
+# fingerprint. Default, and worth its download: the sites this skill gets
+# reached for are the ones a plain headless Chrome is turned away from.
 if [ $CLOAK -eq 1 ]; then
-  echo "cloak mode requested -- installing cloakbrowser (large download, be patient)"
+  echo "installing cloakbrowser -- downloads a browser build on a cold sandbox"
   mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
   npm init -y >/dev/null 2>&1
   if npm install cloakbrowser playwright-core >/dev/null 2>&1; then
@@ -151,6 +152,11 @@ if [ $CLOAK -eq 1 ]; then
 fi
 
 if [ $CLOAK -eq 0 ]; then
+  # A previous run in this sandbox may have left browsers.default at cloak, and
+  # a plain-Chrome run has to actually get plain Chrome. Best-effort: an older
+  # pinchtab without the key just refuses the write.
+  "$REAL" config set browsers.default chrome >/dev/null 2>&1 || true
+
   # Most sandboxes ship a Chromium. If not, pull puppeteer's bundled build.
   if "$REAL" doctor 2>&1 | grep -qi "OK.*chrome_present"; then
     echo "system Chrome found"

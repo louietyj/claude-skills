@@ -17,6 +17,7 @@ server's README works unchanged. See SKILL.md for where it comes from.
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -39,6 +40,9 @@ ACTIVE_STDERR = None
 
 # ${VAR} and ${VAR:-default}, as supported in Claude Code's .mcp.json.
 VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}")
+
+# How long an unanswered `initialize` waits before being repeated.
+RESEND_EVERY = 5
 
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_INFO = {"name": "lmcps", "version": "1"}
@@ -363,11 +367,32 @@ def call_stdio(name, cfg, method, params):
             die(f"'{name}' closed its input before the exchange finished."
                 + stderr_tail())
 
-    def await_id(want):
+    # Read on a thread so the wait below can be interrupted. select() is not an
+    # option: this runs on Windows too, where it does not work on pipes.
+    inbox = queue.Queue()
+    threading.Thread(target=lambda: ([inbox.put(l) for l in p.stdout],
+                                     inbox.put(None)), daemon=True).start()
+
+    def await_id(want, resend=None):
         """Read until our response arrives, answering the server's own requests
         on the way. Skipping one is a real hang: a server blocked on `roots/list`
-        waits for a reply that never comes, and we sit there until the timeout."""
-        for line in p.stdout:  # newline-delimited JSON
+        waits for a reply that never comes, and we sit there until the timeout.
+
+        `resend` repeats a request that has gone unanswered. `npx -y <pkg>` on a
+        cold cache drains stdin while installing and only then execs the server,
+        so the first write is swallowed and the server starts to an empty pipe:
+        both sides then wait forever, and the call dies at whatever the deadline
+        happens to be. Repeating is safe -- reusing the id means a server that
+        did hear us just answers twice, and we take the first."""
+        while True:
+            try:
+                line = inbox.get(timeout=RESEND_EVERY)
+            except queue.Empty:
+                if resend is not None:
+                    send(resend)
+                continue
+            if line is None:  # stdout closed: the server is gone
+                return None
             line = line.strip()
             if not line.startswith("{"):  # log noise, as the SDK's ReadBuffer does
                 continue
@@ -379,11 +404,11 @@ def call_stdio(name, cfg, method, params):
                 return msg
             if "method" in msg and "id" in msg:
                 send(respond_to(msg))
-        return None
 
-    send(rpc("initialize", "lmcps-init", protocolVersion=PROTOCOL_VERSION,
-             capabilities={}, clientInfo=CLIENT_INFO))
-    init = await_id("lmcps-init")
+    hello = rpc("initialize", "lmcps-init", protocolVersion=PROTOCOL_VERSION,
+                capabilities={}, clientInfo=CLIENT_INFO)
+    send(hello)
+    init = await_id("lmcps-init", resend=hello)
     if init is None:
         die(f"'{name}' exited before responding to initialize." + stderr_tail())
     LAST_INIT.update(init.get("result") or {})

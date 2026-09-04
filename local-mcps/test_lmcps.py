@@ -266,6 +266,17 @@ class TestStdioProtocol(Base):
         self.assertIn("timed out after 2s", r.stderr)
         self.assertIn("waiting on a lock held by nobody", r.stderr)
 
+    def test_a_swallowed_initialize_is_repeated(self):
+        """A cold `npx -y <pkg>` drains stdin while installing, so the first
+        request never reaches the server that eventually execs. Both sides then
+        wait forever and the call dies at whatever the deadline is -- which is
+        why it timed out at 120s and again at 300s, and why a warm retry, with
+        nothing to install, answered instantly."""
+        self.write_config({"adder": fake_server("eatstdin")})
+        r = self.run_lmcps("tools", "adder", timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Add two numbers.", r.stdout)
+
     def test_missing_command_is_named(self):
         self.write_config({"ghost": {"command": "definitely-not-a-real-binary"}})
         r = self.run_lmcps("call", "ghost", "x", "{}")

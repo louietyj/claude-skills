@@ -10,6 +10,7 @@
     instructions advertises a serverInfo title and its own `instructions`
     crash    writes a diagnostic to stderr and exits without a handshake
     hang     writes a diagnostic to stderr and never answers, to hit the deadline
+    eatstdin swallows the first request before serving, as a cold `npx` does
     echoenv  tools/call returns the value of $FAKE_TOKEN
 """
 import json
@@ -91,6 +92,15 @@ def main():
     if MODE == "crash":
         print("fake: FAKE_TOKEN is not set, refusing to start", file=sys.stderr)
         sys.exit(2)
+
+    if MODE == "eatstdin":
+        # `npx -y <pkg>` drains stdin while it installs and only then execs the
+        # real server, so the client's first write is lost. Both sides then wait
+        # forever. Discard one line to reproduce that.
+        import threading
+        t = threading.Thread(target=sys.stdin.readline, daemon=True)
+        t.start()
+        t.join(5)
 
     if MODE == "hang":
         print("fake: waiting on a lock held by nobody", file=sys.stderr)

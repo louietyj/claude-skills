@@ -123,25 +123,35 @@ BROWSER_NOTE=''
 if [ $CLOAK -eq 1 ]; then
   t0=$SECONDS
 
-  # A previous run in this sandbox already paid for the binary. Nothing in the
-  # install path is cheap enough to run speculatively -- `npm install` alone is
-  # tens of seconds -- so look on disk before touching npm at all.
+  # `npm install` is the expensive call here, and not because of the download:
+  # measured at 215s in the sandbox to conclude "up to date, audited 9
+  # packages" on an already-populated tree, against 1s for ensureBinary() to
+  # hand back a cached binary. Registry round-trips, and the whole source of
+  # the run-to-run variance. So every path below exists to not call it.
   for c in /root/.cloakbrowser/*/chrome "$HOME"/.cloakbrowser/*/chrome; do
     [ -x "$c" ] && { CLOAK_BIN=$c; break; }
   done
 
   if [ -n "${CLOAK_BIN:-}" ]; then
-    echo "cloakbrowser already downloaded in this sandbox"
+    echo "cloakbrowser binary already downloaded in this sandbox"
   else
-    echo "installing cloakbrowser: a few hundred MB of patched Chromium, cached"
-    echo "in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past that this step"
-    echo "gives up and the boot continues on plain Chrome. It is not hung."
     mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
-    npm init -y >/dev/null 2>&1
-    # Timed, and progress left on stderr: a silenced multi-minute download is
-    # indistinguishable from a wedged one, and reads as a hang.
-    if timeout "${SETUP_TIMEOUT:-300}" npm install --no-fund --no-audit cloakbrowser playwright-core; then
-      echo "npm install: $((SECONDS - t0))s elapsed; fetching the browser binary"
+    npm_ok=1
+    if [ -d node_modules/cloakbrowser ]; then
+      echo "cloakbrowser package already installed; skipping npm"
+    else
+      echo "installing cloakbrowser: npm, then a few hundred MB of patched"
+      echo "Chromium, cached in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past"
+      echo "that this step gives up and the boot continues on plain Chrome."
+      echo "It is not hung."
+      npm init -y >/dev/null 2>&1
+      # Timed, and progress left on stderr: a silenced multi-minute step is
+      # indistinguishable from a wedged one, and reads as a hang.
+      timeout "${SETUP_TIMEOUT:-300}" npm install --prefer-offline --no-fund --no-audit \
+        cloakbrowser playwright-core || npm_ok=0
+      echo "npm: $((SECONDS - t0))s elapsed"
+    fi
+    if [ $npm_ok -eq 1 ]; then
       # binaryInfo()'s shape is not contractual, so take whichever string field
       # names an existing file rather than assuming a key.
       CLOAK_BIN=$(timeout "${SETUP_TIMEOUT:-300}" node -e '

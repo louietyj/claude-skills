@@ -5,6 +5,8 @@
 bash /mnt/skills/*/session-init/session-init.sh
 ```
 
+**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them.
+
 One call. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 
 Not optional, not a judgement call. The only exception is a genuinely self-contained one-off like a quick calculation; if you're unsure, run it.

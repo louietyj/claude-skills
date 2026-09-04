@@ -11,6 +11,9 @@ There is nothing to read here. The skill is one script:
 bash /mnt/skills/*/session-init/session-init.sh
 ```
 
+**DO NOT head/tail/grep this command's output.** It prints instructions into
+your context; truncating it silently costs you them.
+
 Run it once, before answering anything. It prints everything you would
 otherwise have gone to `durable-filesystem` and `local-mcps` for -- their setup
 output, their complete instructions, and the memory index -- so neither of those

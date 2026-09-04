@@ -182,6 +182,33 @@ class TestTools(Base):
         self.assertEqual(self.run_lmcps("tools", "adder", "--refresh").returncode, 1)
 
 
+class TestWarm(Base):
+    """`warm` exists because a cold `npx -y <pkg>` install can outlast the
+    sandbox's tool-call limit, killing the model's first real call however
+    patient lmcps is."""
+
+    def test_returns_at_once_and_names_what_it_started(self):
+        self.write_config({"adder": fake_server()})
+        r = self.run_lmcps("warm", timeout=15)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("adder", r.stdout)
+
+    def test_skips_http_servers(self):
+        """Nothing to install, and an HTTP server answers in about a second."""
+        self.write_config({"tomtom": {"type": "http", "url": "https://example.invalid"},
+                           "adder": fake_server()})
+        r = self.run_lmcps("warm", timeout=15)
+        self.assertIn("adder", r.stdout)
+        self.assertNotIn("tomtom", r.stdout)
+
+    def test_an_unstartable_server_is_not_fatal(self):
+        self.write_config({"broken": {"command": "definitely-not-a-real-binary"},
+                           "adder": fake_server()})
+        r = self.run_lmcps("warm", timeout=15)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("adder", r.stdout)
+
+
 class TestDescribe(Base):
     """`describe` exists so the config's `description` is a cache of what the
     server says about itself, rather than something hand-invented."""

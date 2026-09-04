@@ -73,6 +73,12 @@ esac
 # listing is the point of running this -- so print it rather than swallowing it.
 echo "ready -- \`lmcps\` is on PATH."
 echo ""
+# Start the stdio servers' installs now, detached. A cold `npx -y <pkg>` can
+# outlast the sandbox's tool-call limit, which kills the model's first real call
+# however patient lmcps is; run at conversation start, it overlaps with whatever
+# happens next instead.
+"$BIN_DIR/lmcps" warm || true
+
 if ! "$BIN_DIR/lmcps" servers; then
   echo "" >&2
   echo "lmcps is installed at $BIN_DIR/lmcps but could not read its config." >&2

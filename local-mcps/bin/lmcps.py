@@ -729,6 +729,42 @@ def cmd_index(args):
     print(summary, file=sys.stderr)
 
 
+def cmd_warm(args):
+    """Start each stdio server once, detached, and return immediately.
+
+    A cold `npx -y <pkg>` install can outlast the sandbox's tool-call limit, so
+    the first real call is killed however patient lmcps itself is. Nothing here
+    can shorten that install -- but it can happen at conversation start, off the
+    path of anything the model is waiting for. stdin is /dev/null, so each
+    server exits on EOF once it is up; the point is the populated npx cache it
+    leaves behind."""
+    servers = load_servers()
+    started = []
+    for name, cfg in sorted(servers.items()):
+        if cfg.get("type") == "http" or cfg.get("url") or not cfg.get("command"):
+            continue  # nothing to install: an HTTP server answers in about a second
+        command = expand(cfg["command"], os.environ)
+        resolved = shutil.which(command, path=os.environ.get("PATH"))
+        if resolved is None:
+            continue
+        cmd = [resolved] + [expand(a, os.environ) for a in cfg.get("args") or []]
+        env = dict(os.environ)
+        for k, v in (cfg.get("env") or {}).items():
+            env[k] = expand(str(v), os.environ)
+        try:
+            # Detached, so it outlives this process and the shell that ran it.
+            kwargs = {"start_new_session": True} if os.name != "nt" else {}
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             env=env, **kwargs)
+            started.append(name)
+        except OSError:
+            continue  # warming is best-effort by definition
+    if started:
+        print(f"warming in the background: {', '.join(started)}")
+    return started
+
+
 def cmd_refresh(args):
     for stale in LMCPS_HOME.glob("tools/*.json"):
         stale.unlink()
@@ -766,6 +802,10 @@ def main():
                     help="seconds before giving up (default: 300, or 900 for `index`, "
                          "which spawns every server in turn)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("warm", help="start stdio servers detached to fill their "
+                   "package cache; returns at once"
+                   ).set_defaults(fn=cmd_warm)
 
     sub.add_parser("servers", help="configured servers; reads the config, spawns nothing"
                    ).set_defaults(fn=cmd_servers)

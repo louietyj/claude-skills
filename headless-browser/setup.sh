@@ -4,10 +4,9 @@
 # own bundled instructions in full, so the caller's next tool call is a real
 # browser command rather than another `cat`. Idempotent.
 #
-# Deliberately NOT `set -e`. The stages are independent and a partial boot is a
-# useful outcome: a failed cloak install must not cost the caller a working
-# ordinary browser, and the caller has to be able to see which half worked. Each
-# stage records its own status and the summary at the end reports all of them.
+# Deliberately NOT `set -e`. The stages are independent and a partial boot is
+# useful: a failed cloak install must not cost the caller a working browser.
+# Each stage records its own status and the closing summary reports all of them.
 set -uo pipefail
 
 TOTAL=4
@@ -119,17 +118,14 @@ begin 'find a browser runtime'
 BROWSER_NOTE=''
 
 # A patched Chromium that ordinary bot detection does not reject on
-# fingerprint. The default: measured at 17.5s cold against 6.6s for plain
-# Chrome, of which ~12s is the browser download itself. It was only ever
-# expensive because npm re-solved the dependency tree on every run.
+# fingerprint. Default at 17.5s cold against 6.6s for plain Chrome, ~12s of
+# which is the download; it was only ever expensive because npm re-solved.
 if [ $CLOAK -eq 1 ]; then
   t0=$SECONDS
 
-  # `npm install` is the expensive call here, and not because of the download:
-  # measured at 215s in the sandbox to conclude "up to date, audited 9
-  # packages" on an already-populated tree, against 1s for ensureBinary() to
-  # hand back a cached binary. Registry round-trips, and the whole source of
-  # the run-to-run variance. So every path below exists to not call it.
+  # npm is the expensive call, not the download: 215s to conclude "up to date"
+  # on a complete tree, against 1s for ensureBinary() to return the cached
+  # binary. Every branch below exists to avoid reaching npm.
   for c in /root/.cloakbrowser/*/chrome "$HOME"/.cloakbrowser/*/chrome; do
     [ -x "$c" ] && { CLOAK_BIN=$c; break; }
   done
@@ -146,16 +142,15 @@ if [ $CLOAK -eq 1 ]; then
       echo "Chromium, cached in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past"
       echo "that this step gives up and the boot continues on plain Chrome."
       echo "It is not hung."
-      # `npm ci` against the shipped lockfile, so npm downloads the 8 tarballs
-      # and does no resolution at all. `npm install` off a bare `npm init` is
-      # what cost 215s: no lockfile means a full solve, every run, forever.
+      # `npm ci` fetches the 7 pinned tarballs and resolves nothing. Without a
+      # lockfile npm re-solves the tree on every run -- that was the 215s.
       cp "$SKILL_DIR/cloak/package.json" "$SKILL_DIR/cloak/package-lock.json" . 2>/dev/null
       # Timed, and progress left on stderr: a silenced multi-minute step is
       # indistinguishable from a wedged one, and reads as a hang.
       timeout "${SETUP_TIMEOUT:-300}" npm ci --prefer-offline --no-fund --no-audit || npm_ok=0
       if [ $npm_ok -eq 0 ]; then
-        # A pin ages: a yanked version or an npm too old for lockfileVersion 3
-        # must not cost the caller cloak mode entirely.
+        # A yanked version or an npm too old for lockfileVersion 3 should cost
+        # time, not cloak mode.
         echo "npm ci failed -- retrying unpinned, which is the slow path" >&2
         npm_ok=1
         rm -f package-lock.json
@@ -201,9 +196,8 @@ if [ $CLOAK -eq 1 ]; then
 fi
 
 if [ $CLOAK -eq 0 ]; then
-  # A previous run in this sandbox may have left browsers.default at cloak, and
-  # a plain-Chrome run has to actually get plain Chrome. Best-effort: an older
-  # pinchtab without the key just refuses the write.
+  # A previous cloak run in this sandbox left browsers.default set, and
+  # --no-cloak has to mean it. Best-effort: an older pinchtab refuses the write.
   "$REAL" config set browsers.default chrome >/dev/null 2>&1 || true
 
   # Most sandboxes ship a Chromium. If not, pull puppeteer's bundled build.

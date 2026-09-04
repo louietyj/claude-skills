@@ -330,9 +330,8 @@ def call_stdio(name, cfg, method, params):
     # A server that fails to start says why on stderr. Discard it and every such
     # failure becomes the same unhelpful "exited before responding to initialize".
     errf = tempfile.TemporaryFile()
-    # Published so the watchdog can read it. It os._exit()s -- no unwinding, no
-    # `finally` -- so a timeout was the one failure that reported nothing at all
-    # about the server, which is exactly the failure you cannot reproduce later.
+    # Published for the watchdog, which os._exit()s and so unwinds nothing:
+    # without this a timeout is the one failure that quotes no stderr at all.
     global ACTIVE_STDERR
     ACTIVE_STDERR = errf
     work = LMCPS_HOME / "work"
@@ -636,9 +635,8 @@ def enumerate_server(name, timeout):
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout + 30)
     except subprocess.TimeoutExpired as e:
-        # `run` attaches what it had read so far. The child prints the server's
-        # own stderr tail on its way out, so this carries it up rather than
-        # reporting a bare duration nobody can act on.
+        # `run` attaches what it read before giving up, which includes the
+        # child's own stderr tail.
         lines = (e.stderr or "").strip().splitlines()
         said = lines[-1].strip() if lines else ""
         return None, f"timed out after {timeout}s" + (f" -- last stderr: {said}" if said else "")
@@ -649,11 +647,9 @@ def enumerate_server(name, timeout):
         # on the way out, and reads badly stuttered otherwise.
         lines = [l for l in (p.stderr or "").strip().splitlines() if l.strip()]
         why = first_line("\n".join(lines)).removeprefix("lmcps: ")
-        # Everything after that first line goes to our own stderr rather than
-        # into `why`, which is one line by contract and ends up in the catalog.
-        # The child's watchdog quotes the server's stderr *after* its verdict,
-        # so keeping only the first line threw away the whole point of quoting
-        # it -- a timeout stayed as silent as it was before instrumenting it.
+        # `why` is one line by contract and lands in the catalog, but the
+        # watchdog quotes the server *after* its verdict -- so the rest goes to
+        # our stderr instead of being dropped.
         for extra in lines[1:][-8:]:
             print(extra, file=sys.stderr)
         return None, why or f"exited {p.returncode}"
@@ -682,8 +678,8 @@ def cmd_index(args):
     for name in sorted(servers):
         t0 = time.monotonic()
         tools, err = enumerate_server(name, args.per_server_timeout)
-        # Per-server duration, always. A server does not cross a 120s deadline
-        # from nowhere -- it creeps -- and nothing was recording the creep.
+        # Per-server duration, always: a server creeps up on a deadline rather
+        # than crossing it from nowhere, and nothing was recording the creep.
         print(f"lmcps: '{name}' took {time.monotonic() - t0:.0f}s", file=sys.stderr)
         if err is None:
             out["servers"][name] = {"builtAt": now, "tools": tools, "error": None}

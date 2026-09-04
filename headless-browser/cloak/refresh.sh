@@ -1,18 +1,10 @@
 #!/bin/bash
-# Re-pin the cloakbrowser dependency solve. Run from anywhere:
+# Re-pin the cloakbrowser dependency solve: run it, eyeball the diff, commit.
+# `--package-lock-only` resolves without installing or downloading a browser.
 #
-#     bash headless-browser/cloak/refresh.sh
-#
-# `--package-lock-only` resolves and writes package-lock.json without
-# installing or downloading a browser, so this is a few seconds on any machine
-# with a fast link to the registry. It is the whole maintenance story for the
-# pin: run it, eyeball the diff, commit.
-#
-# Cadence is undemanding. A stale pin installs an older cloakbrowser, which
-# fetches an older patched Chromium and still works; the version only matters
-# when a site's detection has moved on. setup.sh falls back to an unpinned
-# install if the pin ever stops resolving, so drift costs time, never the
-# feature. Monthly, or when a page cloak used to get through starts failing.
+# Monthly is plenty. A stale pin installs an older cloakbrowser and an older
+# patched Chromium, which still works, and setup.sh falls back to an unpinned
+# install if the pin stops resolving -- so drift costs time, never the feature.
 set -euo pipefail
 
 cd "$(dirname "$0")"

@@ -738,7 +738,7 @@ def watchdog(seconds):
 def main():
     ap = argparse.ArgumentParser(prog="lmcps", description=__doc__.splitlines()[0])
     ap.add_argument("--timeout", type=int, default=None,
-                    help="seconds before giving up (default: 120, or 600 for `index`, "
+                    help="seconds before giving up (default: 300, or 900 for `index`, "
                          "which spawns every server in turn)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -782,8 +782,14 @@ def main():
 
     args = ap.parse_args()
     # One deadline covers one server, except for `index`, which is N of them.
+    #
+    # 300s, not 120s, because a cold `npx -y <pkg>` install is the cost here and
+    # it is wildly variable: the same 60-package tree measured 15s, 46s, and
+    # >120s across sandboxes, and ~300s on the cron box. A ceiling inside that
+    # range fails a coin flip, and the retry only looks instant because the
+    # killed attempt left most of the install cached.
     watchdog(args.timeout if args.timeout is not None
-             else (600 if args.cmd == "index" else 120))
+             else (900 if args.cmd == "index" else 300))
     args.fn(args)
 
 

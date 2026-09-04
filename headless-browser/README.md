@@ -47,7 +47,9 @@ Most sites never need it. Cloudflare, DataDome and friends score each visitor an
 
 ## Package for claude.ai
 
-Zip this directory and upload it under Settings → Capabilities → Skills. There's no build step, but there is now a credentials file:
+`python package.py` writes `headless-browser.zip`; upload it under Settings → Capabilities → Skills. It ships an explicit member list rather than globbing the directory, so scratch files and the README never reach the sandbox, and it refuses to build against a `capsolver.key` still holding the placeholder — that combination installs cleanly and then fails every captcha. `--no-key` builds a keyless zip deliberately.
+
+There is now a credentials file:
 
 - **`capsolver.key` ships in the zip in plaintext**, exactly as `durable-filesystem/credentials.json` does. The uploaded skill is a credential — anyone holding it can spend the CapSolver balance. Don't commit it, don't share the zip.
 - Copy `capsolver.key.example` to `capsolver.key` and put the real key in it, or set `CAPSOLVER_API_KEY` in the environment instead. Without either, the solver is simply absent and everything else works unchanged.

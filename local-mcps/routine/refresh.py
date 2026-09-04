@@ -38,10 +38,17 @@ CONTENT = "https://content.dropboxapi.com"
 CONFIG_PATH = "/mcp.json"
 CATALOG_PATH = "/mcp-catalog.json"
 
-# Measured cold on this box: ~18s for three servers, the slowest 11s. These are
-# ceilings for a wedged server, not expectations.
-PER_SERVER_TIMEOUT = 120
-OVERALL_TIMEOUT = 300
+# Ceilings for a wedged server, not expectations: most finish in seconds, and
+# an HTTP server that spawns nothing takes about one.
+#
+# 120s was too tight for an npx server on a cold box. mcp-google-maps installs
+# ~60 packages before it can answer, and the deadline kept landing mid-install
+# -- the tell was npm's own deprecation warnings arriving as the server's last
+# words. Nobody waits on a cron, so buy the install time rather than pinning
+# the version and pre-warming the npx cache at environment build, which is
+# faster but has to be kept in sync to stay faster.
+PER_SERVER_TIMEOUT = 420
+OVERALL_TIMEOUT = 900
 
 
 def log(msg):

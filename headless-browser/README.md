@@ -37,9 +37,20 @@ Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progres
 
 `browsers.default` is flipped to `cloak` only after the binary is confirmed on disk, so a failed install falls back to plain Chrome — reported in the summary — rather than leaving the config pointing at a runtime that isn't there. `--no-cloak` resets it for the same reason: a sandbox where cloak already succeeded must not silently keep using it.
 
+## Captcha solving
+
+`setup.sh` installs pinchtab from [louietyj/pinchtab](https://github.com/louietyj/pinchtab) rather than upstream npm, replacing the managed binary the npm package fetched and leaving its bundled docs alone. Upstream ships the CapSolver solver as an unimplemented stub (`internal/autosolver/external/capsolver.go` returns `"not yet implemented"`), so a captcha page is detected, abandoned, and reported as an unexplained `solved:false`. The fork implements it and fixes three bugs found around it: detection matching vendor names as bare substrings anywhere in the document, sitekeys being unreachable on explicitly-rendered widgets, and `/solve` reporting `solved:true` on a challenge it never detected. `PINCHTAB_USE_FORK=0` stays on the npm build.
+
+Most sites never need it. Cloudflare, DataDome and friends score each visitor and only challenge a bad one; cloak's fingerprint scores fine, and SteamDB, g2.com and scrapingcourse's own "Cloudflare challenge" page all load with no challenge at all. What needs solving is a site that gates *every* visitor regardless of reputation — archive.today and its mirrors are the ones worth caring about. Most public "captcha demo" pages are useless for testing: they use dummy sitekeys (`1x0000…`, `3x0000…`) that no solving service will process.
+
+`autoSolver.solverTimeoutSec` is set to 150, not the 30s default. A reCAPTCHA image challenge routinely runs past 60s, and the default kills the poll *after* CapSolver has already been paid for the solve.
+
 ## Package for claude.ai
 
-Zip this directory and upload it under Settings → Capabilities → Skills. There's no build step and no credentials file — unlike `durable-filesystem/`, nothing here is a secret.
+Zip this directory and upload it under Settings → Capabilities → Skills. There's no build step, but there is now a credentials file:
+
+- **`capsolver.key` ships in the zip in plaintext**, exactly as `durable-filesystem/credentials.json` does. The uploaded skill is a credential — anyone holding it can spend the CapSolver balance. Don't commit it, don't share the zip.
+- Copy `capsolver.key.example` to `capsolver.key` and put the real key in it, or set `CAPSOLVER_API_KEY` in the environment instead. Without either, the solver is simply absent and everything else works unchanged.
 
 ## The session shim
 

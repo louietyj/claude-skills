@@ -111,7 +111,33 @@ if [ $rc -ne 0 ] || [ ! -x "$REAL" ]; then
   fatal=1
   finish
 fi
-note 'pinchtab install' "OK -- $REAL"
+
+# Swap in our fork's build over the one npm just fetched. Upstream ships the
+# capsolver solver as an unimplemented stub, so captcha pages get detected and
+# then abandoned; the fork implements it and fixes the detection and reporting
+# bugs around it. Only the binary is replaced -- the npm package's bundled docs
+# and layout, which later steps read, stay as they are.
+FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-amd64}
+FORK_NOTE='upstream npm build'
+if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
+  MANAGED=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+  if [ -z "$MANAGED" ]; then
+    echo "no managed binary to replace; staying on the npm build" >&2
+  elif curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" -o /tmp/pinchtab-fork "$FORK_BIN_URL" \
+       && [ -s /tmp/pinchtab-fork ]; then
+    # Replace by rename so a half-written download can never become the binary.
+    chmod +x /tmp/pinchtab-fork && mv -f /tmp/pinchtab-fork "$MANAGED"
+    echo "fork build installed: $MANAGED"
+    FORK_NOTE="fork build ($("$REAL" --version 2>/dev/null || echo unknown))"
+  else
+    echo "fork build download failed; continuing on the npm build -- captcha" >&2
+    echo "solving will not work, everything else will" >&2
+    rm -f /tmp/pinchtab-fork
+    failed=1
+    FORK_NOTE='FORK DOWNLOAD FAILED -- no captcha solving'
+  fi
+fi
+note 'pinchtab install' "OK -- $FORK_NOTE"
 
 # --- 2. a browser for it to drive --------------------------------------------
 begin 'find a browser runtime'
@@ -224,8 +250,28 @@ for k in allowClipboard allowStateExport allowFileScheme; do
   "$REAL" config set "security.$k" true >/dev/null
 done
 "$REAL" config set security.allowedDomains '*' >/dev/null
+
+# CapSolver. The key is never committed: it comes from the environment, or from
+# an untracked key file beside this script. Without one the solver stays
+# unregistered and cloak's fingerprint is all that carries a page -- which is
+# enough for risk-scored anti-bot (Cloudflare, DataDome) but not for a site that
+# gates every visitor behind a captcha, archive.today being the common one.
+SOLVER_NOTE='no key -- captcha solving off'
+CAPSOLVER_KEY=${CAPSOLVER_API_KEY:-}
+[ -n "$CAPSOLVER_KEY" ] || CAPSOLVER_KEY=$(cat "$SKILL_DIR/capsolver.key" 2>/dev/null | tr -d '\r\n')
+if [ -n "$CAPSOLVER_KEY" ]; then
+  "$REAL" config set autoSolver.external.capsolverKey "$CAPSOLVER_KEY" >/dev/null 2>&1
+  "$REAL" config set autoSolver.enabled true >/dev/null
+  "$REAL" config set autoSolver.solvers 'capsolver,cloudflare,semantic,jschallenge' >/dev/null
+  "$REAL" config set autoSolver.maxAttempts 3 >/dev/null
+  # A reCAPTCHA image challenge routinely runs past 60s. The 30s default kills
+  # the poll after CapSolver has already been paid for the solve.
+  "$REAL" config set autoSolver.solverTimeoutSec 150 >/dev/null
+  SOLVER_NOTE="OK -- capsolver key ending ...${CAPSOLVER_KEY: -4}"
+fi
 end 0
 note 'browser runtime' "$BROWSER_NOTE"
+note 'captcha solver' "$SOLVER_NOTE"
 
 # --- 3. server, session shim, session ----------------------------------------
 begin 'start server and mint a session'

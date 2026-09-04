@@ -60,6 +60,24 @@ site is unreadable.
 `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override
 the fingerprint it presents. `--no-cloak` forces plain Chrome.
 
+## Captchas
+
+Nothing to call: `nav` solves a challenge on its own when it detects one, at
+~$0.001 and 20-60s. On failure the response carries `error` and a per-attempt
+`history` naming the solver that refused and why, and the tab is left in
+`paused_handoff` -- the next action on it returns 409 until you
+`POST /tabs/{id}/resume`.
+
+Most pages never reach this. Cloudflare and DataDome only challenge a visitor
+they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com and
+scrapingcourse's own "Cloudflare challenge" all load untouched. Solving is for
+sites that gate *every* visitor -- archive.today and its mirrors (archive.ph,
+archive.is, archive.md) are the ones you will hit.
+
+This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
+the solver as a stub. Without a key the solver is absent and nothing else
+changes.
+
 ## Notes
 
 - Never run `pinchtab skill update` or `pinchtab skill sync` -- they write

@@ -29,17 +29,18 @@ Anthropic sometimes blocks direct web_fetch if the URL was not sent by the user.
 1. **web_search / web_fetch** — default for general research; detailed summaries, but no Reddit. web_search omits Reddit results. web_fetch fails on Reddit.
 2. **Parallel Search** — alternative web_search / web_fetch; often surfaces results that native tools miss. Can fetch full Reddit post content + sampled comments (not complete threads). Useful when web_search doesn't turn up what you need.
 3. **mcp-brave** (Desktop) — use when web_search misses something, or Reddit/forum content is likely relevant. Returns raw results, not summaries — expect more manual synthesis.
-3. **mcp-reddit** (Desktop) — use to fetch actual Reddit post/thread content once identified.
-4. **headless-browser** — pinchtab-backed skill for anything that doesn't need my logged-in session. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit.
-5. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
-6. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit.
-7. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when headless-browser and firecrawl still can't retrieve the content.
+4. **mcp-reddit** (Desktop) — use to fetch actual Reddit post/thread content once identified.
+5. **headless-browser** — pinchtab-backed skill for anything that doesn't need my logged-in session. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit.
+6. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
+7. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit. Remember to fetch the schema first.
+8. **mcp-jina** — server-side fetch, so it clears both the sandbox egress proxy and web_fetch's URL-provenance rule in one call. No captcha solver. Doesn't support Reddit.
+8. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when headless-browser and firecrawl still can't retrieve the content.
 
 *Note: Desktop tools (mcp-brave, mcp-reddit, claude-in-chrome) are available only on Desktop.
 
 **Examples:**
 - Reddit: Parallel Search usually gets you what you want. Alternatively: mcp-brave to find threads → mcp-reddit → mcp-apify → claude-in-chrome
-- General article fetches: web_fetch → headless-browser → mcp-firecrawl → mcp-apify → claude-in-chrome
+- General fetches: web_fetch → headless-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
 </web_research>
 
 <durable_filesystem>

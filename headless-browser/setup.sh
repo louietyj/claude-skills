@@ -1,12 +1,89 @@
 #!/bin/bash
-# Installs and configures pinchtab (real Chrome via CLI/HTTP). Idempotent.
-set -euo pipefail
+# One-touch headless-browser boot. Installs and configures pinchtab (real Chrome
+# via CLI/HTTP), starts the server, mints a session -- and then prints pinchtab's
+# own bundled instructions in full, so the caller's next tool call is a real
+# browser command rather than another `cat`. Idempotent.
+#
+# Deliberately NOT `set -e`. The stages are independent and a partial boot is a
+# useful outcome: a failed cloak install must not cost the caller a working
+# ordinary browser, and the caller has to be able to see which half worked. Each
+# stage records its own status and the summary at the end reports all of them.
+set -uo pipefail
+
+TOTAL=4
+step=0
+summary=()
+failed=0
+fatal=0
+DOTS='.........................................'
+RULE_H='════════'
+RULE_S='────────'
+
+note() {  # $1 = label, $2 = status. Called after the step number is incremented.
+  summary+=("$(printf '  [%d/%d] %s %s %s' "$step" "$TOTAL" "$1" "${DOTS:${#1}}" "$2")")
+}
+
+begin() {  # $1 = what this step does, as displayed
+  step=$((step + 1))
+  printf '\n%s[%d/%d] %s\n' "$RULE_S" "$step" "$TOTAL" "$1"
+}
+
+end() {  # $1 = exit status of the step body
+  printf '%s[%d/%d] end (exit %d)\n' "$RULE_S" "$step" "$TOTAL" "$1"
+  [ "$1" -eq 0 ] || failed=1
+}
+
+# Every exit path runs this, so a boot that dies at step 1 still prints a summary.
+finish() {
+  printf '\n%s HEADLESS BROWSER READY %s\n' "$RULE_H" "$RULE_H"
+  printf '%s\n' "${summary[@]}"
+
+  if [ $fatal -ne 0 ]; then
+    printf '\npinchtab is not usable. Do not re-run this script and do not try to\n'
+    printf 'drive the browser anyway -- tell the user which step failed. Fall back\n'
+    printf 'to web_fetch or another fetch tool for the page you wanted.\n'
+    exit 1
+  fi
+
+  printf '\npinchtab is live and its SKILL.md is printed above IN FULL -- that file\n'
+  printf 'is in your context now, for the rest of the conversation and not just\n'
+  printf 'this turn. Do not cat it again, do not load the pinchtab skill, and do\n'
+  printf 'not re-run any step above; this output is a transcript of work already\n'
+  printf 'done, not a plan. The session exists: never create or export\n'
+  printf 'PINCHTAB_SESSION yourself, whatever that SKILL.md says.\n'
+  printf '\nNext: pinchtab nav <url> --block-images\n'
+
+  if [ $failed -ne 0 ]; then
+    printf '\nSome steps did not complete -- the summary above is the authority on\n'
+    printf 'what is available. Say which part is down rather than working around it.\n'
+  fi
+  exit 0
+}
+
+CLOAK=0
+for arg in "$@"; do
+  case "$arg" in
+    --cloak) CLOAK=1 ;;
+    *) printf 'usage: setup.sh [--cloak]\n' >&2; exit 2 ;;
+  esac
+done
+[ "${HEADLESS_BROWSER_CLOAK:-0}" = 1 ] && CLOAK=1
+
+printf '%s HEADLESS BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
+printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
+printf 'instructions printed in full. Read all of it -- this is the only place\n'
+printf 'those instructions get printed, and the corrections to them that follow\n'
+printf 'the file matter. Then use the browser.\n'
 
 NPM_ROOT="$(npm root -g)"
 REAL="$NPM_ROOT/pinchtab/bin/pinchtab"
 BIN_DIR="$(dirname "$(dirname "$NPM_ROOT")")/bin"
 SHIM="$BIN_DIR/pinchtab"
 SESSION_FILE="${PINCHTAB_SESSION_FILE:-/home/claude/.pinchtab-session}"
+PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
+
+# --- 1. the package ----------------------------------------------------------
+begin 'install pinchtab'
 
 # A shim from a previous run would open a session before the server exists, so
 # drop it and drive setup through $REAL directly. It is reinstalled at the end.
@@ -14,16 +91,79 @@ SESSION_FILE="${PINCHTAB_SESSION_FILE:-/home/claude/.pinchtab-session}"
 
 # Check the package, not `command -v pinchtab`: the shim satisfies that test
 # even when the package underneath it is missing.
-[ -x "$REAL" ] || npm install -g pinchtab
+if [ -x "$REAL" ]; then
+  echo "already installed: $("$REAL" --version 2>/dev/null || echo unknown)"
+  rc=0
+else
+  npm install -g pinchtab
+  rc=$?
+fi
+end $rc
+if [ $rc -ne 0 ] || [ ! -x "$REAL" ]; then
+  note 'pinchtab install' 'FAILED -- nothing else can run'
+  fatal=1
+  finish
+fi
+note 'pinchtab install' "OK -- $REAL"
 
-# Most sandboxes ship a Chromium. If not, pull puppeteer's bundled build.
-if ! "$REAL" doctor 2>&1 | grep -qi "OK.*chrome_present"; then
-  mkdir -p /tmp/pinchtab-chrome && cd /tmp/pinchtab-chrome
+# --- 2. a browser for it to drive --------------------------------------------
+begin 'find a browser runtime'
+BROWSER_NOTE=''
+
+# A patched Chromium for sites whose bot detection rejects a plain headless
+# Chrome outright. Opt-in because it pulls a browser build.
+if [ $CLOAK -eq 1 ]; then
+  echo "cloak mode requested -- installing cloakbrowser (large download, be patient)"
+  mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
   npm init -y >/dev/null 2>&1
-  npm install puppeteer >/dev/null 2>&1
-  CHROME_BIN=$(find /tmp/pinchtab-chrome /root/.cache/puppeteer "$HOME/.cache/puppeteer" \
-    -type f -path "*chrome-linux64/chrome" 2>/dev/null | head -1)
-  [ -n "$CHROME_BIN" ] && "$REAL" config set browser.binary "$CHROME_BIN" >/dev/null
+  if npm install cloakbrowser playwright-core >/dev/null 2>&1; then
+    # binaryInfo()'s shape is not contractual, so take whichever string field
+    # names an existing file rather than assuming a key.
+    CLOAK_BIN=$(node -e '
+      import("cloakbrowser").then(async m => {
+        await m.ensureBinary();
+        const info = m.binaryInfo() || {};
+        const fs = require("fs");
+        for (const v of Object.values(info))
+          if (typeof v === "string" && fs.existsSync(v) && fs.statSync(v).isFile())
+            return console.log(v);
+        process.exit(1);
+      }).catch(() => process.exit(1));
+    ' 2>/dev/null | tail -1)
+  fi
+  if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
+    "$REAL" config set browser.binary "$CLOAK_BIN" >/dev/null
+    "$REAL" config set browser.cloak.fingerprintSeed "${CLOAK_SEED:-42069}" >/dev/null
+    "$REAL" config set browser.cloak.platform "${CLOAK_PLATFORM:-windows}" >/dev/null
+    "$REAL" config set browser.cloak.timezone "${CLOAK_TIMEZONE:-America/New_York}" >/dev/null
+    "$REAL" config set browser.cloak.locale "${CLOAK_LOCALE:-en-US}" >/dev/null
+    # Flipped LAST, and only once the binary is confirmed on disk: pointing
+    # browsers.default at a runtime that isn't there breaks every later nav.
+    "$REAL" config set browsers.default cloak >/dev/null
+    echo "cloak runtime: $CLOAK_BIN"
+    BROWSER_NOTE="OK -- cloakbrowser"
+  else
+    echo "cloakbrowser install failed; falling back to ordinary Chrome" >&2
+    CLOAK=0
+    BROWSER_NOTE='CLOAK FAILED -- fell back to plain Chrome'
+    failed=1
+  fi
+fi
+
+if [ $CLOAK -eq 0 ]; then
+  # Most sandboxes ship a Chromium. If not, pull puppeteer's bundled build.
+  if "$REAL" doctor 2>&1 | grep -qi "OK.*chrome_present"; then
+    echo "system Chrome found"
+  else
+    mkdir -p /tmp/pinchtab-chrome && cd /tmp/pinchtab-chrome
+    npm init -y >/dev/null 2>&1
+    npm install puppeteer >/dev/null 2>&1
+    CHROME_BIN=$(find /tmp/pinchtab-chrome /root/.cache/puppeteer "$HOME/.cache/puppeteer" \
+      -type f -path "*chrome-linux64/chrome" 2>/dev/null | head -1)
+    [ -n "$CHROME_BIN" ] && "$REAL" config set browser.binary "$CHROME_BIN" >/dev/null
+    echo "downloaded Chrome: ${CHROME_BIN:-none found}"
+  fi
+  [ -n "$BROWSER_NOTE" ] || BROWSER_NOTE='OK -- plain Chrome'
 fi
 
 # Open up pinchtab's capability gates. These are Chrome features, gated by
@@ -34,6 +174,11 @@ for k in allowClipboard allowStateExport allowFileScheme; do
   "$REAL" config set "security.$k" true >/dev/null
 done
 "$REAL" config set security.allowedDomains '*' >/dev/null
+end 0
+note 'browser runtime' "$BROWSER_NOTE"
+
+# --- 3. server, session shim, session ----------------------------------------
+begin 'start server and mint a session'
 
 "$REAL" server stop >/dev/null 2>&1 || true
 "$REAL" server restart >/dev/null
@@ -112,12 +257,60 @@ case "$SID" in
   *)     rm -f "$SESSION_FILE" ;;   # shim will create one lazily on first use
 esac
 
-echo "ready."
-echo "PINCHTAB_SESSION IS ALREADY INITIALIZED. Do not create or export one."
-echo ""
-echo "NOW READ: $NPM_ROOT/pinchtab/skills/pinchtab/SKILL.md"
-echo "  ^^ IGNORE ITS FIRST INSTRUCTION. That file opens by telling you to run"
-echo "     export PINCHTAB_SESSION=\$(pinchtab session create ...)"
-echo "     DO NOT. It is done. Everything else in that file applies as written."
-echo ""
-echo "THEN RUN: pinchtab nav <url>"
+# Through the shim, not $REAL: this is the only thing that exercises the whole
+# chain -- server, browser launch, session resolution -- and a misconfigured
+# browser binary fails here or else on the caller's first real page.
+if "$SHIM" nav https://example.com --block-images >/dev/null 2>&1; then
+  echo "server up, session ${SID:-<lazy>}, test nav OK"
+  end 0
+  note 'server + session' 'OK -- session is already initialized'
+else
+  echo "server up, session ${SID:-<lazy>}, but the test nav FAILED" >&2
+  end 1
+  note 'server + session' 'FAILED -- the browser does not launch'
+  fatal=1
+fi
+
+# --- 4. pinchtab's own instructions, in full ---------------------------------
+begin "cat $PINCHTAB_DOCS/SKILL.md"
+if [ $fatal -ne 0 ]; then
+  printf 'SKIPPED -- pinchtab does not work; its instructions would be unusable.\n'
+  end 1
+  note 'pinchtab SKILL.md' 'SKIPPED'
+  finish
+fi
+
+if cat "$PINCHTAB_DOCS/SKILL.md"; then
+  end 0
+  note 'pinchtab SKILL.md' 'OK -- printed in full above'
+else
+  end 1
+  note 'pinchtab SKILL.md' 'FAILED -- read it yourself before using pinchtab'
+fi
+
+# Corrections come after the file, not before it: they only make sense once its
+# text is in context, and stating them first invites reading the file for the
+# rule they already overrode.
+printf '\n%s CORRECTIONS TO THE FILE ABOVE %s\n' "$RULE_H" "$RULE_H"
+printf 'Three things in that file are wrong for this sandbox. Everything else in\n'
+printf 'it applies exactly as written.\n'
+printf '\n1. Its Core Workflow opens with\n'
+printf '     export PINCHTAB_SESSION=$(pinchtab session create --agent-id ...)\n'
+printf '   DO NOT RUN THAT. The session above already exists and a shim attaches\n'
+printf '   every command to it, across separate bash calls. Creating one by hand\n'
+printf '   gets a 403, captures an empty string, and silently drives a blank tab.\n'
+printf '2. Never run `pinchtab skill update` or `pinchtab skill sync`. They write\n'
+printf '   into other agent skill directories found on the machine.\n'
+printf '3. Anything it says about picking a browser or profile is already settled\n'
+printf '   by the steps above -- do not reconfigure `browser.binary`, the security\n'
+printf '   gates, or `browsers.default`.\n'
+printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
+printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
+printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
+printf '\nThat file links a references/ directory. It is NOT printed here; read a\n'
+printf 'page from it only if you actually need it:\n'
+for f in "$PINCHTAB_DOCS"/references/*; do
+  [ -f "$f" ] && printf '  %s\n' "$f"
+done
+
+finish

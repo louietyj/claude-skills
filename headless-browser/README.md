@@ -4,8 +4,12 @@ Fetches a page when `web_fetch` didn't — a thin JS-rendering fallback for clau
 
 ```
 SKILL.md    the skill Claude reads; when to reach for this over web_fetch
-setup.sh    installs pinchtab, finds/downloads Chrome, opens capability gates, starts the server
+setup.sh    the whole boot: installs pinchtab, finds/downloads Chrome, opens capability
+            gates, starts the server, mints a session, smoke-tests it, and prints
+            pinchtab's own instructions in full
 ```
+
+`setup.sh` is deliberately one call that leaves nothing to read afterwards — same shape as `session-init/`. Claude runs it and its next tool call is a real browser command; it never has to `cat` pinchtab's bundled SKILL.md itself or be told separately which of that file's instructions to disregard. The script prints the file and the corrections to it in the same output.
 
 ## Setup
 
@@ -15,7 +19,17 @@ Nothing to configure ahead of time — `setup.sh` is self-contained and idempote
 bash setup.sh
 ```
 
-It installs pinchtab globally if missing, locates a system Chrome or pulls puppeteer's bundled build, relaxes pinchtab's security gates (clipboard, state export, file scheme, all domains — safe defaults for a disposable sandbox but not for a personal machine), and starts the pinchtab server.
+It installs pinchtab globally if missing, locates a system Chrome or pulls puppeteer's bundled build, relaxes pinchtab's security gates (clipboard, state export, file scheme, all domains — safe defaults for a disposable sandbox but not for a personal machine), starts the pinchtab server, and navigates to `example.com` once as an end-to-end check. Output is a numbered transcript with a status summary; stages are independent, so a failure in one is reported rather than aborting the rest.
+
+## Cloak mode
+
+```bash
+bash setup.sh --cloak     # or HEADLESS_BROWSER_CLOAK=1
+```
+
+Swaps the browser runtime for [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium build pinchtab 0.14.0 added support for, for sites that reject a plain headless Chrome on fingerprint alone. Off by default because it downloads a browser build — a minute or two against the ordinary path's seconds. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
+
+`browsers.default` is flipped to `cloak` only after the binary is confirmed on disk; if the install fails the script says so and falls back to plain Chrome rather than leaving the config pointing at a runtime that isn't there. To go back, `pinchtab config init` and re-run without the flag.
 
 ## Package for claude.ai
 

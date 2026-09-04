@@ -63,10 +63,11 @@ the fingerprint it presents. `--no-cloak` forces plain Chrome.
 ## Captchas
 
 Nothing to call: `nav` solves a challenge on its own when it detects one, at
-~$0.001 and 20-60s. On failure the response carries `error` and a per-attempt
-`history` naming the solver that refused and why, and the tab is left in
-`paused_handoff` -- the next action on it returns 409 until you
-`POST /tabs/{id}/resume`.
+~$0.001 and 20-60s. Solving happens in the background, so `nav` returns before
+it finishes -- if the page still shows a challenge, wait and re-read rather
+than concluding it failed. A failed solve leaves the tab usable, so read the
+page and decide; `POST /solve` returns `error` and a per-attempt `history`
+naming the solver that refused and why.
 
 Most pages never reach this. Cloudflare and DataDome only challenge a visitor
 they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com and

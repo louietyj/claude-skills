@@ -267,6 +267,10 @@ if [ -n "$CAPSOLVER_KEY" ]; then
   # A reCAPTCHA image challenge routinely runs past 60s. The 30s default kills
   # the poll after CapSolver has already been paid for the solve.
   "$REAL" config set autoSolver.solverTimeoutSec 150 >/dev/null
+  # A failed solve otherwise parks the tab in paused_handoff and 409s every
+  # later action. There is no operator here to hand off to, so that leaves the
+  # caller wedged on a page it could still read.
+  "$REAL" config set autoSolver.handoffOnFailure false >/dev/null 2>&1
   SOLVER_NOTE="OK -- capsolver key ending ...${CAPSOLVER_KEY: -4}"
 fi
 end 0

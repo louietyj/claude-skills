@@ -34,6 +34,9 @@ HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
 LMCPS_HOME = Path(os.environ.get("LMCPS_HOME", Path.home() / ".lmcps"))
 
+# The running server's stderr, for the watchdog to quote on the way out.
+ACTIVE_STDERR = None
+
 # ${VAR} and ${VAR:-default}, as supported in Claude Code's .mcp.json.
 VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}")
 
@@ -327,6 +330,11 @@ def call_stdio(name, cfg, method, params):
     # A server that fails to start says why on stderr. Discard it and every such
     # failure becomes the same unhelpful "exited before responding to initialize".
     errf = tempfile.TemporaryFile()
+    # Published so the watchdog can read it. It os._exit()s -- no unwinding, no
+    # `finally` -- so a timeout was the one failure that reported nothing at all
+    # about the server, which is exactly the failure you cannot reproduce later.
+    global ACTIVE_STDERR
+    ACTIVE_STDERR = errf
     work = LMCPS_HOME / "work"
     work.mkdir(parents=True, exist_ok=True)
     try:
@@ -627,8 +635,13 @@ def enumerate_server(name, timeout):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout + 30)
-    except subprocess.TimeoutExpired:
-        return None, f"timed out after {timeout}s"
+    except subprocess.TimeoutExpired as e:
+        # `run` attaches what it had read so far. The child prints the server's
+        # own stderr tail on its way out, so this carries it up rather than
+        # reporting a bare duration nobody can act on.
+        lines = (e.stderr or "").strip().splitlines()
+        said = lines[-1].strip() if lines else ""
+        return None, f"timed out after {timeout}s" + (f" -- last stderr: {said}" if said else "")
     except OSError as e:
         return None, f"could not run lmcps: {e}"
     if p.returncode != 0:
@@ -659,7 +672,11 @@ def cmd_index(args):
            "builtBy": args.built_by, "servers": {}}
     failed = []
     for name in sorted(servers):
+        t0 = time.monotonic()
         tools, err = enumerate_server(name, args.per_server_timeout)
+        # Per-server duration, always. A server does not cross a 120s deadline
+        # from nowhere -- it creeps -- and nothing was recording the creep.
+        print(f"lmcps: '{name}' took {time.monotonic() - t0:.0f}s", file=sys.stderr)
         if err is None:
             out["servers"][name] = {"builtAt": now, "tools": tools, "error": None}
             continue
@@ -697,6 +714,17 @@ def watchdog(seconds):
     development machine as well as in the Linux sandbox."""
     def fire():
         print(f"lmcps: timed out after {seconds}s", file=sys.stderr)
+        if ACTIVE_STDERR is not None:
+            try:
+                ACTIVE_STDERR.seek(0)
+                tail = ACTIVE_STDERR.read().decode(errors="replace").strip()
+                for line in tail.splitlines()[-8:]:
+                    print(f"lmcps:   {line}", file=sys.stderr)
+                if not tail:
+                    print("lmcps:   (the server wrote nothing to stderr)",
+                          file=sys.stderr)
+            except Exception:
+                pass
         os._exit(1)
     t = threading.Timer(seconds, fire)
     t.daemon = True

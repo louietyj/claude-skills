@@ -257,6 +257,15 @@ class TestStdioProtocol(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("FAKE_TOKEN is not set", r.stderr)
 
+    def test_timeout_reports_the_servers_own_diagnostic(self):
+        """The deadline used to be the one failure that said nothing about the
+        server, which is the failure you are least able to reproduce later."""
+        self.write_config({"adder": fake_server("hang")})
+        r = self.run_lmcps("--timeout", "2", "call", "adder", "add", "{}")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("timed out after 2s", r.stderr)
+        self.assertIn("waiting on a lock held by nobody", r.stderr)
+
     def test_missing_command_is_named(self):
         self.write_config({"ghost": {"command": "definitely-not-a-real-binary"}})
         r = self.run_lmcps("call", "ghost", "x", "{}")

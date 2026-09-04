@@ -9,11 +9,13 @@
     sampling sends an unsupported request and continues once it is declined
     instructions advertises a serverInfo title and its own `instructions`
     crash    writes a diagnostic to stderr and exits without a handshake
+    hang     writes a diagnostic to stderr and never answers, to hit the deadline
     echoenv  tools/call returns the value of $FAKE_TOKEN
 """
 import json
 import os
 import sys
+import time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "plain"
 
@@ -89,6 +91,12 @@ def main():
     if MODE == "crash":
         print("fake: FAKE_TOKEN is not set, refusing to start", file=sys.stderr)
         sys.exit(2)
+
+    if MODE == "hang":
+        print("fake: waiting on a lock held by nobody", file=sys.stderr)
+        sys.stderr.flush()
+        while True:
+            time.sleep(3600)
 
     if MODE == "noisy":
         log("[info] starting up")

@@ -271,6 +271,11 @@ if [ -n "$CAPSOLVER_KEY" ]; then
   # later action. There is no operator here to hand off to, so that leaves the
   # caller wedged on a page it could still read.
   "$REAL" config set autoSolver.handoffOnFailure false >/dev/null 2>&1
+  # Otherwise nav returns while the solve is still running and says nothing about
+  # it: the caller acts on an unsolved page, or succeeds later by luck and has no
+  # idea a solve happened. Awaiting only costs time on a page carrying a
+  # challenge, which is unusable until it is solved anyway.
+  "$REAL" config set autoSolver.awaitOnNavigate true >/dev/null 2>&1
   SOLVER_NOTE="OK -- capsolver key ending ...${CAPSOLVER_KEY: -4}"
 fi
 end 0

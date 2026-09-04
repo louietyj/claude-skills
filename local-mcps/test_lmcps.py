@@ -623,6 +623,17 @@ class TestIndexBuild(Base):
         out = json.loads(self.build("--built-by", "refresh.py@deadbeef").stdout)
         self.assertEqual(out["builtBy"], "refresh.py@deadbeef")
 
+    def test_a_timed_out_server_reports_what_it_said(self):
+        """The child hits its own watchdog and exits, so this arrives as a
+        non-zero return, not a TimeoutExpired -- and `why` is one line by
+        contract. The server's own diagnostic has to reach the log some other
+        way or a cron timeout stays unreadable."""
+        self.write_config({"adder": fake_server("hang")})
+        r = self.build("--per-server-timeout", "2")
+        out = json.loads(r.stdout)
+        self.assertIn("timed out after 2s", out["servers"]["adder"]["error"])
+        self.assertIn("waiting on a lock held by nobody", r.stderr)
+
     def test_a_broken_server_does_not_stop_the_build(self):
         self.write_config({"adder": fake_server(description="adds numbers"),
                            "broken": {"command": "definitely-not-a-real-binary",

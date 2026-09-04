@@ -647,7 +647,15 @@ def enumerate_server(name, timeout):
     if p.returncode != 0:
         # The child's `die` already prefixed itself; this string gets re-prefixed
         # on the way out, and reads badly stuttered otherwise.
-        why = first_line(p.stderr.strip()).removeprefix("lmcps: ")
+        lines = [l for l in (p.stderr or "").strip().splitlines() if l.strip()]
+        why = first_line("\n".join(lines)).removeprefix("lmcps: ")
+        # Everything after that first line goes to our own stderr rather than
+        # into `why`, which is one line by contract and ends up in the catalog.
+        # The child's watchdog quotes the server's stderr *after* its verdict,
+        # so keeping only the first line threw away the whole point of quoting
+        # it -- a timeout stayed as silent as it was before instrumenting it.
+        for extra in lines[1:][-8:]:
+            print(extra, file=sys.stderr)
         return None, why or f"exited {p.returncode}"
     try:
         entry = json.loads(p.stdout)

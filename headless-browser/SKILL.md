@@ -63,11 +63,16 @@ the fingerprint it presents. `--no-cloak` forces plain Chrome.
 ## Captchas
 
 Nothing to call: `nav` solves a challenge on its own when it detects one, at
-~$0.001 and 20-60s. Solving happens in the background, so `nav` returns before
-it finishes -- if the page still shows a challenge, wait and re-read rather
-than concluding it failed. A failed solve leaves the tab usable, so read the
-page and decide; `POST /solve` returns `error` and a per-attempt `history`
-naming the solver that refused and why.
+~$0.001 and 20-60s, and does not return until it has. It prints a HINT saying
+so, and says nothing on the ordinary pages that never trigger one.
+
+**Never click a captcha widget.** Solving injects a token and does not tick the
+box, so a solved page still shows an unchecked "I'm not a robot" and `snap`
+still lists it. That is done, not pending -- clicking it discards a solve you
+already paid for. Just proceed: fill the form, press submit, read the page.
+
+A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
+adds a per-attempt `history` naming the solver that refused and why.
 
 Most pages never reach this. Cloudflare and DataDome only challenge a visitor
 they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com and

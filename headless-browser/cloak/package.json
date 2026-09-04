@@ -2,9 +2,8 @@
   "name": "pinchtab-cloak",
   "version": "1.0.0",
   "private": true,
-  "description": "Pinned tree for headless-browser/setup.sh: cloakbrowser only, so npm never has to solve.",
+  "description": "Pinned tree for headless-browser/setup.sh, so npm never has to solve. playwright-core is deliberately absent: it is an optional peer, setup.sh only calls ensureBinary()/binaryInfo(), and its packument is 18.4MB across 5653 versions -- the bulk of the 215s solve this pin exists to remove.",
   "dependencies": {
-    "cloakbrowser": "^0.5.10",
-    "playwright-core": "^1.49.0"
+    "cloakbrowser": "^0.5.10"
   }
 }

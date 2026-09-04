@@ -4,6 +4,7 @@ Fetches a page when `web_fetch` didn't — a thin JS-rendering fallback for clau
 
 ```
 SKILL.md    the skill Claude reads; when to reach for this over web_fetch
+cloak/      pinned package.json + package-lock.json for the cloakbrowser install
 setup.sh    the whole boot: installs pinchtab, finds/downloads Chrome, opens capability
             gates, starts the server, mints a session, smoke-tests it, and prints
             pinchtab's own instructions in full
@@ -28,6 +29,8 @@ bash setup.sh --cloak     # or HEADLESS_BROWSER_CLOAK=1
 ```
 
 Swaps the runtime for [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. Measured in the claude.ai sandbox: **161s cold** against **~5s** for the plain path, so it is opt-in — the escalation you run after a nav comes back blocked, not the price of every page. A cached binary is reused (`/root/.cloakbrowser/*/chrome`), and the second run skips reprinting pinchtab's SKILL.md, which the caller already has.
+
+The install runs `npm ci` against the lockfile in `cloak/`, not `npm install` off a bare `npm init`. That distinction was worth 215s: with no lockfile npm re-solves the 8-package tree from the registry on every run, and spent that long concluding "up to date, audited 9 packages" on a tree that was already complete — `npm ping` answers in 134ms, so it was resolution, not bandwidth. Regenerate the pin with `npm install --package-lock-only` in `cloak/`; if it ever goes stale, setup falls back to an unpinned install rather than losing cloak mode.
 
 Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progress in the transcript; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
 

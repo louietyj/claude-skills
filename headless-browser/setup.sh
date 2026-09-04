@@ -82,6 +82,7 @@ printf 'instructions. Read all of it -- this is the only place those instruction
 printf 'get printed, and the corrections to them that follow the file matter.\n'
 printf 'Then use the browser.\n'
 
+SKILL_DIR=$(cd "$(dirname "$0")" && pwd)
 NPM_ROOT="$(npm root -g)"
 REAL="$NPM_ROOT/pinchtab/bin/pinchtab"
 BIN_DIR="$(dirname "$(dirname "$NPM_ROOT")")/bin"
@@ -144,11 +145,22 @@ if [ $CLOAK -eq 1 ]; then
       echo "Chromium, cached in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past"
       echo "that this step gives up and the boot continues on plain Chrome."
       echo "It is not hung."
-      npm init -y >/dev/null 2>&1
+      # `npm ci` against the shipped lockfile, so npm downloads the 8 tarballs
+      # and does no resolution at all. `npm install` off a bare `npm init` is
+      # what cost 215s: no lockfile means a full solve, every run, forever.
+      cp "$SKILL_DIR/cloak/package.json" "$SKILL_DIR/cloak/package-lock.json" . 2>/dev/null
       # Timed, and progress left on stderr: a silenced multi-minute step is
       # indistinguishable from a wedged one, and reads as a hang.
-      timeout "${SETUP_TIMEOUT:-300}" npm install --prefer-offline --no-fund --no-audit \
-        cloakbrowser playwright-core || npm_ok=0
+      timeout "${SETUP_TIMEOUT:-300}" npm ci --prefer-offline --no-fund --no-audit || npm_ok=0
+      if [ $npm_ok -eq 0 ]; then
+        # A pin ages: a yanked version or an npm too old for lockfileVersion 3
+        # must not cost the caller cloak mode entirely.
+        echo "npm ci failed -- retrying unpinned, which is the slow path" >&2
+        npm_ok=1
+        rm -f package-lock.json
+        timeout "${SETUP_TIMEOUT:-300}" npm install --prefer-offline --no-fund --no-audit \
+          cloakbrowser playwright-core || npm_ok=0
+      fi
       echo "npm: $((SECONDS - t0))s elapsed"
     fi
     if [ $npm_ok -eq 1 ]; then

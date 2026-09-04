@@ -23,7 +23,7 @@ It installs pinchtab globally if missing, locates a system Chrome or pulls puppe
 
 ## Cloak mode (default)
 
-The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for — sites that reject a plain headless Chrome on fingerprint alone accept it. It costs a browser download on a cold sandbox, which is the right trade for a tool that gets reached for precisely when the ordinary fetch was refused. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
+The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for — sites that reject a plain headless Chrome on fingerprint alone accept it. It costs a few minutes of browser download on a cold sandbox — the right trade for a tool that gets reached for precisely when the ordinary fetch was refused. That stage is timed (`SETUP_TIMEOUT`, default 300s) and leaves npm's progress on stderr; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
 
 ```bash
 bash setup.sh --no-cloak     # or HEADLESS_BROWSER_CLOAK=0

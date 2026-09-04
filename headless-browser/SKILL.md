@@ -21,8 +21,9 @@ with the corrections that apply in this sandbox. Nothing to `cat` afterwards and
 no other skill to load. Idempotent -- re-run it rather than debugging whether it
 ran.
 
-A cold sandbox spends a minute or two of that pulling the browser build; a
-re-run is seconds. Budget for it once and stop treating the tool as expensive.
+A cold sandbox spends a few minutes of that pulling the browser build. That is
+the download, not a hang -- let it run. A re-run in the same sandbox is
+seconds, so budget for it once and stop treating the tool as expensive.
 
 Its output is a transcript of work already done. Do not re-run the commands it
 shows, do not re-read the files it prints, and do not create or export

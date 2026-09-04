@@ -114,13 +114,19 @@ BROWSER_NOTE=''
 # fingerprint. Default, and worth its download: the sites this skill gets
 # reached for are the ones a plain headless Chrome is turned away from.
 if [ $CLOAK -eq 1 ]; then
-  echo "installing cloakbrowser -- downloads a browser build on a cold sandbox"
+  echo "installing cloakbrowser: a few hundred MB of patched Chromium on a cold"
+  echo "sandbox, cached after that. Budget ~${SETUP_TIMEOUT:-300}s; past that this"
+  echo "step gives up and the boot continues on plain Chrome. It is not hung."
+  t0=$SECONDS
   mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
   npm init -y >/dev/null 2>&1
-  if npm install cloakbrowser playwright-core >/dev/null 2>&1; then
+  # Timed, and progress left on stderr: a silenced multi-minute download is
+  # indistinguishable from a wedged one, and reads as a hang.
+  if timeout "${SETUP_TIMEOUT:-300}" npm install --no-fund --no-audit cloakbrowser playwright-core; then
+    echo "npm install: $((SECONDS - t0))s elapsed; fetching the browser binary"
     # binaryInfo()'s shape is not contractual, so take whichever string field
     # names an existing file rather than assuming a key.
-    CLOAK_BIN=$(node -e '
+    CLOAK_BIN=$(timeout "${SETUP_TIMEOUT:-300}" node -e '
       import("cloakbrowser").then(async m => {
         await m.ensureBinary();
         const info = m.binaryInfo() || {};
@@ -129,9 +135,10 @@ if [ $CLOAK -eq 1 ]; then
           if (typeof v === "string" && fs.existsSync(v) && fs.statSync(v).isFile())
             return console.log(v);
         process.exit(1);
-      }).catch(() => process.exit(1));
-    ' 2>/dev/null | tail -1)
+      }).catch(e => { console.error(String(e)); process.exit(1); });
+    ' | tail -1)
   fi
+  echo "cloak stage: $((SECONDS - t0))s elapsed"
   if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
     "$REAL" config set browser.binary "$CLOAK_BIN" >/dev/null
     "$REAL" config set browser.cloak.fingerprintSeed "${CLOAK_SEED:-42069}" >/dev/null
@@ -161,9 +168,10 @@ if [ $CLOAK -eq 0 ]; then
   if "$REAL" doctor 2>&1 | grep -qi "OK.*chrome_present"; then
     echo "system Chrome found"
   else
+    echo "no system Chrome; pulling puppeteer's build (also a few minutes cold)"
     mkdir -p /tmp/pinchtab-chrome && cd /tmp/pinchtab-chrome
     npm init -y >/dev/null 2>&1
-    npm install puppeteer >/dev/null 2>&1
+    timeout "${SETUP_TIMEOUT:-300}" npm install --no-fund --no-audit puppeteer
     CHROME_BIN=$(find /tmp/pinchtab-chrome /root/.cache/puppeteer "$HOME/.cache/puppeteer" \
       -type f -path "*chrome-linux64/chrome" 2>/dev/null | head -1)
     [ -n "$CHROME_BIN" ] && "$REAL" config set browser.binary "$CHROME_BIN" >/dev/null

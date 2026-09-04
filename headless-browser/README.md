@@ -21,15 +21,17 @@ bash setup.sh
 
 It installs pinchtab globally if missing, locates a system Chrome or pulls puppeteer's bundled build, relaxes pinchtab's security gates (clipboard, state export, file scheme, all domains — safe defaults for a disposable sandbox but not for a personal machine), starts the pinchtab server, and navigates to `example.com` once as an end-to-end check. Output is a numbered transcript with a status summary; stages are independent, so a failure in one is reported rather than aborting the rest.
 
-## Cloak mode (default)
-
-The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for — sites that reject a plain headless Chrome on fingerprint alone accept it. It costs a few minutes of browser download on a cold sandbox — the right trade for a tool that gets reached for precisely when the ordinary fetch was refused. That stage is timed (`SETUP_TIMEOUT`, default 300s) and leaves npm's progress on stderr; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
+## Cloak mode
 
 ```bash
-bash setup.sh --no-cloak     # or HEADLESS_BROWSER_CLOAK=0
+bash setup.sh --cloak     # or HEADLESS_BROWSER_CLOAK=1
 ```
 
-opts out. `browsers.default` is flipped to `cloak` only after the binary is confirmed on disk, so a failed install falls back to plain Chrome — reported in the summary — rather than leaving the config pointing at a runtime that isn't there. The `--no-cloak` path resets `browsers.default` for the same reason: a sandbox where cloak already succeeded must not silently keep using it.
+Swaps the runtime for [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. Measured in the claude.ai sandbox: **161s cold** against **~5s** for the plain path, so it is opt-in — the escalation you run after a nav comes back blocked, not the price of every page. A cached binary is reused (`/root/.cloakbrowser/*/chrome`), and the second run skips reprinting pinchtab's SKILL.md, which the caller already has.
+
+Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progress in the transcript; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint.
+
+`browsers.default` is flipped to `cloak` only after the binary is confirmed on disk, so a failed install falls back to plain Chrome — reported in the summary — rather than leaving the config pointing at a runtime that isn't there. `--no-cloak` resets it for the same reason: a sandbox where cloak already succeeded must not silently keep using it.
 
 ## Package for claude.ai
 

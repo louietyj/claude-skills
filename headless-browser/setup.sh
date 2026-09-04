@@ -15,6 +15,8 @@ step=0
 summary=()
 failed=0
 fatal=0
+docs_repeat=0
+DOCS_MARK=/tmp/.headless-browser-docs-printed
 DOTS='.........................................'
 RULE_H='════════'
 RULE_S='────────'
@@ -45,12 +47,17 @@ finish() {
     exit 1
   fi
 
-  printf '\npinchtab is live and its SKILL.md is printed above IN FULL -- that file\n'
-  printf 'is in your context now, for the rest of the conversation and not just\n'
-  printf 'this turn. Do not cat it again, do not load the pinchtab skill, and do\n'
-  printf 'not re-run any step above; this output is a transcript of work already\n'
-  printf 'done, not a plan. The session exists: never create or export\n'
-  printf 'PINCHTAB_SESSION yourself, whatever that SKILL.md says.\n'
+  printf '\npinchtab is live. Its SKILL.md '
+  if [ $docs_repeat -ne 0 ]; then
+    printf 'went into your context on an earlier run\nin this conversation'
+  else
+    printf 'is printed above IN FULL and is in your\ncontext now'
+  fi
+  printf ' -- for the rest of the conversation, not just this turn.\n'
+  printf 'Do not cat it again, do not load the pinchtab skill, and do not re-run\n'
+  printf 'any step above; this output is a transcript of work already done, not a\n'
+  printf 'plan. The session exists: never create or export PINCHTAB_SESSION\n'
+  printf 'yourself, whatever that SKILL.md says.\n'
   printf '\nNext: pinchtab nav <url> --block-images\n'
 
   if [ $failed -ne 0 ]; then
@@ -60,7 +67,7 @@ finish() {
   exit 0
 }
 
-CLOAK=${HEADLESS_BROWSER_CLOAK:-1}
+CLOAK=${HEADLESS_BROWSER_CLOAK:-0}
 for arg in "$@"; do
   case "$arg" in
     --cloak)    CLOAK=1 ;;
@@ -71,9 +78,9 @@ done
 
 printf '%s HEADLESS BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
-printf 'instructions printed in full. Read all of it -- this is the only place\n'
-printf 'those instructions get printed, and the corrections to them that follow\n'
-printf 'the file matter. Then use the browser.\n'
+printf 'instructions. Read all of it -- this is the only place those instructions\n'
+printf 'get printed, and the corrections to them that follow the file matter.\n'
+printf 'Then use the browser.\n'
 
 NPM_ROOT="$(npm root -g)"
 REAL="$NPM_ROOT/pinchtab/bin/pinchtab"
@@ -111,32 +118,44 @@ begin 'find a browser runtime'
 BROWSER_NOTE=''
 
 # A patched Chromium that ordinary bot detection does not reject on
-# fingerprint. Default, and worth its download: the sites this skill gets
-# reached for are the ones a plain headless Chrome is turned away from.
+# fingerprint. Opt-in: it costs ~2.5 minutes on a cold sandbox, which is not a
+# price every page should pay to be read.
 if [ $CLOAK -eq 1 ]; then
-  echo "installing cloakbrowser: a few hundred MB of patched Chromium on a cold"
-  echo "sandbox, cached after that. Budget ~${SETUP_TIMEOUT:-300}s; past that this"
-  echo "step gives up and the boot continues on plain Chrome. It is not hung."
   t0=$SECONDS
-  mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
-  npm init -y >/dev/null 2>&1
-  # Timed, and progress left on stderr: a silenced multi-minute download is
-  # indistinguishable from a wedged one, and reads as a hang.
-  if timeout "${SETUP_TIMEOUT:-300}" npm install --no-fund --no-audit cloakbrowser playwright-core; then
-    echo "npm install: $((SECONDS - t0))s elapsed; fetching the browser binary"
-    # binaryInfo()'s shape is not contractual, so take whichever string field
-    # names an existing file rather than assuming a key.
-    CLOAK_BIN=$(timeout "${SETUP_TIMEOUT:-300}" node -e '
-      import("cloakbrowser").then(async m => {
-        await m.ensureBinary();
-        const info = m.binaryInfo() || {};
-        const fs = require("fs");
-        for (const v of Object.values(info))
-          if (typeof v === "string" && fs.existsSync(v) && fs.statSync(v).isFile())
-            return console.log(v);
-        process.exit(1);
-      }).catch(e => { console.error(String(e)); process.exit(1); });
-    ' | tail -1)
+
+  # A previous run in this sandbox already paid for the binary. Nothing in the
+  # install path is cheap enough to run speculatively -- `npm install` alone is
+  # tens of seconds -- so look on disk before touching npm at all.
+  for c in /root/.cloakbrowser/*/chrome "$HOME"/.cloakbrowser/*/chrome; do
+    [ -x "$c" ] && { CLOAK_BIN=$c; break; }
+  done
+
+  if [ -n "${CLOAK_BIN:-}" ]; then
+    echo "cloakbrowser already downloaded in this sandbox"
+  else
+    echo "installing cloakbrowser: a few hundred MB of patched Chromium, cached"
+    echo "in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past that this step"
+    echo "gives up and the boot continues on plain Chrome. It is not hung."
+    mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
+    npm init -y >/dev/null 2>&1
+    # Timed, and progress left on stderr: a silenced multi-minute download is
+    # indistinguishable from a wedged one, and reads as a hang.
+    if timeout "${SETUP_TIMEOUT:-300}" npm install --no-fund --no-audit cloakbrowser playwright-core; then
+      echo "npm install: $((SECONDS - t0))s elapsed; fetching the browser binary"
+      # binaryInfo()'s shape is not contractual, so take whichever string field
+      # names an existing file rather than assuming a key.
+      CLOAK_BIN=$(timeout "${SETUP_TIMEOUT:-300}" node -e '
+        import("cloakbrowser").then(async m => {
+          await m.ensureBinary();
+          const info = m.binaryInfo() || {};
+          const fs = require("fs");
+          for (const v of Object.values(info))
+            if (typeof v === "string" && fs.existsSync(v) && fs.statSync(v).isFile())
+              return console.log(v);
+          process.exit(1);
+        }).catch(e => { console.error(String(e)); process.exit(1); });
+      ' | tail -1)
+    fi
   fi
   echo "cloak stage: $((SECONDS - t0))s elapsed"
   if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
@@ -294,7 +313,18 @@ if [ $fatal -ne 0 ]; then
   finish
 fi
 
-if cat "$PINCHTAB_DOCS/SKILL.md"; then
+# The sandbox is per-conversation, so this marker means the file was printed to
+# THIS caller. Escalating to --cloak is a second run, and ~20KB of instructions
+# it already has is the most expensive thing the script could reprint.
+if [ -f "$DOCS_MARK" ]; then
+  printf 'SKIPPED -- already printed in full on an earlier run in this\n'
+  printf 'conversation. Scroll back for it. If it is genuinely gone from your\n'
+  printf 'context, `rm %s` and run this script again.\n' "$DOCS_MARK"
+  docs_repeat=1
+  end 0
+  note 'pinchtab SKILL.md' 'OK -- printed on an earlier run'
+elif cat "$PINCHTAB_DOCS/SKILL.md"; then
+  touch "$DOCS_MARK"
   end 0
   note 'pinchtab SKILL.md' 'OK -- printed in full above'
 else

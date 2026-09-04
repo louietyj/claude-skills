@@ -1,6 +1,6 @@
 ---
 name: headless-browser
-description: "Fetches a page when web_fetch didn't -- through a real browser that ordinary bot detection does not turn away. One script, one call. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Not for pages needing the user's logged-in session; those go to claude-in-chrome."
+description: "Fetches a page when web_fetch didn't. One script, ~5s, and a second one-line escalation for sites that refuse an ordinary browser. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Not for pages needing the user's logged-in session; those go to claude-in-chrome."
 ---
 
 # Headless Browser (pinchtab)
@@ -20,10 +20,6 @@ works with a test nav -- and prints pinchtab's own bundled instructions in full,
 with the corrections that apply in this sandbox. Nothing to `cat` afterwards and
 no other skill to load. Idempotent -- re-run it rather than debugging whether it
 ran.
-
-A cold sandbox spends a few minutes of that pulling the browser build. That is
-the download, not a hang -- let it run. A re-run in the same sandbox is
-seconds, so budget for it once and stop treating the tool as expensive.
 
 Its output is a transcript of work already done. Do not re-run the commands it
 shows, do not re-read the files it prints, and do not create or export
@@ -47,23 +43,27 @@ and typed form values all persist; you never replay earlier steps. If the
 session goes stale the shim recreates it, but that gives you a fresh tab with
 no page loaded, so re-`nav` after seeing `no_current_tab`.
 
-## The browser
+## When the page refuses an ordinary browser
 
-By default the runtime is
-[CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), a
-patched Chromium that sites do not reject on fingerprint the way they reject a
-plain headless Chrome. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and
-`CLOAK_SEED` override what it presents.
-
-If its install fails, setup falls back to plain Chrome, says so in the summary,
-and everything else still works. To choose that yourself:
+Some sites reject a plain headless Chrome on fingerprint alone -- a block page,
+a 403, an interstitial that never resolves. Re-run setup with a patched
+Chromium
+([CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser)) and
+nav again:
 
 ```bash
-bash /mnt/skills/*/headless-browser/setup.sh --no-cloak
+bash /mnt/skills/*/headless-browser/setup.sh --cloak
 ```
 
 **DO NOT head/tail/grep this command's output either.** Same script, same
-reason.
+reason -- though on this second run it skips reprinting pinchtab's SKILL.md,
+which you already have.
+
+Roughly 2.5 minutes on a cold sandbox, seconds once the binary is cached, and
+it is the download talking, not a hang. Worth it for a page you actually need;
+not worth it ahead of a nav that would have worked. `CLOAK_PLATFORM`,
+`CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the fingerprint it
+presents; `--no-cloak` goes back.
 
 ## Notes
 

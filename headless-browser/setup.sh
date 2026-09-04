@@ -159,7 +159,7 @@ if [ $CLOAK -eq 1 ]; then
         npm_ok=1
         rm -f package-lock.json
         timeout "${SETUP_TIMEOUT:-300}" npm install --prefer-offline --no-fund --no-audit \
-          cloakbrowser playwright-core || npm_ok=0
+          cloakbrowser || npm_ok=0
       fi
       echo "npm: $((SECONDS - t0))s elapsed"
     fi

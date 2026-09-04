@@ -23,13 +23,11 @@ bash setup.sh
 
 It installs pinchtab globally if missing, locates a system Chrome or pulls puppeteer's bundled build, relaxes pinchtab's security gates (clipboard, state export, file scheme, all domains — safe defaults for a disposable sandbox but not for a personal machine), starts the pinchtab server, and navigates to `example.com` once as an end-to-end check. Output is a numbered transcript with a status summary; stages are independent, so a failure in one is reported rather than aborting the rest.
 
-## Cloak mode
+## Cloak mode (default)
 
-```bash
-bash setup.sh --cloak     # or HEADLESS_BROWSER_CLOAK=1
-```
+The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. Measured in the claude.ai sandbox: **17.5s cold** against **6.6s** for plain Chrome, and **4.4s** when the binary is already cached (`/root/.cloakbrowser/*/chrome`) — ~12s of the difference is the browser download itself.
 
-Swaps the runtime for [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. Measured in the claude.ai sandbox: **161s cold** against **~5s** for the plain path, so it is opt-in — the escalation you run after a nav comes back blocked, not the price of every page. A cached binary is reused (`/root/.cloakbrowser/*/chrome`), and the second run skips reprinting pinchtab's SKILL.md, which the caller already has.
+It was briefly opt-in, when the same run cost 161s. That turned out to be npm, not the download; with the solve pinned, ~11s is a fair price for not being turned away, so it is the default again. `bash setup.sh --no-cloak` (or `HEADLESS_BROWSER_CLOAK=0`) forces plain Chrome.
 
 The install runs `npm ci` against the lockfile in `cloak/`, not `npm install` off a bare `npm init`. That distinction was worth 215s: with no lockfile npm re-solves the 8-package tree from the registry on every run, and spent that long concluding "up to date, audited 9 packages" on a tree that was already complete — `npm ping` answers in 134ms, so it was resolution, not bandwidth. The single biggest term in that solve was `playwright-core`: an optional peer this skill never calls, whose packument is 18.4 MB across 5,653 versions. It is deliberately absent from the pin — `ensureBinary()` and `binaryInfo()` work without it, and dropping it takes the metadata npm must fetch from 19.7 MB to ~1.3 MB, which speeds up the unpinned fallback too.
 

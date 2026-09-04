@@ -67,7 +67,7 @@ finish() {
   exit 0
 }
 
-CLOAK=${HEADLESS_BROWSER_CLOAK:-0}
+CLOAK=${HEADLESS_BROWSER_CLOAK:-1}
 for arg in "$@"; do
   case "$arg" in
     --cloak)    CLOAK=1 ;;
@@ -119,8 +119,9 @@ begin 'find a browser runtime'
 BROWSER_NOTE=''
 
 # A patched Chromium that ordinary bot detection does not reject on
-# fingerprint. Opt-in: it costs ~2.5 minutes on a cold sandbox, which is not a
-# price every page should pay to be read.
+# fingerprint. The default: measured at 17.5s cold against 6.6s for plain
+# Chrome, of which ~12s is the browser download itself. It was only ever
+# expensive because npm re-solved the dependency tree on every run.
 if [ $CLOAK -eq 1 ]; then
   t0=$SECONDS
 

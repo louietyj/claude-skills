@@ -396,6 +396,28 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestCheckRevBelongs(unittest.TestCase):
+    """`rev:<id>` resolves globally, so a rev from another file downloads fine."""
+
+    def test_matching_path_passes(self):
+        cfs.check_rev_belongs({"path_display": "/memory/a.md"}, "/memory/a.md", "r1")
+
+    def test_case_differences_pass(self):
+        # Dropbox paths are case-insensitive, so path_display may differ in case
+        # from what the caller typed without naming a different file.
+        cfs.check_rev_belongs({"path_display": "/Memory/A.md"}, "/memory/a.md", "r1")
+
+    def test_foreign_rev_is_refused_by_name(self):
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.check_rev_belongs({"path_display": "/memory/b.md"}, "/memory/a.md", "r1")
+        message = str(ctx.exception)
+        self.assertIn("/memory/b.md", message)
+        self.assertIn("r1", message)
+
+    def test_absent_path_display_is_not_second_guessed(self):
+        cfs.check_rev_belongs({}, "/memory/a.md", "r1")
+
+
 class TestDiffThresholds(unittest.TestCase):
     def test_fraction_stays_under_the_context_break_even(self):
         # Past ~1/7 the diff is the longer read, so a larger fraction would

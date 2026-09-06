@@ -285,6 +285,21 @@ def api_path(path: str) -> str:
     return "" if norm == "/" else norm
 
 
+def check_rev_belongs(meta: dict, path: str, rev: str) -> None:
+    """Refuse a rev that names a different file.
+
+    Dropbox resolves `rev:<id>` globally, so a rev belonging to another file
+    downloads happily. The mistake is likeliest exactly when the caller has lost
+    track of which rev it holds, so it has to be named rather than served.
+    """
+    actual = meta.get("path_display")
+    if actual and normalise(actual).lower() != normalise(path).lower():
+        raise CfsError(
+            f"rev {rev} belongs to {actual}, not {normalise(path)}. Nothing was "
+            "read. Read the file you meant and use the rev it reports."
+        )
+
+
 # --------------------------------------------------------------------------
 # argument values: literal, @file, or - for stdin
 # --------------------------------------------------------------------------
@@ -669,6 +684,7 @@ def cmd_read(args) -> str:
     path = normalise(args.path)
     if args.rev:
         data, meta = content_download({"path": f"rev:{args.rev}"})
+        check_rev_belongs(meta, path, args.rev)
     else:
         data, meta = content_download({"path": api_path(path)})
     text = data.decode("utf-8", "replace")
@@ -1324,8 +1340,10 @@ def cmd_diff(args) -> str:
     old_rev = args.from_rev
 
     old_data, old_meta = content_download({"path": f"rev:{old_rev}"})
+    check_rev_belongs(old_meta, path, old_rev)
     if args.to:
         new_data, new_meta = content_download({"path": f"rev:{args.to}"})
+        check_rev_belongs(new_meta, path, args.to)
     else:
         new_data, new_meta = content_download({"path": api_path(path)})
 

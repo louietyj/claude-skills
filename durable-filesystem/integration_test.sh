@@ -501,6 +501,22 @@ echo "$OUT" | grep -q "still the current rev" \
 echo "$OUT" | grep -q "NEW REV" && bad "no spurious new-rev warning" \
   || ok "no spurious new-rev warning"
 
+echo "=== a rev from another file is refused ==="
+# `rev:<id>` resolves globally, so a rev from another file downloads happily and
+# would otherwise be rendered under the path the caller asked for.
+FOREIGN=$(revof $ROOT/g2.md)
+$CFS diff $ROOT/g1.md --from "$FOREIGN" 2>&1 | grep -qi "belongs to" \
+  && ok "diff refuses a rev from another file" || bad "diff refuses a rev from another file"
+$CFS diff $ROOT/g1.md --from "$FOREIGN" 2>&1 | grep -q "g2.md" \
+  && ok "the refusal names the file the rev belongs to" \
+  || bad "the refusal names the file the rev belongs to"
+$CFS read $ROOT/g1.md --rev "$FOREIGN" 2>&1 | grep -qi "belongs to" \
+  && ok "read --rev refuses a rev from another file" \
+  || bad "read --rev refuses a rev from another file"
+$CFS read $ROOT/g1.md --rev "$FOREIGN" 2>&1 | grep -q "delta" \
+  && bad "the foreign file's content is never shown" \
+  || ok "the foreign file's content is never shown"
+
 echo "=== read --rev ==="
 $CFS read $ROOT/d.md --rev "$D3" | grep -q "old line 5" \
   && ok "read --rev returns the historical content" \

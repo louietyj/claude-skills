@@ -412,7 +412,7 @@ python -c "
 ls=['line %d'%i for i in range(100)]; ls[50]='EDITED LINE'
 print('\n'.join(ls))" > d2.tmp
 $CFS upload $ROOT/d.md --from d2.tmp --rev "$D1" >/dev/null
-OUT=$($CFS diff $ROOT/d.md --from "$D1")
+OUT=$($CFS diff $ROOT/d.md --since "$D1")
 echo "$OUT" | grep -q -- "-line 50" && ok "diff shows the removed line" \
   || bad "diff shows the removed line"
 echo "$OUT" | grep -q -- "+EDITED LINE" && ok "diff shows the added line" \
@@ -423,10 +423,10 @@ echo "$OUT" | grep -q "^rev: " && ok "diff hands back a usable rev" \
   || bad "diff hands back a usable rev"
 rm -f d1.tmp d2.tmp
 D1B=$(revof $ROOT/d.md)
-$CFS diff $ROOT/d.md --from "$D1B" --to "$D1B" | grep -q "^UNCHANGED" \
+$CFS diff $ROOT/d.md --since "$D1B" --until "$D1B" | grep -q "^UNCHANGED" \
   && ok "diff of a rev against itself reports UNCHANGED" \
   || bad "diff of a rev against itself reports UNCHANGED"
-$CFS diff $ROOT/d.md --from "$D1B" --to "$D1B" | grep -q "^CHANGED" \
+$CFS diff $ROOT/d.md --since "$D1B" --until "$D1B" | grep -q "^CHANGED" \
   && bad "unchanged output does not say CHANGED" || ok "unchanged output does not say CHANGED"
 
 # A three-line file is above the fraction cap for any change at all -- by design it
@@ -436,7 +436,7 @@ expect_ok_json "seed a small file" '{"content":"alpha\nbeta\ngamma\n"}' \
 SREV=$(revof $ROOT/small.md)
 expect_ok_json "change one line of it" '{"content":"alpha\nBETA\ngamma\n"}' \
   $CFS write $ROOT/small.md --rev "$SREV" --json
-OUT=$($CFS diff $ROOT/small.md --from "$SREV")
+OUT=$($CFS diff $ROOT/small.md --since "$SREV")
 echo "$OUT" | grep -q "BETA" && ok "small file returns whole content, not a diff" \
   || bad "small file returns whole content, not a diff"
 echo "$OUT" | grep -qi "too much to read as a diff" \
@@ -449,7 +449,7 @@ $CFS upload $ROOT/d.md --from big.tmp --rev "$D2" >/dev/null
 D3=$(revof $ROOT/d.md)
 python -c "print('\n'.join('new line %d'%i for i in range(120)))" > big2.tmp
 $CFS upload $ROOT/d.md --from big2.tmp --rev "$D3" >/dev/null
-OUT=$($CFS diff $ROOT/d.md --from "$D3")
+OUT=$($CFS diff $ROOT/d.md --since "$D3")
 echo "$OUT" | grep -qi "too much to read as a diff" \
   && ok "wholesale rewrite declines the diff" || bad "wholesale rewrite declines the diff"
 echo "$OUT" | grep -q "new line 5" \
@@ -457,7 +457,7 @@ echo "$OUT" | grep -q "new line 5" \
   || bad "declined diff returns the current file instead"
 echo "$OUT" | grep -q "^rev: " && ok "declined diff still hands back a usable rev" \
   || bad "declined diff still hands back a usable rev"
-$CFS diff $ROOT/d.md --from "$D3" --force | grep -q -- "+new line 5" \
+$CFS diff $ROOT/d.md --since "$D3" --full | grep -q -- "+new line 5" \
   && ok "--force overrides the cap" || bad "--force overrides the cap"
 rm -f big.tmp big2.tmp
 
@@ -477,7 +477,7 @@ RC=$(revof $ROOT/abba.md)
 [ "$(body $ROOT/abba.md)" = "hello x world" ] && ok "the round trip restored the content" \
   || bad "the round trip restored the content"
 
-OUT=$($CFS diff $ROOT/abba.md --from "$RA")
+OUT=$($CFS diff $ROOT/abba.md --since "$RA")
 echo "$OUT" | grep -q "NEW REV" \
   && ok "diff flags identical content with an advanced rev" \
   || bad "diff flags identical content with an advanced rev"
@@ -494,7 +494,7 @@ printf 'accepted\n' | $CFS write $ROOT/abba.md --rev "$RC" --stdin >/dev/null 2>
 
 # And when the caller's rev IS current, say so without a spurious rev handover.
 RD=$(revof $ROOT/abba.md)
-OUT=$($CFS diff $ROOT/abba.md --from "$RD")
+OUT=$($CFS diff $ROOT/abba.md --since "$RD")
 echo "$OUT" | grep -q "still the current rev" \
   && ok "an already-current rev is confirmed as such" \
   || bad "an already-current rev is confirmed as such"
@@ -505,9 +505,9 @@ echo "=== a rev from another file is refused ==="
 # `rev:<id>` resolves globally, so a rev from another file downloads happily and
 # would otherwise be rendered under the path the caller asked for.
 FOREIGN=$(revof $ROOT/g2.md)
-$CFS diff $ROOT/g1.md --from "$FOREIGN" 2>&1 | grep -qi "belongs to" \
+$CFS diff $ROOT/g1.md --since "$FOREIGN" 2>&1 | grep -qi "belongs to" \
   && ok "diff refuses a rev from another file" || bad "diff refuses a rev from another file"
-$CFS diff $ROOT/g1.md --from "$FOREIGN" 2>&1 | grep -q "g2.md" \
+$CFS diff $ROOT/g1.md --since "$FOREIGN" 2>&1 | grep -q "g2.md" \
   && ok "the refusal names the file the rev belongs to" \
   || bad "the refusal names the file the rev belongs to"
 $CFS read $ROOT/g1.md --rev "$FOREIGN" 2>&1 | grep -qi "belongs to" \
@@ -548,13 +548,13 @@ echo "$FULLOUT" | grep -qi "only valid if you read all" \
 # name would inherit revisions from previous runs and stop being single-revision.
 ONCE="$ROOT/once-$$-$(date +%s).md"
 expect_ok_json "single-revision file" '{"content":"only\n"}' $CFS write "$ONCE" --new --json
-# --from has no default: the penultimate rev is a fact about the file's history
+# --since has no default: the penultimate rev is a fact about the file's history
 # with no relationship to what the caller has in context, so guessing it could
 # report one changed line to someone whose whole picture was stale.
 OUT=$($CFS diff "$ONCE" 2>&1)
-if [ $? -eq 0 ]; then bad "diff without --from is refused"
-elif echo "$OUT" | grep -qi -- "--from"; then ok "diff without --from is refused"
-else bad "diff without --from is refused (got: $OUT)"; fi
+if [ $? -eq 0 ]; then bad "diff without --since is refused"
+elif echo "$OUT" | grep -qi -- "--since"; then ok "diff without --since is refused"
+else bad "diff without --since is refused (got: $OUT)"; fi
 
 echo "=== old_str mismatch diagnostics ==="
 # old_str must genuinely fail to match: a substring of a line still matches, so
@@ -617,7 +617,7 @@ withholds "grep"        $CFS grep -r "alpha" $ROOT
 withholds "history"     $CFS history $ROOT/g1.md
 withholds "read --rev"  $CFS read $ROOT/g1.md --rev "$(prev_rev $ROOT/g1.md)"
 
-# diff is deliberately NOT in that list. Passing --from <mine> means you hold
+# diff is deliberately NOT in that list. Passing --since <mine> means you hold
 # that revision's content, so base+delta (or the whole file, in the oversized
 # branch) leaves you knowing the current bytes -- which is the bar for a rev.
 # Needs a file with two revisions, so build one rather than assuming.
@@ -627,15 +627,15 @@ TWO_OLD=$(revof $ROOT/two.md)
 expect_ok_json "give it a second revision" '{"old_str":"two","new_str":"TWO"}' \
   $CFS edit $ROOT/two.md --rev "$TWO_OLD"
 TWO_CUR=$(revof $ROOT/two.md)
-$CFS diff $ROOT/two.md --from "$TWO_OLD" | grep -q "$TWO_CUR" \
+$CFS diff $ROOT/two.md --since "$TWO_OLD" | grep -q "$TWO_CUR" \
   && ok "diff DISCLOSES the current rev (it shows you the current content)" \
   || bad "diff DISCLOSES the current rev (it shows you the current content)"
-$CFS diff $ROOT/two.md --from "$TWO_CUR" | grep -q "^UNCHANGED" \
+$CFS diff $ROOT/two.md --since "$TWO_CUR" | grep -q "^UNCHANGED" \
   && ok "no-change diff confirms your rev is still good" \
   || bad "no-change diff confirms your rev is still good"
 # The misread that prompted this: a large diff skimmed as "all fine". The
 # verdict must be unmissable at the top AND next to the rev at the bottom.
-OUT=$($CFS diff $ROOT/two.md --from "$TWO_OLD")
+OUT=$($CFS diff $ROOT/two.md --since "$TWO_OLD")
 echo "$OUT" | grep -q "^CHANGED" && ok "changed output leads with CHANGED" \
   || bad "changed output leads with CHANGED"
 echo "$OUT" | grep -q "CHANGED since $TWO_OLD" \
@@ -746,6 +746,33 @@ echo "$BIN_ERR" | grep -q "cfs download" \
   && ok "stale binary upload points at download" \
   || bad "stale binary upload points at download"
 rm -f stale.tmp stale2.tmp out2.tmp
+
+echo "=== retired flag spellings are refused by name ==="
+# Each collided with the same flag meaning something else elsewhere. They stay
+# registered only so the refusal can name the replacement -- a silently-working
+# alias would teach the collision rather than retire it.
+RD1=$(revof $ROOT/two.md)
+expect_err "diff --from names --since" "renamed to --since" \
+  $CFS diff $ROOT/two.md --from "$RD1"
+expect_err "diff --to names --until" "renamed to --until" \
+  $CFS diff $ROOT/two.md --since "$RD1" --to "$RD1"
+expect_err "diff --force names --full" "renamed to --full" \
+  $CFS diff $ROOT/two.md --since "$RD1" --force
+expect_err "search --max names --limit" "renamed to --limit" \
+  $CFS search alpha --path $ROOT --max 5
+# The refusal must explain itself, not just redirect.
+$CFS diff $ROOT/two.md --from "$RD1" 2>&1 | grep -qi "names a local file on upload" \
+  && ok "the refusal says why the name was taken" \
+  || bad "the refusal says why the name was taken"
+# Nothing ran: a refused spelling must not half-execute the command.
+$CFS diff $ROOT/two.md --from "$RD1" 2>&1 | grep -q "^CHANGED\|^UNCHANGED" \
+  && bad "a refused spelling produces no diff" || ok "a refused spelling produces no diff"
+# Abbreviations are off, so --f cannot resolve to a retired flag either.
+$CFS diff $ROOT/two.md --f "$RD1" 2>&1 | grep -qi "ambiguous" \
+  && bad "abbreviations do not surface retired flags" \
+  || ok "abbreviations do not surface retired flags"
+# And the new spellings work.
+expect_ok "search --limit runs" $CFS search alpha --path $ROOT --limit 5
 
 echo "=== protected roots ==="
 expect_err "delete /memory refused" "Refusing to delete" $CFS delete /memory --force

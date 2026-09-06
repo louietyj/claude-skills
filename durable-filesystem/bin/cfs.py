@@ -1047,7 +1047,7 @@ def cmd_copy(args) -> str:
 
 
 def cmd_search(args) -> str:
-    options: dict = {"max_results": args.max, "filename_only": args.names_only}
+    options: dict = {"max_results": args.limit, "filename_only": args.names_only}
     if args.path:
         options["path"] = api_path(args.path)
     result = rpc("/2/files/search_v2", {"query": args.query, "options": options})
@@ -1065,7 +1065,7 @@ def cmd_search(args) -> str:
         if meta.get("path_display"):
             lines.append(f"  {meta['path_display']}")  # no rev; see cmd_list
     if result.get("has_more"):
-        lines.append("  ... more results truncated; narrow the query or raise --max.")
+        lines.append("  ... more results truncated; narrow the query or raise --limit.")
     return "\n".join(lines)
 
 
@@ -1351,7 +1351,7 @@ def diff_report(
     obscure rather than explain. Past a threshold this refuses and tells you to
     read the file, which is the answer you actually wanted.
 
-    --from is mandatory and has no default. Defaulting to the penultimate
+    --since is mandatory and has no default. Defaulting to the penultimate
     revision looked convenient but answered a different question -- "what did
     the last write change?" is a fact about the file's history with no
     relationship to what the caller has in context. It could report one changed
@@ -1434,7 +1434,7 @@ def diff_report(
         head = (
             f"CHANGED: {changed} of ~{largest} lines differ between {old_rev} and "
             f"{newer} -- too much to read as a diff, so here is the current file "
-            f"instead. (--force for the raw diff; read {path} --rev {old_rev} for "
+            f"instead. (--full for the raw diff; read {path} --rev {old_rev} for "
             "the older version.)\n\n"
         )
         if truncated:
@@ -1471,9 +1471,19 @@ def diff_report(
 
 
 def cmd_diff(args) -> str:
+    if not args.from_rev:
+        # Not argparse's `required`, so that the retired --from can be caught and
+        # named instead of dying at the required-check before this runs.
+        raise CfsError(
+            "diff needs --since <rev>: the rev you are comparing from, normally "
+            "the one you last read. There is deliberately no default -- the "
+            "file's previous revision has no relationship to what you hold, and "
+            "guessing it could report one changed line to someone whose whole "
+            "picture is stale."
+        )
     return diff_report(
-        args.path, args.from_rev, to_rev=args.to, context=args.context,
-        full=args.force,
+        args.path, args.from_rev, to_rev=args.to_rev, context=args.context,
+        full=args.full,
     )
 
 
@@ -1605,6 +1615,32 @@ def cmd_download(args) -> str:
 # --------------------------------------------------------------------------
 
 
+# Retired spellings, kept registered only so they can be refused by name. Each
+# collided with the same flag meaning something else elsewhere, and for a reader
+# who re-reads SKILL.md every conversation the flag name is the documentation --
+# so a working alias would teach the collision rather than retire it.
+RETIRED_FLAGS = {
+    "old_from": ("--from", "--since", "--from names a local file on upload"),
+    "old_to": ("--to", "--until", "--to names a local file on download"),
+    "old_force": (
+        "--force", "--full", "--force means 'waive a safety requirement' on delete",
+    ),
+    "old_max": ("--max", "--limit", "history already calls this --limit"),
+}
+
+
+def reject_retired_flags(args) -> None:
+    for dest, (old, new, why) in RETIRED_FLAGS.items():
+        value = getattr(args, dest, None)
+        # Identity, not truthiness: `--max 0` is a value that was passed, but it
+        # is falsy, and store_true dests are absent as False rather than None.
+        if value is not None and value is not False:
+            raise CfsError(
+                f"{old} was renamed to {new}, because {why}. Nothing was read or "
+                f"written. Re-run with {new}."
+            )
+
+
 def build_parser() -> argparse.ArgumentParser:
     epilog = (
         "write takes raw content on stdin; edit takes a SEARCH/REPLACE block. Feed "
@@ -1694,10 +1730,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dst")
     p.set_defaults(func=cmd_copy)
 
-    p = sub.add_parser("search", help="full-text search across files")
+    p = sub.add_parser(
+        "search", help="full-text search across files", allow_abbrev=False
+    )
     p.add_argument("query")
     p.add_argument("--path", help="restrict to a subtree")
-    p.add_argument("--max", type=int, default=20)
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--max", dest="old_max", type=int, help=argparse.SUPPRESS)
     p.add_argument(
         "--names-only", action="store_true", help="match filenames rather than content"
     )
@@ -1710,19 +1749,30 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     ).add_argument("argv", nargs=argparse.REMAINDER)
 
-    p = sub.add_parser("diff", help="show what changed since a rev you hold")
+    # allow_abbrev off: SUPPRESSed options still take part in prefix matching, so
+    # `--f` would report an ambiguity naming --from, --full and --force, which
+    # advertises the retired spellings at the moment of confusion.
+    p = sub.add_parser(
+        "diff", help="show what changed since a rev you hold", allow_abbrev=False
+    )
     p.add_argument("path")
     p.add_argument(
-        "--from",
+        "--since",
         dest="from_rev",
-        required=True,
-        help="the rev you are comparing FROM -- normally the one you last read",
+        metavar="REV",
+        help="the rev you are comparing from -- normally the one you last read",
     )
-    p.add_argument("--to", help="newer rev (default: the current file)")
+    p.add_argument(
+        "--until", dest="to_rev", metavar="REV",
+        help="newer rev (default: the current file)",
+    )
     p.add_argument("-C", "--context", type=int, default=3)
     p.add_argument(
-        "--force", action="store_true", help="show the diff even if it is mostly noise"
+        "--full", action="store_true", help="show the diff even if it is mostly noise"
     )
+    p.add_argument("--from", dest="old_from", help=argparse.SUPPRESS)
+    p.add_argument("--to", dest="old_to", help=argparse.SUPPRESS)
+    p.add_argument("--force", dest="old_force", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_diff)
 
     p = sub.add_parser("history", help="list previous revisions of a file")
@@ -1762,6 +1812,7 @@ def main() -> int:
 
     args = build_parser().parse_args()
     try:
+        reject_retired_flags(args)
         print(args.func(args))
     except CfsError as exc:
         if exc.stdout:

@@ -396,6 +396,43 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestRetiredFlags(unittest.TestCase):
+    """Old spellings parse, then are refused by name. They collided with the same
+    flag meaning something else elsewhere, and a working alias would teach that."""
+
+    def _args(self, argv):
+        return cfs.build_parser().parse_args(argv)
+
+    def test_new_spellings_carry_the_values(self):
+        args = self._args(["diff", "/f", "--since", "r1", "--until", "r2", "--full"])
+        self.assertEqual(args.from_rev, "r1")
+        self.assertEqual(args.to_rev, "r2")
+        self.assertTrue(args.full)
+        cfs.reject_retired_flags(args)  # nothing retired was passed
+
+    def test_each_retired_spelling_names_its_replacement(self):
+        for argv, expected in (
+            (["diff", "/f", "--from", "r1"], "--since"),
+            (["diff", "/f", "--since", "r1", "--to", "r2"], "--until"),
+            (["diff", "/f", "--since", "r1", "--force"], "--full"),
+            (["search", "q", "--max", "5"], "--limit"),
+        ):
+            with self.assertRaises(cfs.CfsError) as ctx:
+                cfs.reject_retired_flags(self._args(argv))
+            self.assertIn(expected, str(ctx.exception), argv)
+
+    def test_missing_since_is_a_cfserror_not_a_parser_exit(self):
+        # argparse `required` would fire before cmd_diff runs, which would stop
+        # the retired --from from ever being named.
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.cmd_diff(self._args(["diff", "/f"]))
+        self.assertIn("--since", str(ctx.exception))
+
+    def test_abbreviations_are_off_so_retired_flags_stay_hidden(self):
+        with self.assertRaises(SystemExit):
+            self._args(["diff", "/f", "--f", "r1"])
+
+
 class TestStaleRevError(unittest.TestCase):
     """The diff rides on .stdout, never in the message: it ends in a rev, and a
     rev must not reach the caller without the content backing it."""

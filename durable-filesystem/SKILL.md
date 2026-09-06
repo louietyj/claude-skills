@@ -29,7 +29,7 @@ cfs read <path> [--lines 1-40] [--full]  # content AND the rev you need to write
 cfs read <path> --rev R                  # an old version; can NOT license a write
 cfs write <path> (--new | --rev R)       # raw content on stdin
 cfs edit <path> --rev R [--tag T] [--all]   # ONE SEARCH/REPLACE block on stdin
-cfs diff <path> --from R [--to B]        # ALWAYS use this to refresh a rev you
+cfs diff <path> --since R [--until B]    # ALWAYS use this to refresh a rev you
                                          #   already hold. NEVER history+read for that.
 cfs history <path>                       # old revs for restore. NOT a currency check.
 cfs restore <path> --rev R               # roll back to an earlier revision
@@ -48,7 +48,7 @@ cfs download <path> --to <local>
 
 The loop is **read (or diff) → get rev → write with that rev**. Dropbox verifies it server-side and rejects a stale one. **The rejection does the recovery for you**: it prints the diff since your rev on stdout, ending in the current rev. Read that diff, re-apply your change to it, and retry with the rev it gave you — no re-read needed. Only when it cannot diff (a rev you never actually read, one older than 30 days, or a binary) does it fall back to telling you to re-read.
 
-**Already hold a rev and want to know if it's still good? `diff --from <your rev>`.** One call. It answers `UNCHANGED` (your rev still works) or `CHANGED` plus the current content and a fresh rev. Do not use `history`, and do not re-`read` — `history` lists old revisions and never reports the current one. `--from` is mandatory and must be *your* rev: there is no default, because the file's previous revision has no relationship to what you hold.
+**Already hold a rev and want to know if it's still good? `diff --since <your rev>`.** One call. It answers `UNCHANGED` (your rev still works) or `CHANGED` plus the current content and a fresh rev. Do not use `history`, and do not re-`read` — `history` lists old revisions and never reports the current one. `--since` is mandatory and must be *your* rev: there is no default, because the file's previous revision has no relationship to what you hold.
 
 **Never pipe `read` through `head` or `tail` to grab just the rev.** The rev proves Dropbox sent current bytes, not that you read them. Exact matching stops you clobbering content you don't understand, but not a *stale* edit — valid against the paragraph you remember, blind to what else moved. Content prints before the rev so truncating loses both.
 

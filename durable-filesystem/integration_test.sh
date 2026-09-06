@@ -642,17 +642,21 @@ echo "$OUT" | grep -q "CHANGED since $TWO_OLD" \
   && ok "the verdict is repeated beside the rev" \
   || bad "the verdict is repeated beside the rev"
 
+# A stale rev used to withhold the current one. It now DISCLOSES it, but only
+# via the diff on stdout that earns it -- base plus delta reconstructs the file,
+# the same bar `diff` already clears. An invented rev cannot be diffed against,
+# so it still degrades to the plain re-read message.
 STALE_OUT=$(echo '{"old_str":"alpha","new_str":"x"}' \
   | $CFS edit $ROOT/g1.md --rev 0123456789 2>&1)
 echo "$STALE_OUT" | grep -q "$CUR" \
-  && bad "stale edit error withholds the current rev" \
-  || ok "stale edit error withholds the current rev"
+  && bad "an undiffable stale edit withholds the current rev" \
+  || ok "an undiffable stale edit withholds the current rev"
 echo "$STALE_OUT" | grep -qi "re-read" \
   && ok "stale edit error says to re-read" || bad "stale edit error says to re-read"
 STALE_W=$(echo '{"content":"x"}' | $CFS write $ROOT/g1.md --rev 0123456789 --json 2>&1)
 echo "$STALE_W" | grep -q "$CUR" \
-  && bad "stale write error withholds the current rev" \
-  || ok "stale write error withholds the current rev"
+  && bad "an undiffable stale write withholds the current rev" \
+  || ok "an undiffable stale write withholds the current rev"
 
 # The positive case: read must still hand out a usable rev, or the whole
 # scheme is unusable rather than merely safe.
@@ -684,6 +688,64 @@ R_OUT=$($CFS restore $ROOT/g1.md --rev "$(revof $ROOT/g1.md)" 2>&1)
 echo "$R_OUT" | grep -q "new rev:" && bad "restore withholds the new rev" \
   || ok "restore withholds the new rev"
 echo "$R_OUT" | grep -qi "read" && ok "restore tells you to read" || bad "restore tells you to read"
+
+echo "=== a real stale rev carries the diff that resolves it ==="
+# The diff goes to STDOUT and the message to STDERR: the report ends in a rev,
+# and a harness truncating stderr must not be able to hand over that rev while
+# losing the content backing it. Both streams are checked in isolation below.
+printf 'alpha\nbeta\ngamma\n' | $CFS write $ROOT/race.md --new >/dev/null
+RACE=$(revof $ROOT/race.md)
+printf 'alpha\nBETA CHANGED\ngamma\n' | $CFS write $ROOT/race.md --rev "$RACE" >/dev/null
+RACE_NEW=$(revof $ROOT/race.md)
+
+for verb in write edit delete; do
+  case $verb in
+    write)  OUT_F=$(printf 'mine\n' | $CFS write $ROOT/race.md --rev "$RACE" 2>/dev/null) ;;
+    edit)   OUT_F=$(printf '<<<<<<< SEARCH\nalpha\n=======\nA\n>>>>>>> REPLACE\n' \
+              | $CFS edit $ROOT/race.md --rev "$RACE" 2>/dev/null) ;;
+    delete) OUT_F=$($CFS delete $ROOT/race.md --rev "$RACE" 2>/dev/null) ;;
+  esac
+  echo "$OUT_F" | grep -q "BETA CHANGED" \
+    && ok "stale $verb puts the diff on stdout" || bad "stale $verb puts the diff on stdout"
+  echo "$OUT_F" | grep -q "$RACE_NEW" \
+    && ok "stale $verb hands over the current rev" \
+    || bad "stale $verb hands over the current rev"
+done
+
+# stderr alone must be safe: the message, and no rev.
+ERR_ONLY=$(printf 'mine\n' | $CFS write $ROOT/race.md --rev "$RACE" 2>&1 >/dev/null)
+echo "$ERR_ONLY" | grep -qi "stale rev" && ok "stderr carries the error" \
+  || bad "stderr carries the error"
+echo "$ERR_ONLY" | grep -q "$RACE_NEW" \
+  && bad "stderr alone never carries a rev" || ok "stderr alone never carries a rev"
+echo "$ERR_ONLY" | grep -q "stdout" && ok "the error says where the diff is" \
+  || bad "the error says where the diff is"
+
+# The rev handed over must actually work, or the whole exercise is theatre.
+printf 'resolved\n' | $CFS write $ROOT/race.md --rev "$RACE_NEW" >/dev/null 2>&1 \
+  && ok "the disclosed rev completes the retry" || bad "the disclosed rev completes the retry"
+
+# delete says to re-confirm, not to re-apply a change it does not have.
+DEL_ERR=$($CFS delete $ROOT/race.md --rev "$RACE" 2>&1 >/dev/null)
+echo "$DEL_ERR" | grep -qi "still mean to delete" \
+  && ok "stale delete asks you to re-confirm" || bad "stale delete asks you to re-confirm"
+
+# Binaries have no diff to show, so they point at download, which reports a rev.
+# The two payloads must differ: Dropbox dedupes a content-identical upload and
+# returns the same rev, so re-uploading the same bytes never goes stale.
+python -c "open('stale.tmp','wb').write(bytes(range(256)))"
+python -c "open('stale2.tmp','wb').write(bytes(range(255,-1,-1)))"
+$CFS upload $ROOT/blob2.bin --from stale.tmp --new >/dev/null 2>&1
+BREV=$($CFS download $ROOT/blob2.bin --to out2.tmp 2>/dev/null | sed -n 's/^rev: \([a-z0-9]*\).*/\1/p')
+$CFS upload $ROOT/blob2.bin --from stale2.tmp --rev "$BREV" >/dev/null 2>&1
+BIN_ERR=$($CFS upload $ROOT/blob2.bin --from stale.tmp --rev "$BREV" 2>&1 >/dev/null)
+echo "$BIN_ERR" | grep -qi "binary file" \
+  && ok "stale binary upload says there is no diff" \
+  || bad "stale binary upload says there is no diff"
+echo "$BIN_ERR" | grep -q "cfs download" \
+  && ok "stale binary upload points at download" \
+  || bad "stale binary upload points at download"
+rm -f stale.tmp stale2.tmp out2.tmp
 
 echo "=== protected roots ==="
 expect_err "delete /memory refused" "Refusing to delete" $CFS delete /memory --force

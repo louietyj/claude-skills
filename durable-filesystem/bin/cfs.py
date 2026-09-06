@@ -45,7 +45,17 @@ MAX_VIEW_CHARS = 16000
 
 
 class CfsError(Exception):
-    """An error we want reported to Claude as a clean message, not a traceback."""
+    """An error we want reported to Claude as a clean message, not a traceback.
+
+    ``stdout`` carries a payload that belongs on stdout rather than inside the
+    message -- currently the diff attached to a stale-rev rejection. It rides the
+    stream every other rev disclosure uses, so a harness that truncates stderr
+    cannot leave the caller holding a rev without the content licensing it.
+    """
+
+    def __init__(self, message: str, stdout: str | None = None):
+        super().__init__(message)
+        self.stdout = stdout
 
 
 # --------------------------------------------------------------------------
@@ -772,7 +782,7 @@ def guard_protected(path: str, verb: str) -> None:
         )
 
 
-def upload_bytes(path: str, data: bytes, args) -> dict:
+def upload_bytes(path: str, data: bytes, args, verb: str = "write") -> dict:
     """Upload with the right write mode, and diagnose an 'add' conflict correctly.
 
     Dropbox reports both failures as a 'conflict': a stale rev under mode=update,
@@ -798,6 +808,8 @@ def upload_bytes(path: str, data: bytes, args) -> dict:
                 "written. Read the file and pass --rev <rev> if you meant to "
                 "overwrite it, or choose a different path."
             ) from exc
+        if args.rev and "conflict" in str(exc):
+            raise stale_rev_error(path, args.rev, verb) from exc
         raise
 
 
@@ -886,15 +898,10 @@ def cmd_edit(args) -> str:
                 )
 
     if meta["rev"] != args.rev:
-        # Deliberately does not disclose the current rev. Handing it over here
-        # would mint a proof-of-read token without a read, letting the retry
-        # reapply an edit computed against content nobody has looked at -- which
-        # is the exact situation the rev is there to prevent.
-        raise CfsError(
-            f"Stale rev: {path} has changed since you read it. Re-read the file, "
-            "re-apply your change to the content you get back, and retry with the "
-            "rev from that read."
-        )
+        # The current rev IS disclosed, but only alongside the diff that earns
+        # it: base plus delta reconstructs the file, which is the same bar `diff`
+        # already clears. What must never happen is the rev arriving alone.
+        raise stale_rev_error(path, args.rev, "edit")
 
     old, new = edits[0]
     if old == new:
@@ -903,16 +910,23 @@ def cmd_edit(args) -> str:
 
     if updated == text:
         raise CfsError("Replacement produced no change; nothing written.")
-    result = content_upload(
-        {
-            "path": api_path(path),
-            "mode": {".tag": "update", "update": args.rev},
-            "autorename": False,
-            "strict_conflict": True,
-            "mute": True,
-        },
-        updated.encode("utf-8"),
-    )
+    try:
+        result = content_upload(
+            {
+                "path": api_path(path),
+                "mode": {".tag": "update", "update": args.rev},
+                "autorename": False,
+                "strict_conflict": True,
+                "mute": True,
+            },
+            updated.encode("utf-8"),
+        )
+    except CfsError as exc:
+        # The check above races: the file can move between that download and
+        # this upload. Same failure, so it must not produce a different error.
+        if "conflict" in str(exc):
+            raise stale_rev_error(path, args.rev, "edit") from exc
+        raise
     return f"Edited {path}.\nnew rev: {result['rev']}"
 
 
@@ -1002,7 +1016,12 @@ def cmd_delete(args) -> str:
             f"Refusing to delete {path} without --rev (read it first) or --force "
             "(required for directories, which have no rev)."
         )
-    rpc("/2/files/delete_v2", payload)
+    try:
+        rpc("/2/files/delete_v2", payload)
+    except CfsError as exc:
+        if args.rev and "conflict" in str(exc):
+            raise stale_rev_error(path, args.rev, "delete") from exc
+        raise
     return f"Deleted {path}"
 
 
@@ -1322,7 +1341,10 @@ DIFF_MAX_CHANGED_FRACTION = 0.10
 DIFF_MARK = "[end of diff output]"
 
 
-def cmd_diff(args) -> str:
+def diff_report(
+    path: str, old_rev: str, *, to_rev: str | None = None, context: int = 3,
+    full: bool = False,
+) -> str:
     """Show what changed between two revisions, unless that would be noise.
 
     A diff of a mostly-rewritten file is worse than useless: pages of -/+ that
@@ -1336,14 +1358,13 @@ def cmd_diff(args) -> str:
     line to someone whose whole picture was stale, because two writes had landed
     since their read and it only compared the last two.
     """
-    path = normalise(args.path)
-    old_rev = args.from_rev
+    path = normalise(path)
 
     old_data, old_meta = content_download({"path": f"rev:{old_rev}"})
     check_rev_belongs(old_meta, path, old_rev)
-    if args.to:
-        new_data, new_meta = content_download({"path": f"rev:{args.to}"})
-        check_rev_belongs(new_meta, path, args.to)
+    if to_rev:
+        new_data, new_meta = content_download({"path": f"rev:{to_rev}"})
+        check_rev_belongs(new_meta, path, to_rev)
     else:
         new_data, new_meta = content_download({"path": api_path(path)})
 
@@ -1362,15 +1383,15 @@ def cmd_diff(args) -> str:
     # file instead. Either way you end up knowing the current bytes, which is the
     # bar for receiving a rev -- withholding it here would force a re-read that
     # tells you nothing you do not already have.
-    newer = args.to if args.to else new_meta["rev"]
+    newer = to_rev if to_rev else new_meta["rev"]
 
     # A verdict word first, and again beside the rev at the bottom. The two
     # outcomes previously differed only in a sentence buried above a wall of
     # file content, which skims as "here is the file, all fine" regardless of
     # what actually happened.
     if old_text == new_text:
-        if args.to:
-            return f"UNCHANGED: {path} is identical at {old_rev} and {args.to}."
+        if to_rev:
+            return f"UNCHANGED: {path} is identical at {old_rev} and {to_rev}."
         # Identical content does not imply an identical rev. A file edited x->y
         # and back to x has the bytes it started with but a new rev, and the old
         # one will be rejected -- so answering purely on content would promise a
@@ -1393,7 +1414,7 @@ def cmd_diff(args) -> str:
     diff = list(
         difflib.unified_diff(
             old_lines, new_lines, fromfile=f"{path}@{old_rev}",
-            tofile=f"{path}@{newer}", lineterm="", n=args.context,
+            tofile=f"{path}@{newer}", lineterm="", n=context,
         )
     )
     changed = sum(
@@ -1405,7 +1426,7 @@ def cmd_diff(args) -> str:
         changed <= DIFF_MAX_CHANGED_LINES
         and changed / largest <= DIFF_MAX_CHANGED_FRACTION
     )
-    if not eyeballable and not args.force:
+    if not eyeballable and not full:
         shown = new_text
         truncated = len(shown) > MAX_VIEW_CHARS
         if truncated:
@@ -1446,6 +1467,61 @@ def cmd_diff(args) -> str:
         f"edit/write/delete because you hold {old_rev}'s content and the delta "
         "above reconstructs the current file. If you do not actually have that "
         f"older content, read {path} instead.\nrev: {newer}"
+    )
+
+
+def cmd_diff(args) -> str:
+    return diff_report(
+        args.path, args.from_rev, to_rev=args.to, context=args.context,
+        full=args.force,
+    )
+
+
+# What to do once you have read the diff. Only delete differs in substance:
+# there is no change of yours to re-apply, just a decision to re-confirm.
+STALE_NEXT_STEP = {
+    "write": "re-apply your change to it and write again",
+    "edit": "re-apply your edit to it and try again",
+    "upload": "re-apply your change to it and upload again",
+    "delete": "confirm you still mean to delete the file, and try again",
+}
+
+
+def stale_rev_error(path: str, rev: str, verb: str) -> CfsError:
+    """Reject a stale rev, carrying the diff the caller was going to run next.
+
+    The prescribed recovery has always been `diff --from <your rev>`, so running
+    it here collapses three steps into one, against a base the caller already
+    holds. It returns rather than raises so the callers stay single-expression.
+    """
+    refused = (
+        f"Stale rev: {path} has changed since you read it, so the {verb} was "
+        "refused and nothing changed."
+    )
+    reread = (
+        f"{refused} Re-read {path}, re-apply your change to what you get back, "
+        "and retry with the rev from that read."
+    )
+
+    if os.path.splitext(path)[1].lower() in BINARY_SUFFIXES:
+        return CfsError(
+            f"{refused} It is a binary file, so there is no diff to show: fetch "
+            f"it with `cfs download {path} --to <local>`, which reports the "
+            "current rev, and retry with that."
+        )
+    try:
+        report = diff_report(path, rev)
+    except Exception:
+        # A diff failure must never replace the error it was decorating. The rev
+        # can be past Dropbox's 30-day window, or invented outright.
+        return CfsError(reread)
+    if "cannot diff" in report:
+        return CfsError(reread)  # non-UTF-8 content that the suffix list missed
+
+    return CfsError(
+        f"{refused} The diff against {rev} is on stdout -- read it, then "
+        f"{STALE_NEXT_STEP.get(verb, STALE_NEXT_STEP['write'])}.",
+        stdout=report,
     )
 
 
@@ -1511,7 +1587,7 @@ def cmd_upload(args) -> str:
             "single-request limit. Chunked upload is not implemented."
         )
 
-    meta = upload_bytes(path, data, args)
+    meta = upload_bytes(path, data, args, verb="upload")
     return f"Uploaded {args.source} -> {path} ({human_size(len(data))}).\nnew rev: {meta['rev']}"
 
 
@@ -1688,6 +1764,11 @@ def main() -> int:
     try:
         print(args.func(args))
     except CfsError as exc:
+        if exc.stdout:
+            # Flushed before the message so that a caller merging the streams
+            # sees the payload settled, not interleaved mid-diff.
+            print(exc.stdout)
+            sys.stdout.flush()
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except urllib.error.URLError as exc:

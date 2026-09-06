@@ -38,7 +38,9 @@ No local "last read" state is kept, and none would be trustworthy if it were —
 A rev is therefore not a version number but **evidence that the caller has seen the file's current bytes**. Every command is audited against that:
 
 - **Discloses**: `read`, `write`, `edit`, `upload` — you have seen or authored the content. `diff` too: passing `--from <yours>` means you hold that revision, so base plus delta reconstructs the current file, and the oversized branch returns the whole file outright.
-- **Withholds**: `list`, `search`, `grep`, `history`, `restore`, `read --rev`, the stale-rev error, and `diff` when the file was too large to print in full — none of these put the current bytes in front of you.
+- **Withholds**: `list`, `search`, `grep`, `history`, `restore`, `read --rev`, and `diff` when the file was too large to print in full — none of these put the current bytes in front of you. A stale-rev rejection withholds too whenever it cannot produce a diff: an invented rev, one past the 30-day window, or a binary.
+
+A stale-rev rejection that *can* diff is the one case where a rev arrives from a failure. It runs the `diff --from <your rev>` the caller was about to run anyway, and clears the same bar `diff` does — you hold the old bytes, so base plus delta is the current file. The diff goes to **stdout** and only the message to stderr, because the report ends in a rev and a harness that truncates stderr must not be able to hand over the rev while losing the content that licenses it.
 
 Disclosing one anywhere else mints the evidence for free and voids the guarantee. The integration suite audits every command against the **actual current rev string**, never against formatting like `"rev: "` — an earlier version made that mistake and `diff` and `history` leaked the live rev in plain sight while passing.
 

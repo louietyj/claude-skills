@@ -46,7 +46,7 @@ cfs download <path> --to <local>
 
 **YOU MUST DEMONSTRATE, VIA A CURRENT REV, THAT YOU KNOW WHAT IS IN A FILE RIGHT NOW BEFORE YOU CHANGE ANY OF IT.** The rev is the proof, not bookkeeping: a command hands you one only after putting the file's current bytes in front of you. Holding a valid rev while not knowing the file's contents should never both be true.
 
-The loop is **read (or diff) → get rev → write with that rev**. Dropbox verifies it server-side and rejects a stale one. When that happens, don't retry the same rev — re-read, re-apply your change to what you get back, and write again.
+The loop is **read (or diff) → get rev → write with that rev**. Dropbox verifies it server-side and rejects a stale one. **The rejection does the recovery for you**: it prints the diff since your rev on stdout, ending in the current rev. Read that diff, re-apply your change to it, and retry with the rev it gave you — no re-read needed. Only when it cannot diff (a rev you never actually read, one older than 30 days, or a binary) does it fall back to telling you to re-read.
 
 **Already hold a rev and want to know if it's still good? `diff --from <your rev>`.** One call. It answers `UNCHANGED` (your rev still works) or `CHANGED` plus the current content and a fresh rev. Do not use `history`, and do not re-`read` — `history` lists old revisions and never reports the current one. `--from` is mandatory and must be *your* rev: there is no default, because the file's previous revision has no relationship to what you hold.
 

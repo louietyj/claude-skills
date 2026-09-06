@@ -396,6 +396,56 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestStaleRevError(unittest.TestCase):
+    """The diff rides on .stdout, never in the message: it ends in a rev, and a
+    rev must not reach the caller without the content backing it."""
+
+    def _with_report(self, report):
+        original = cfs.diff_report
+        cfs.diff_report = lambda *a, **k: report
+        self.addCleanup(setattr, cfs, "diff_report", original)
+
+    def _raising(self, exc):
+        original = cfs.diff_report
+        def boom(*a, **k):
+            raise exc
+        cfs.diff_report = boom
+        self.addCleanup(setattr, cfs, "diff_report", original)
+
+    def test_report_goes_to_stdout_not_the_message(self):
+        self._with_report("CHANGED: ...\nrev: r9")
+        err = cfs.stale_rev_error("/memory/a.md", "r1", "write")
+        self.assertEqual(err.stdout, "CHANGED: ...\nrev: r9")
+        self.assertNotIn("r9", str(err))
+        self.assertIn("stdout", str(err))
+
+    def test_delete_asks_to_reconfirm_not_to_reapply(self):
+        self._with_report("CHANGED: ...")
+        self.assertIn("still mean to delete", str(cfs.stale_rev_error("/a.md", "r1", "delete")))
+
+    def test_binary_paths_point_at_download_and_carry_no_payload(self):
+        err = cfs.stale_rev_error("/memory/chart.png", "r1", "upload")
+        self.assertIsNone(err.stdout)
+        self.assertIn("cfs download", str(err))
+
+    def test_a_failing_diff_never_replaces_the_error(self):
+        self._raising(cfs.CfsError("Path does not exist."))
+        err = cfs.stale_rev_error("/memory/a.md", "r1", "write")
+        self.assertIsNone(err.stdout)
+        self.assertIn("Stale rev", str(err))
+        self.assertIn("Re-read", str(err))
+
+    def test_non_utf8_content_degrades_too(self):
+        # The suffix list cannot catch a latin-1 .log; diff_report reports it.
+        self._with_report("/memory/a.log is not text at one of these revisions; cannot diff.")
+        err = cfs.stale_rev_error("/memory/a.log", "r1", "write")
+        self.assertIsNone(err.stdout)
+        self.assertIn("Re-read", str(err))
+
+    def test_plain_errors_carry_no_payload(self):
+        self.assertIsNone(cfs.CfsError("boom").stdout)
+
+
 class TestCheckRevBelongs(unittest.TestCase):
     """`rev:<id>` resolves globally, so a rev from another file downloads fine."""
 

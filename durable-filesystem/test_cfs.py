@@ -396,6 +396,37 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestListRecursion(unittest.TestCase):
+    """Recursion follows depth. The old --recursive flag was store_true with
+    default=True, so it was always on and depth 1 fetched the whole tree."""
+
+    def _payload_recursive(self, argv):
+        captured = {}
+        args = cfs.build_parser().parse_args(argv)
+        def fake_rpc(endpoint, payload):
+            captured.update(payload)
+            return {"entries": []}
+        original, cfs.rpc = cfs.rpc, fake_rpc
+        try:
+            cfs.cmd_list(args)
+        finally:
+            cfs.rpc = original
+        return captured["recursive"]
+
+    def test_depth_one_is_a_shallow_call(self):
+        self.assertFalse(self._payload_recursive(["list", "/", "--depth", "1"]))
+
+    def test_the_default_depth_recurses(self):
+        self.assertTrue(self._payload_recursive(["list", "/"]))
+
+    def test_deeper_still_recurses(self):
+        self.assertTrue(self._payload_recursive(["list", "/", "--depth", "5"]))
+
+    def test_the_inert_flag_is_gone(self):
+        with self.assertRaises(SystemExit):
+            cfs.build_parser().parse_args(["list", "/", "--recursive"])
+
+
 class TestJsonEnvelopeWarning(unittest.TestCase):
     """write's stdin is raw, so the old JSON envelope stores verbatim. Unwrapping
     it by sniffing would corrupt real JSON files, so it warns instead."""

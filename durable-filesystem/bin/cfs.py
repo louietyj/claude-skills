@@ -618,7 +618,10 @@ def numbered(text: str, start: int = 1) -> str:
 
 def cmd_list(args) -> str:
     entries: list[dict] = []
-    payload = {"path": api_path(args.path), "recursive": args.recursive}
+    # A non-recursive list_folder returns exactly the immediate children, which
+    # is depth 1. Recursing regardless made `list / --depth 1` fetch the whole
+    # store to show one level, since depth is filtered client-side.
+    payload = {"path": api_path(args.path), "recursive": args.depth > 1}
     try:
         result = rpc("/2/files/list_folder", payload)
     except CfsError as exc:
@@ -1529,7 +1532,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("list", help="list a directory")
     p.add_argument("path", nargs="?", default="/")
     p.add_argument("--depth", type=int, default=2)
-    p.add_argument("--recursive", action="store_true", default=True)
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("read", help="read a file (reports the rev you need to write)")

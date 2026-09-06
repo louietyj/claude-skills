@@ -44,15 +44,15 @@ body() {
     | sed 's/^ *[0-9]*\t//'
 }
 
-echo "=== create / write via JSON stdin ==="
+echo "=== create / write via --json stdin ==="
 expect_ok_json "write --new with JSON stdin" '{"content": "line one\nline two\n"}' \
-  $CFS write $ROOT/a.md --new
+  $CFS write $ROOT/a.md --new --json
 body $ROOT/a.md | grep -q "line two" && ok "multi-line content round-trips" \
   || bad "multi-line content round-trips"
 expect_err_json "write --new on existing path" "already exists" '{"content":"x"}' \
-  $CFS write $ROOT/a.md --new
+  $CFS write $ROOT/a.md --new --json
 expect_err_json "overwrite without --rev" "without --rev" '{"content":"x"}' \
-  $CFS write $ROOT/a.md
+  $CFS write $ROOT/a.md --json
 expect_ok "write --content inline for short values" \
   $CFS write $ROOT/short.md --content "brief" --new
 
@@ -82,9 +82,33 @@ body $ROOT/raw.md | grep -q 'lone \\n' \
 expect_err "write --content and --stdin conflict" "mutually exclusive" \
   $CFS write $ROOT/raw.md --new --content "x" --stdin
 
+# Raw is the DEFAULT, matching edit: an agent that has just made several edits
+# reaches for write with the same heredoc habit, and did not get the same thing.
+printf '# bare\n\nno --stdin flag\n' | $CFS write $ROOT/bare.md --new >/dev/null 2>&1 \
+  && ok "write defaults to raw stdin with no flag" \
+  || bad "write defaults to raw stdin with no flag"
+body $ROOT/bare.md | grep -q "no --stdin flag" \
+  && ok "the default-raw content round-trips" || bad "the default-raw content round-trips"
+
+# The one confusable case. Sniffing to unwrap would corrupt real JSON files, so
+# the write stands and a warning explains it.
+ENV_OUT=$(echo '{"content":"x"}' | $CFS write $ROOT/envelope.md --new 2>&1)
+echo "$ENV_OUT" | grep -qi "written verbatim" \
+  && ok "a JSON envelope on raw stdin warns" || bad "a JSON envelope on raw stdin warns"
+echo "$ENV_OUT" | grep -q -- "--json" \
+  && ok "the warning names --json as the fix" || bad "the warning names --json as the fix"
+[ "$(body $ROOT/envelope.md)" = '{"content":"x"}' ] \
+  && ok "the envelope was stored verbatim, not unwrapped" \
+  || bad "the envelope was stored verbatim, not unwrapped"
+# A file whose content legitimately starts with '{' must pass through silently.
+QUIET=$(printf '{\n  "port": 8080\n}\n' | $CFS write $ROOT/config.json --new 2>&1)
+echo "$QUIET" | grep -qi "written verbatim" \
+  && bad "a real JSON file writes without warning" \
+  || ok "a real JSON file writes without warning"
+
 echo "=== edit via SEARCH/REPLACE (the default) ==="
 expect_ok_json "seed a file to edit" '{"content":"alpha\nbeta\ngamma\n"}' \
-  $CFS write $ROOT/sr.md --new
+  $CFS write $ROOT/sr.md --new --json
 SREV=$(revof $ROOT/sr.md)
 $CFS edit $ROOT/sr.md --rev "$SREV" <<'RAWEOF'
 <<<<<<< SEARCH
@@ -243,7 +267,7 @@ echo "$OUT" | grep -qi "does not occur in your content" \
 
 echo "=== JSON payload validation ==="
 expect_err_json "malformed JSON rejected" "parse stdin as JSON" '{"content": "oops' \
-  $CFS write $ROOT/b.md --new
+  $CFS write $ROOT/b.md --new --json
 expect_err_json "missing key rejected" "new_str" '{"old_str":"a"}' \
   $CFS edit $ROOT/a.md --rev deadbeef
 expect_err "no --old/--new flags on edit" "unrecognized arguments" \
@@ -265,20 +289,20 @@ body $ROOT/a.md | grep -q "LINE ONE" && ok "edit applied" || bad "edit applied"
 echo "=== escaping through the shell ==="
 REV=$(revof $ROOT/a.md)
 expect_ok_json "content with quotes, \$vars and backticks" \
-  '{"content": "cost is $5 \"today\" `now` \\ done\n"}' $CFS write $ROOT/a.md --rev "$REV"
+  '{"content": "cost is $5 \"today\" `now` \\ done\n"}' $CFS write $ROOT/a.md --rev "$REV" --json
 body $ROOT/a.md | grep -q 'cost is \$5 "today" `now` \\ done' \
   && ok "shell metacharacters survive verbatim" || bad "shell metacharacters survive verbatim"
 
 echo "=== stale rev rejected server-side ==="
 expect_err_json "write with stale rev" "stale\|changed" '{"content":"clobber"}' \
-  $CFS write $ROOT/a.md --rev "$REV"
+  $CFS write $ROOT/a.md --rev "$REV" --json
 body $ROOT/a.md | grep -q "clobber" && bad "stale write did not clobber" \
   || ok "stale write did not clobber"
 
 echo "=== ambiguous edit ==="
 REV=$(revof $ROOT/a.md)
 expect_ok_json "write repeated content" '{"content": "todo\nkeep\ntodo\n"}' \
-  $CFS write $ROOT/a.md --rev "$REV"
+  $CFS write $ROOT/a.md --rev "$REV" --json
 REV=$(revof $ROOT/a.md)
 expect_err_json "ambiguous edit refused" "2 times" '{"old_str":"todo","new_str":"done"}' \
   $CFS edit $ROOT/a.md --rev "$REV"
@@ -288,7 +312,7 @@ expect_ok_json "disambiguated by context" '{"old_str":"todo\nkeep","new_str":"do
 echo "=== edit --all ==="
 REV=$(revof $ROOT/a.md)
 expect_ok_json "seed repeated term" '{"content": "cat\ndog\ncat\ncat\n"}' \
-  $CFS write $ROOT/a.md --rev "$REV"
+  $CFS write $ROOT/a.md --rev "$REV" --json
 REV=$(revof $ROOT/a.md)
 expect_err_json "still ambiguous without --all" "2 times\|3 times" \
   '{"old_str":"cat","new_str":"lion"}' $CFS edit $ROOT/a.md --rev "$REV"
@@ -304,9 +328,9 @@ expect_err_json "--all still requires a match" "verbatim" \
 
 echo "=== grep ==="
 expect_ok_json "seed grep corpus" '{"content": "alpha BETA\ngamma\n"}' \
-  $CFS write $ROOT/g1.md --new
+  $CFS write $ROOT/g1.md --new --json
 expect_ok_json "seed second file" '{"content": "delta\nbeta two\n"}' \
-  $CFS write $ROOT/g2.md --new
+  $CFS write $ROOT/g2.md --new --json
 $CFS grep -r "beta" $ROOT | grep -q "g2.md" && ok "grep finds a match" \
   || bad "grep finds a match"
 $CFS grep -r "beta" $ROOT | grep -q "g1.md" && bad "grep is case-sensitive by default" \
@@ -364,7 +388,7 @@ $CFS grep -Q "pattern" alpha 2>&1 | grep -q -- "-Q" \
 
 # grep must see a file written moments ago -- the async-index failure it exists to avoid
 expect_ok_json "write a file then immediately grep it" '{"content": "freshlywritten\n"}' \
-  $CFS write $ROOT/g3.md --new
+  $CFS write $ROOT/g3.md --new --json
 $CFS grep -r "freshlywritten" $ROOT | grep -q "g3.md" \
   && ok "grep finds a just-written file" || bad "grep finds a just-written file"
 # ... and must stop seeing one that has since been deleted, or the rev-keyed
@@ -408,10 +432,10 @@ $CFS diff $ROOT/d.md --from "$D1B" --to "$D1B" | grep -q "^CHANGED" \
 # A small file is below the 5% threshold for any change at all -- by design it
 # returns the file rather than a diff, since reading it whole is just as easy.
 expect_ok_json "seed a small file" '{"content":"alpha\nbeta\ngamma\n"}' \
-  $CFS write $ROOT/small.md --new
+  $CFS write $ROOT/small.md --new --json
 SREV=$(revof $ROOT/small.md)
 expect_ok_json "change one line of it" '{"content":"alpha\nBETA\ngamma\n"}' \
-  $CFS write $ROOT/small.md --rev "$SREV"
+  $CFS write $ROOT/small.md --rev "$SREV" --json
 OUT=$($CFS diff $ROOT/small.md --from "$SREV")
 echo "$OUT" | grep -q "BETA" && ok "small file returns whole content, not a diff" \
   || bad "small file returns whole content, not a diff"
@@ -442,7 +466,7 @@ echo "=== content restored to an earlier state (x -> y -> x) ==="
 # promised a rev that Dropbox then rejects -- with a message saying the file
 # changed, which is itself wrong here, because only the rev moved.
 expect_ok_json "seed the round-trip file" '{"content":"hello x world\n"}' \
-  $CFS write $ROOT/abba.md --new
+  $CFS write $ROOT/abba.md --new --json
 RA=$(revof $ROOT/abba.md)
 printf 'x\n@@\ny\n' | $CFS edit $ROOT/abba.md --rev "$RA" --delim @@ >/dev/null
 RB=$(revof $ROOT/abba.md)
@@ -493,7 +517,7 @@ echo "=== head no longer harvests a rev (the case-status.md incident) ==="
 # while discarding the content the rev is supposed to certify. Content now
 # comes before the rev, so head -3 on a multi-line file sees no rev at all.
 expect_ok_json "seed a multi-line file" '{"content":"one\ntwo\nthree\nfour\nfive\n"}' \
-  $CFS write $ROOT/head.md --new
+  $CFS write $ROOT/head.md --new --json
 HEADOUT=$($CFS read $ROOT/head.md | head -3)
 echo "$HEADOUT" | grep -q "rev:" && bad "head -3 yields no rev" || ok "head -3 yields no rev"
 FULLOUT=$($CFS read $ROOT/head.md)
@@ -507,7 +531,7 @@ echo "$FULLOUT" | grep -qi "only valid if you read all" \
 # Dropbox keeps revision history per path across delete-and-recreate, so a fixed
 # name would inherit revisions from previous runs and stop being single-revision.
 ONCE="$ROOT/once-$$-$(date +%s).md"
-expect_ok_json "single-revision file" '{"content":"only\n"}' $CFS write "$ONCE" --new
+expect_ok_json "single-revision file" '{"content":"only\n"}' $CFS write "$ONCE" --new --json
 # --from has no default: the penultimate rev is a fact about the file's history
 # with no relationship to what the caller has in context, so guessing it could
 # report one changed line to someone whose whole picture was stale.
@@ -520,21 +544,21 @@ echo "=== old_str mismatch diagnostics ==="
 # old_str must genuinely fail to match: a substring of a line still matches, so
 # these seeds differ from the file only in whitespace that spans a line break.
 expect_ok_json "seed trailing-space file" '{"content":"foo   \nbar\n"}' \
-  $CFS write $ROOT/ws1.md --new
+  $CFS write $ROOT/ws1.md --new --json
 echo '{"old_str":"foo\nbar","new_str":"z"}' \
   | $CFS edit $ROOT/ws1.md --rev "$(revof $ROOT/ws1.md)" 2>&1 \
   | grep -qi "trailing whitespace" \
   && ok "trailing-whitespace mismatch explained" || bad "trailing-whitespace mismatch explained"
 
 expect_ok_json "seed indented file" '{"content":"    hello\n    world\n"}' \
-  $CFS write $ROOT/ws2.md --new
+  $CFS write $ROOT/ws2.md --new --json
 echo '{"old_str":"hello\nworld","new_str":"z"}' \
   | $CFS edit $ROOT/ws2.md --rev "$(revof $ROOT/ws2.md)" 2>&1 \
   | grep -qi "indentation" \
   && ok "indentation mismatch explained" || bad "indentation mismatch explained"
 
 expect_ok_json "seed typo file" '{"content":"the quick brown fox jumps\nnext line\n"}' \
-  $CFS write $ROOT/ws3.md --new
+  $CFS write $ROOT/ws3.md --new --json
 echo '{"old_str":"the quick brwon fox jumps","new_str":"z"}' \
   | $CFS edit $ROOT/ws3.md --rev "$(revof $ROOT/ws3.md)" 2>&1 \
   | grep -qi "closest line" \
@@ -544,7 +568,7 @@ echo "=== history and restore (corrupt, then recover) ==="
 GOOD=$(revof $ROOT/a.md)
 GOODBODY=$(body $ROOT/a.md)
 expect_ok_json "corrupt the file" '{"content": "CORRUPTED BY A BAD WRITE\n"}' \
-  $CFS write $ROOT/a.md --rev "$GOOD"
+  $CFS write $ROOT/a.md --rev "$GOOD" --json
 body $ROOT/a.md | grep -q "CORRUPTED" && ok "corruption landed" || bad "corruption landed"
 $CFS history $ROOT/a.md | grep -q "$GOOD" && ok "history lists the pre-corruption rev" \
   || bad "history lists the pre-corruption rev"
@@ -582,7 +606,7 @@ withholds "read --rev"  $CFS read $ROOT/g1.md --rev "$(prev_rev $ROOT/g1.md)"
 # branch) leaves you knowing the current bytes -- which is the bar for a rev.
 # Needs a file with two revisions, so build one rather than assuming.
 expect_ok_json "seed a two-revision file" '{"content":"one\ntwo\n"}' \
-  $CFS write $ROOT/two.md --new
+  $CFS write $ROOT/two.md --new --json
 TWO_OLD=$(revof $ROOT/two.md)
 expect_ok_json "give it a second revision" '{"old_str":"two","new_str":"TWO"}' \
   $CFS edit $ROOT/two.md --rev "$TWO_OLD"
@@ -609,7 +633,7 @@ echo "$STALE_OUT" | grep -q "$CUR" \
   || ok "stale edit error withholds the current rev"
 echo "$STALE_OUT" | grep -qi "re-read" \
   && ok "stale edit error says to re-read" || bad "stale edit error says to re-read"
-STALE_W=$(echo '{"content":"x"}' | $CFS write $ROOT/g1.md --rev 0123456789 2>&1)
+STALE_W=$(echo '{"content":"x"}' | $CFS write $ROOT/g1.md --rev 0123456789 --json 2>&1)
 echo "$STALE_W" | grep -q "$CUR" \
   && bad "stale write error withholds the current rev" \
   || ok "stale write error withholds the current rev"
@@ -625,7 +649,7 @@ $CFS history $ROOT/g1.md | grep -q "rev:" \
   || bad "history still exposes older revs for restore"
 
 echo "=== --new conflict is diagnosed correctly (not as a stale rev) ==="
-OUT=$(echo '{"content":"x"}' | $CFS write $ROOT/g1.md --new 2>&1)
+OUT=$(echo '{"content":"x"}' | $CFS write $ROOT/g1.md --new --json 2>&1)
 echo "$OUT" | grep -qi "already exists" && ok "--new conflict says 'already exists'" \
   || bad "--new conflict says 'already exists' (got: $OUT)"
 echo "$OUT" | grep -qi "stale\|changed since you read" \
@@ -652,13 +676,13 @@ expect_err "delete / refused" "Refusing to delete" $CFS delete / --force
 $CFS list / --depth 1 | grep -q "/memory" && ok "/memory still intact" \
   || bad "/memory still intact"
 expect_ok_json "entries inside /memory are still deletable" '{"content":"tmp\n"}' \
-  $CFS write /memory/_probe.md --new
+  $CFS write /memory/_probe.md --new --json
 expect_ok "delete an entry inside /memory" \
   $CFS delete /memory/_probe.md --rev "$(revof /memory/_probe.md)"
 
 echo "=== nested paths and rename ==="
 expect_ok_json "write into a nested path" '{"content":"nested\n"}' \
-  $CFS write $ROOT/sub/b.md --new
+  $CFS write $ROOT/sub/b.md --new --json
 $CFS list $ROOT --depth 5 | grep -q "b.md" && ok "parent dir created implicitly" \
   || bad "parent dir created implicitly"
 expect_ok "rename" $CFS rename $ROOT/sub/b.md $ROOT/sub/c.md

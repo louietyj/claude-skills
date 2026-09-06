@@ -27,7 +27,7 @@ If setup **fails**, stop. Don't guess a path, fall back to local files, or use t
 cfs list [path] [--depth N]              # names and sizes (no revs — read for those)
 cfs read <path> [--lines 1-40] [--full]  # content AND the rev you need to write
 cfs read <path> --rev R                  # an old version; can NOT license a write
-cfs write <path> (--new | --rev R) --stdin  # raw content on stdin
+cfs write <path> (--new | --rev R)       # raw content on stdin
 cfs edit <path> --rev R [--tag T] [--all]   # ONE SEARCH/REPLACE block on stdin
 cfs diff <path> --from R [--to B]        # ALWAYS use this to refresh a rev you
                                          #   already hold. NEVER history+read for that.
@@ -59,7 +59,7 @@ The loop is **read (or diff) → get rev → write with that rev**. Dropbox veri
 Never hand-escape JSON. A quoted heredoc (`<<'EOF'`) passes content through untouched — literal newlines, quotes, `$`, backticks, backslashes.
 
 ```bash
-cfs write /memory/hawaii.md --new --stdin <<'EOF'
+cfs write /memory/hawaii.md --new <<'EOF'
 # Hawaii 2026
 
 Multiple paragraphs, "quotes" and $vars, all verbatim.
@@ -102,7 +102,7 @@ EOF
 
 There is deliberately **no way to read the SEARCH text from a file**: an edit must reproduce what it changes, because that is what demonstrates it knows what it is changing.
 
-`write --content "short value"` covers brief single-line writes. JSON on stdin and `edit --delim MARK` also work, for programmatic callers.
+Both commands read stdin raw by default, so the same heredoc habit carries from one to the other. `write --content "short value"` covers brief single-line writes. JSON on stdin (`write --json`; `edit` detects it) and `edit --delim MARK` also work, for programmatic callers.
 
 ## Recovering from a bad write
 

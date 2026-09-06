@@ -396,6 +396,54 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestJsonEnvelopeWarning(unittest.TestCase):
+    """write's stdin is raw, so the old JSON envelope stores verbatim. Unwrapping
+    it by sniffing would corrupt real JSON files, so it warns instead."""
+
+    def _warn(self, content):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            cfs.warn_if_json_envelope(content)
+        return err.getvalue()
+
+    def test_lone_content_envelope_warns(self):
+        out = self._warn('{"content": "hello\\n"}')
+        self.assertIn("verbatim", out)
+        self.assertIn("--json", out)
+
+    def test_a_real_json_file_is_silent(self):
+        self.assertEqual(self._warn('{\n  "port": 8080\n}\n'), "")
+
+    def test_an_object_with_other_keys_is_silent(self):
+        # Only the exact envelope shape is confusable; anything else is a
+        # document that happens to be JSON.
+        self.assertEqual(self._warn('{"content": "x", "rev": "abc"}'), "")
+
+    def test_ordinary_prose_is_silent(self):
+        self.assertEqual(self._warn("# Notes\n\nnothing json here\n"), "")
+
+    def test_malformed_json_is_silent(self):
+        self.assertEqual(self._warn('{"content": "oops'), "")
+
+
+class TestWriteDefaultsToRaw(unittest.TestCase):
+    """The asymmetry that tripped callers: edit took raw stdin while write
+    required --stdin to get the same thing."""
+
+    def test_bare_write_is_raw_not_json(self):
+        args = cfs.build_parser().parse_args(["write", "/f", "--new"])
+        self.assertFalse(args.json)
+
+    def test_stdin_flag_still_parses(self):
+        args = cfs.build_parser().parse_args(["write", "/f", "--new", "--stdin"])
+        self.assertTrue(args.stdin)
+        self.assertFalse(args.json)
+
+    def test_json_is_opt_in(self):
+        args = cfs.build_parser().parse_args(["write", "/f", "--new", "--json"])
+        self.assertTrue(args.json)
+
+
 class TestWriteMode(unittest.TestCase):
     def _args(self, argv):
         return cfs.build_parser().parse_args(argv)

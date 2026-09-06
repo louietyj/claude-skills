@@ -363,6 +363,29 @@ def warn_if_piped_from_file(command: str) -> None:
         )
 
 
+def warn_if_json_envelope(content: str) -> None:
+    """Warn when raw content is exactly the JSON envelope write used to require.
+
+    Unwrapping it instead would corrupt every real JSON file in the store, since
+    file content legitimately starts with '{'. So write what was asked, and say
+    so rather than letting the old habit fail silently.
+    """
+    if not content.lstrip().startswith("{"):
+        return
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return
+    if isinstance(parsed, dict) and set(parsed) == {"content"}:
+        print(
+            "Warning: stdin was a JSON object whose only key is 'content', and it "
+            "has been written verbatim -- braces, quotes and escapes included. "
+            "write takes RAW stdin; pass --json if you meant that object to be "
+            "unwrapped.",
+            file=sys.stderr,
+        )
+
+
 def read_stdin_raw(what: str) -> str:
     """Read stdin verbatim -- no escaping, no interpretation.
 
@@ -551,7 +574,7 @@ def read_delimited(delim: str) -> tuple[str, str]:
 
 
 STDIN_EXAMPLE = """\
-  cfs write /memory/notes.md --new --stdin <<'EOF'
+  cfs write /memory/notes.md --new <<'EOF'
   # Notes
 
   Real newlines, "quotes", $vars and \\backslashes all pass through untouched.
@@ -776,14 +799,18 @@ def write_mode(args, path: str):
 def cmd_write(args) -> str:
     path = normalise(args.path)
     if args.content is not None:
-        if args.stdin:
-            raise CfsError("--content and --stdin are mutually exclusive.")
+        if args.stdin or args.json:
+            raise CfsError("--content and --stdin/--json are mutually exclusive.")
         content = args.content
-    elif args.stdin:
-        warn_if_piped_from_file("write --stdin")
-        content = read_stdin_raw("the file content")
-    else:
+    elif args.json:
+        if args.stdin:
+            raise CfsError("--stdin and --json are mutually exclusive.")
         content = read_payload(("content",), WRITE_EXAMPLE)["content"]
+    else:
+        # Raw by default, matching edit; --stdin is the older spelling of it.
+        warn_if_piped_from_file("write")
+        content = read_stdin_raw("the file content")
+        warn_if_json_envelope(content)
     data = content.encode("utf-8")
 
     meta = upload_bytes(path, data, args)
@@ -1482,10 +1509,14 @@ def cmd_download(args) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     epilog = (
-        "edit and write take their strings as a JSON object on stdin, fed by a "
-        "quoted heredoc:\n\n" + EDIT_EXAMPLE + "\n\nNewlines inside JSON strings "
-        "are escaped as \\n. There is deliberately no way to read old_str from a "
-        "file."
+        "write takes raw content on stdin; edit takes a SEARCH/REPLACE block. Feed "
+        "both from a quoted heredoc, so the shell leaves the content alone:\n\n"
+        + STDIN_EXAMPLE
+        + "\n\n"
+        + SR_EXAMPLE
+        + "\n\nA JSON object on stdin is also accepted for programmatic callers "
+        "(write --json; edit detects it). There is deliberately no way to read "
+        "old_str from a file."
     )
     parser = argparse.ArgumentParser(
         prog="cfs",
@@ -1509,14 +1540,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_read)
 
     p = sub.add_parser(
-        "write", help='create or overwrite a file; JSON stdin {"content": "..."}'
+        "write", help="create or overwrite a file; raw content on stdin"
     )
     p.add_argument("path")
     p.add_argument("--content", help="inline content, for short single-line values")
     p.add_argument(
         "--stdin",
         action="store_true",
-        help="read the content raw from stdin (no JSON, no escaping)",
+        help="read the content raw from stdin -- the default; kept for callers "
+        "written against the older interface",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help='read stdin as a JSON object {"content": "..."} instead of raw',
     )
     p.add_argument("--rev", help="current rev; required when overwriting")
     p.add_argument("--new", action="store_true", help="create; fails if path exists")

@@ -396,6 +396,13 @@ class TestNoFileIndirection(unittest.TestCase):
         self.assertEqual(args.content, "@/etc/passwd")  # literal, not a file read
 
 
+class TestDiffThresholds(unittest.TestCase):
+    def test_fraction_stays_under_the_context_break_even(self):
+        # Past ~1/7 the diff is the longer read, so a larger fraction would
+        # invert the point of having a fallback. Reasoning at the constant.
+        self.assertLess(cfs.DIFF_MAX_CHANGED_FRACTION, 1 / 7)
+
+
 class TestListRecursion(unittest.TestCase):
     """Recursion follows depth. The old --recursive flag was store_true with
     default=True, so it was always on and depth 1 fetched the whole tree."""

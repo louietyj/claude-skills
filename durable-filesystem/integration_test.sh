@@ -429,7 +429,7 @@ $CFS diff $ROOT/d.md --from "$D1B" --to "$D1B" | grep -q "^UNCHANGED" \
 $CFS diff $ROOT/d.md --from "$D1B" --to "$D1B" | grep -q "^CHANGED" \
   && bad "unchanged output does not say CHANGED" || ok "unchanged output does not say CHANGED"
 
-# A small file is below the 5% threshold for any change at all -- by design it
+# A three-line file is above the fraction cap for any change at all -- by design it
 # returns the file rather than a diff, since reading it whole is just as easy.
 expect_ok_json "seed a small file" '{"content":"alpha\nbeta\ngamma\n"}' \
   $CFS write $ROOT/small.md --new --json

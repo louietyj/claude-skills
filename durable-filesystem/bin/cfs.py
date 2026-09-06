@@ -1294,11 +1294,12 @@ def cmd_grep(raw_argv: list[str]) -> int:
     return proc.returncode
 
 
-# Deliberately tight: a diff earns its place only when it is small enough to
-# eyeball at a glance. Anything bigger is clearer as the file itself, so that is
-# what gets returned -- an ugly three-page diff is worse than no diff at all.
-DIFF_MAX_CHANGED_LINES = 20
-DIFF_MAX_CHANGED_FRACTION = 0.05
+# With n=3 context a scattered diff runs to roughly 7x its changed-line count, so
+# past about a seventh of the file the diff is the longer read and the file itself
+# is returned instead. The fraction binds on small files and the line count on
+# large ones: 30 changed lines only clears 10% from 300 lines up.
+DIFF_MAX_CHANGED_LINES = 30
+DIFF_MAX_CHANGED_FRACTION = 0.10
 
 # Same role as read's marker: an unambiguous end-of-content line, since "---"
 # is legitimate markdown and appears inside real memory files.

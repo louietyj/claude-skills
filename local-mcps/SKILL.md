@@ -75,8 +75,10 @@ fails silently.
   so every call respawns the server. Fine for maps, search, docs and APIs;
   useless for anything holding a session — a browser MCP, a server-side cursor,
   a transaction.
-- **No OAuth.** Servers behind an OAuth flow are not supported; use a claude.ai
-  connector for those. Header and query-parameter auth work.
+- **No interactive OAuth.** No browser, nothing persists — a server cannot *run*
+  an OAuth flow here. A grant you already hold is different: inline its refresh
+  token and hand it to the server at spawn (`references/config.md`). Header and
+  query-parameter auth work.
 - **stdio and http/streamable-http only.** No `sse`, no WebSocket.
 - **No session-required HTTP.** The HTTP path is a stateless POST; a server that
   demands an `Mcp-Session-Id` handshake will fail.

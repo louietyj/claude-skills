@@ -36,3 +36,33 @@ description, and its full `instructions`. Write the line from that and paste it
 into the server's block. `describe` offers no generated line: reducing that
 material to one useful sentence is the judgement, and it is yours to make.
 
+## Servers that want a token file
+
+Some OAuth servers read credentials from a *file* their auth flow writes rather
+than from `env` — no good here, because the sandbox wipes the filesystem between
+turns.
+
+Bridge env to file in the `command`: carry the file's contents in a variable of
+your own, write it, then `exec` the real server so stdio stays wired for
+JSON-RPC.
+
+```json
+"google-health": {
+  "command": "sh",
+  "args": ["-c", "printf '%s' \"$GH_TOKENS\" > /tmp/gh-tokens.json && exec npx -y google-health-mcp-unofficial"],
+  "env": {
+    "GOOGLE_HEALTH_TOKEN_PATH": "/tmp/gh-tokens.json",
+    "GH_TOKENS": "{\"access_token\":\"x\",\"expires_at\":1000000000,\"refresh_token\":\"...\"}"
+  }
+}
+```
+
+`GH_TOKENS` is a name we chose; the server never sees it. The placeholder
+`access_token` and the long-past `expires_at` both matter — a server will often
+reject a file holding only a refresh token, and a stale expiry makes it refresh
+on the first call. Get the refresh token by running the server's own auth flow
+once on a machine that has a browser.
+
+That refresh token is long-lived and sits here in plaintext, so it is only as
+private as the config's share link.
+

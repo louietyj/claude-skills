@@ -66,41 +66,41 @@
     "general_tools": [
       {
         "speak_during_execution": true,
-        "name": "consult_supervisor",
-        "parameter_type": "json",
-        "max_retry": 3,
-        "execution_message_description": "Let me check on that — one moment.",
         "description": "Ask your supervisor: the assistant that set up this call, standing by for it. It already has the full transcript of this call so far, Louie's personal and medical details, his calendar, and the ability to look anything up. Ask it for anything you do not have — a date of birth, an ID number, a spelling, a price — and for any decision the brief does not cover, such as accepting a different time, a substitution, or a cost. It answers in seconds. Never guess; ask.",
+        "max_retry": 3,
         "url": "{{WORKER_URL}}/consult",
         "speak_after_execution": true,
+        "execution_message_description": "Say you need a moment to look something up, phrased to fit whatever was just asked — 'let me pull that up', 'one second, let me check the calendar', 'let me find that for you'. Vary the wording; never repeat a phrasing you have already used on this call. Never mention Louie, an assistant or a supervisor — you are looking it up, not asking someone. Give no part of the answer, not even a hedge.",
+        "method": "POST",
         "parameters": {
           "required": [
             "question"
           ],
-          "type": "object",
           "properties": {
             "question": {
               "description": "What you need to know or decide, in one or two sentences. The transcript of the call so far is attached automatically — do not repeat it or summarise it.",
               "type": "string"
             }
-          }
+          },
+          "type": "object"
         },
         "timeout_ms": 180000,
-        "type": "custom",
-        "execution_message_type": "static_text",
-        "method": "POST"
+        "name": "consult_supervisor",
+        "parameter_type": "json",
+        "execution_message_type": "prompt",
+        "type": "custom"
       },
       {
-        "description": "Press a digit on the keypad to navigate an automated phone menu.",
         "speak_after_execution": true,
-        "name": "press_digit",
-        "type": "press_digit"
+        "description": "Press a digit on the keypad to navigate an automated phone menu.",
+        "type": "press_digit",
+        "name": "press_digit"
       },
       {
-        "description": "End the call once the task is complete, or if the other party ends the conversation.",
         "speak_after_execution": true,
         "type": "end_call",
-        "name": "end_call"
+        "name": "end_call",
+        "description": "End the call once the task is complete, or if the other party ends the conversation."
       }
     ],
     "start_speaker": "agent",

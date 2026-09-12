@@ -282,7 +282,8 @@ def cmd_watch(cfg, args):
     if not call_id:
         die("no ongoing call found -- pass --call-id")
 
-    state = {"turns": [], "ended": None, "consult": None, "error": None, "types": set()}
+    state = {"turns": [], "by_id": {}, "ended": None, "consult": None,
+             "error": None, "types": set()}
     stop = threading.Event()
 
     def run_monitor():
@@ -317,13 +318,24 @@ def cmd_watch(cfg, args):
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                state["types"].add(msg.get("type", "?"))
-                if msg.get("type") == "call_ended":
+                kind = msg.get("type", "?")
+                state["types"].add(kind)
+                if kind == "call_ended":
                     state["ended"] = "call_ended"
                     return
-                turns = msg.get("transcript")
-                if isinstance(turns, list):
-                    state["turns"] = turns
+                # `transcript_snapshot` carries the whole conversation;
+                # `transcript_updated` carries only the turns that changed,
+                # including a turn already sent, growing word by word as it is
+                # spoken. So merge by id rather than replacing -- and never
+                # append, which would emit the same sentence a dozen times.
+                incoming = msg.get("transcripts")
+                if not isinstance(incoming, list):
+                    continue
+                if kind == "transcript_snapshot":
+                    state["by_id"].clear()
+                for turn in incoming:
+                    state["by_id"][turn.get("id") or len(state["by_id"])] = turn
+                state["turns"] = list(state["by_id"].values())
         finally:
             sock.close()
 

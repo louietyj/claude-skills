@@ -13,8 +13,10 @@ live calls when it was left to the caller:
     them, and that prose is dead air on a stranger's phone.
   * Requests are built by urllib, never curl. `curl -G` folds the body into the
     query string and sends none, which hung three calls on an empty req.json().
-  * `poll` races the queue against call status, the only way to tell "still
-    talking" from "hung up twenty seconds ago".
+  * Both `watch` and `poll` check Retell's call status themselves. Neither the
+    queue nor the monitor socket can tell "still talking" from "hung up twenty
+    seconds ago" — the queue never fires again, and the socket only reports an
+    end it was present for.
 """
 
 import argparse
@@ -351,9 +353,6 @@ def cmd_watch(cfg, args):
     deadline = time.monotonic() + args.budget
     seen = args.since
     last_report = time.monotonic()
-    # The socket only reports an end it was present for. Attach after the
-    # hangup and it just gets 4004 forever, which would otherwise surface as
-    # "idle" -- indistinguishable from a live call where nobody is talking.
     next_status = 0.0
     while time.monotonic() < deadline:
         if time.monotonic() >= next_status:
@@ -381,8 +380,10 @@ def cmd_watch(cfg, args):
         time.sleep(0.4)
 
     stop.set()
+    # `turns_total: 0` alone is ambiguous -- a silent call and a dead socket
+    # look identical -- so say which it was.
     emit({"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
-          "monitor_error": state["error"], "message_types": sorted(state["types"])})
+          "monitor": state["error"] or ("receiving" if state["types"] else "no frames")})
 
 
 def ended_result(cfg, call_id, why):

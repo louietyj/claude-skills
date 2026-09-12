@@ -125,6 +125,12 @@ call screening.
 `--interval` seconds of new dialogue, or the call ending. Then you act and call
 it again.
 
+`--budget` is how long a single `watch` blocks before returning empty — 200s by
+default, sized to finish inside the sandbox's 300s hard kill, which discards all
+output when it fires. `--since` is how many turns you have already seen: pass
+back the `turns_total` from the previous `watch` and you get only what is new
+instead of the whole conversation again.
+
 **Choose `--interval` for what the call is doing.** A consult returns
 immediately whatever it is set to, so a long interval never delays the thing
 that actually needs you; it only decides how often you get an unprompted look.

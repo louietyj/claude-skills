@@ -137,6 +137,15 @@ drifting, or when Louie tells you something new mid-call. It lands as an
 When the call ends, `watch` returns the transcript with it. Tell Louie what was
 agreed.
 
+### If Louie wants to listen or take over
+
+Point him at **`dashboard.retellai.com/live-monitoring`**, which lists ongoing
+calls and offers live transcript, listen-in, take-over and hang-up. It reaches
+Retell directly and needs nothing from you — so this works from claude.ai, where
+you could not host a WebRTC page even if you wanted to. Offer it for the first
+few real calls; a take-over silences the agent permanently, so after one, the
+call is his.
+
 ## Things that will bite you
 
 - **An unset variable renders as a literal `{{brief}}`.** `dispatch` refuses
@@ -147,6 +156,11 @@ agreed.
   conversation back to you — it is attached automatically.
 - **A call still ringing is not a call that ended.** Handled, but a `4004` from
   the monitor socket means "not live yet", not "over".
+- **A take-over is not a hangup.** If Louie seizes the call from the dashboard,
+  Retell ends the *agent's* leg — he is still on the phone. `watch` returns
+  `event: taken_over`, and the transcript stops dead at that moment: nothing
+  said afterwards is recorded anywhere. Ask him how it went; do not report the
+  truncated transcript as the outcome.
 - **Never re-import the agent JSON in the dashboard.** It forks a new `agent_id`
   and silently orphans the config. Agent changes go through `/update-agent` and
   `/update-retell-llm`, which mutate in place.

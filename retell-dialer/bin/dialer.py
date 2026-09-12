@@ -387,6 +387,19 @@ def ended_result(cfg, call_id, why):
     out["source"] = rec["source"]
     content = rec["content"]
     out["transcript"] = render_turns(content) if isinstance(content, list) else content
+
+    # A take-over is not a hangup. Retell ends the *agent's* leg and stops the
+    # clock, but the human is still on the phone -- and nothing said from here
+    # on is recorded anywhere, so a supervisor told "call ended" would go on to
+    # summarise a call it saw only the first minute of.
+    if rec["disconnection_reason"] == "call_take_over":
+        out["event"] = "taken_over"
+        out["call_ended"] = False
+        out["note"] = ("Louie took over and the agent was dropped. He is still on "
+                       "the call; you are not supervising it any more. The "
+                       "transcript above stops at the take-over and nothing after "
+                       "it is recorded -- ask him how it went rather than "
+                       "reporting this as the outcome.")
     return out
 
 

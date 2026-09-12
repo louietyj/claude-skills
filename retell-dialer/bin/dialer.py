@@ -351,7 +351,18 @@ def cmd_watch(cfg, args):
     deadline = time.monotonic() + args.budget
     seen = args.since
     last_report = time.monotonic()
+    # The socket only reports an end it was present for. Attach after the
+    # hangup and it just gets 4004 forever, which would otherwise surface as
+    # "idle" -- indistinguishable from a live call where nobody is talking.
+    next_status = 0.0
     while time.monotonic() < deadline:
+        if time.monotonic() >= next_status:
+            next_status = time.monotonic() + 15
+            live = call_status(cfg, call_id)
+            if live in ("ended", "error") and not state["consult"]:
+                stop.set()
+                return emit({"event": "call_ended",
+                             **ended_result(cfg, call_id, live)})
         if state["consult"]:
             stop.set()
             return emit({"event": "consult", **state["consult"],

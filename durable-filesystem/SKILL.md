@@ -12,8 +12,10 @@ The command list is not the interface: writes need a `rev` proving you read the 
 ## Setup (once per conversation)
 
 ```bash
-bash /mnt/skills/user/durable-filesystem/setup.sh
+bash /mnt/skills/*/durable-filesystem/setup.sh
 ```
+
+The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or `/mnt/skills/plugins/` depending on how it was installed, and hardcoding either one breaks on the other.
 
 Puts `cfs` on PATH and proves it can reach the store. **`session-init` runs this for you — if this file reached you through its transcript, setup is done; do not run it again.**
 

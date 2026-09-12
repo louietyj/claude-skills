@@ -34,8 +34,12 @@ judgement is good and check it anyway, hardest on anything irreversible.
 ## Setup (once per conversation)
 
 ```bash
-bash /mnt/skills/user/retell-dialer/setup.sh
+bash /mnt/skills/*/retell-dialer/setup.sh
 ```
+
+The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
+`/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
+one breaks on the other.
 
 Puts `dialer` on PATH and proves the consult queue answers. If it **fails, stop
 and tell Louie** — do not place a call. Without the queue, `consult_supervisor`

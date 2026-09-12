@@ -111,7 +111,7 @@ def journal(command, **fields):
                                 ensure_ascii=False) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
@@ -123,6 +123,24 @@ def cmd_journal(cfg, args):
         lines = [l for l in fh.read().splitlines() if l.strip()]
     for line in lines[-args.limit:]:
         print(line)
+
+
+def merge_turns(by_id, msg):
+    """Apply one monitor frame to the turn map. True if it carried turns.
+
+    `transcript_snapshot` is the whole conversation; `transcript_updated` is
+    only what changed, including a turn already sent, growing word by word as
+    it is spoken. Replacing loses everything; appending emits the same sentence
+    a dozen times.
+    """
+    incoming = msg.get("transcripts")
+    if not isinstance(incoming, list):
+        return False
+    if msg.get("type") == "transcript_snapshot":
+        by_id.clear()
+    for turn in incoming:
+        by_id[turn.get("id") or len(by_id)] = turn
+    return True
 
 
 # --- call status -------------------------------------------------------------
@@ -152,7 +170,10 @@ def find_ongoing_call(cfg):
 def check_vars(variables):
     """An unset variable renders as a literal `{{brief}}`, and since the whole
     prompt lives in one, a typo means an agent on a live call with no brief."""
-    missing = [k for k in DYNAMIC_VARS if not str(variables.get(k, "")).strip()]
+    # `str(None)` is "None" -- truthy, and exactly what `--brief-file` omitted
+    # leaves behind, so a bare None has to be caught before the strip().
+    missing = [k for k in DYNAMIC_VARS
+               if not str(variables.get(k) or "").strip()]
     if missing:
         die("refusing to dispatch -- these render as literal {{...}} in the "
             f"prompt: {', '.join(missing)}")
@@ -367,19 +388,8 @@ def cmd_watch(cfg, args):
                 if kind == "call_ended":
                     state["ended"] = "call_ended"
                     return
-                # `transcript_snapshot` carries the whole conversation;
-                # `transcript_updated` carries only the turns that changed,
-                # including a turn already sent, growing word by word as it is
-                # spoken. So merge by id rather than replacing -- and never
-                # append, which would emit the same sentence a dozen times.
-                incoming = msg.get("transcripts")
-                if not isinstance(incoming, list):
-                    continue
-                if kind == "transcript_snapshot":
-                    state["by_id"].clear()
-                for turn in incoming:
-                    state["by_id"][turn.get("id") or len(state["by_id"])] = turn
-                state["turns"] = list(state["by_id"].values())
+                if merge_turns(state["by_id"], msg):
+                    state["turns"] = list(state["by_id"].values())
         finally:
             sock.close()
 

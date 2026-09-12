@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Offline tests for dialer. No network and no live call -- the Retell and
+queue calls under test are stubbed in this process.
+
+Nearly every case here is a regression for a bug that reached a real phone
+call. They are named for the symptom the caller saw, not the function.
+
+    python test_dialer.py
+"""
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+spec = importlib.util.spec_from_file_location("dialer", HERE / "bin" / "dialer.py")
+dialer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(dialer)
+
+
+class Args:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class MonitorFrames(unittest.TestCase):
+    """The live transcript arrived empty for every call until this was fixed:
+    the field is `transcripts`, and an update is a delta keyed by turn id."""
+
+    def merge(self, *frames):
+        by_id = {}
+        for f in frames:
+            dialer.merge_turns(by_id, f)
+        return list(by_id.values())
+
+    def test_snapshot_populates(self):
+        turns = self.merge({"type": "transcript_snapshot", "transcripts": [
+            {"id": "agent_0", "role": "agent", "content": "Hello"},
+            {"id": "user_0", "role": "user", "content": "Yes?"}]})
+        self.assertEqual([t["content"] for t in turns], ["Hello", "Yes?"])
+
+    def test_update_grows_a_turn_in_place(self):
+        # The symptom this prevents: appending emitted the same sentence once
+        # per word, because an utterance is streamed as it is spoken.
+        turns = self.merge(
+            {"type": "transcript_snapshot", "transcripts": [
+                {"id": "agent_0", "role": "agent", "content": "I'll need"}]},
+            {"type": "transcript_updated", "transcripts": [
+                {"id": "agent_0", "role": "agent", "content": "I'll need to"}]},
+            {"type": "transcript_updated", "transcripts": [
+                {"id": "agent_0", "role": "agent", "content": "I'll need to check"}]})
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["content"], "I'll need to check")
+
+    def test_update_appends_a_new_turn(self):
+        turns = self.merge(
+            {"type": "transcript_snapshot", "transcripts": [
+                {"id": "agent_0", "role": "agent", "content": "Hello"}]},
+            {"type": "transcript_updated", "transcripts": [
+                {"id": "user_0", "role": "user", "content": "Hi"}]})
+        self.assertEqual([t["id"] for t in turns], ["agent_0", "user_0"])
+
+    def test_snapshot_resets_but_update_does_not(self):
+        by_id = {}
+        dialer.merge_turns(by_id, {"type": "transcript_snapshot", "transcripts": [
+            {"id": "a", "content": "one"}]})
+        dialer.merge_turns(by_id, {"type": "transcript_updated", "transcripts": [
+            {"id": "b", "content": "two"}]})
+        self.assertEqual(len(by_id), 2)
+        dialer.merge_turns(by_id, {"type": "transcript_snapshot", "transcripts": [
+            {"id": "c", "content": "three"}]})
+        self.assertEqual([t["content"] for t in by_id.values()], ["three"])
+
+    def test_non_transcript_frames_are_ignored(self):
+        by_id = {}
+        for frame in ({"type": "call_ended"}, {"type": "metadata", "transcripts": None}):
+            self.assertFalse(dialer.merge_turns(by_id, frame))
+        self.assertEqual(by_id, {})
+
+
+class RenderTurns(unittest.TestCase):
+    def test_live_marks_only_the_last_line(self):
+        lines = dialer.render_turns(
+            [{"role": "agent", "content": "Hello"},
+             {"role": "user", "content": "And what is the last 4 of his"}], live=True)
+        self.assertNotIn(dialer.IN_PROGRESS, lines[0])
+        self.assertTrue(lines[-1].endswith(dialer.IN_PROGRESS))
+
+    def test_finished_transcript_is_not_marked(self):
+        lines = dialer.render_turns([{"role": "agent", "content": "Bye"}])
+        self.assertNotIn(dialer.IN_PROGRESS, lines[0])
+
+    def test_live_with_no_turns_does_not_crash(self):
+        self.assertEqual(dialer.render_turns([], live=True), [])
+
+    def test_tool_calls_are_visible(self):
+        lines = dialer.render_turns([
+            {"role": "tool_call_invocation", "name": "press_digit",
+             "arguments": '{"digit_to_press": "3"}'},
+            {"role": "tool_call_result", "content": "ok"}])
+        self.assertIn("press_digit", lines[0])
+        self.assertIn("ok", lines[1])
+
+    def test_word_timings_are_dropped(self):
+        lines = dialer.render_turns(
+            [{"role": "agent", "content": "Hi", "words": [{"word": "Hi"} for _ in range(50)]}])
+        self.assertEqual(lines, ["agent: Hi"])
+
+
+class CheckVars(unittest.TestCase):
+    """An unset variable renders as a literal `{{brief}}` -- a live call with
+    no instructions at all."""
+
+    def test_empty_and_whitespace_are_refused(self):
+        for bad in ("", "   ", None):
+            with self.assertRaises(SystemExit):
+                dialer.check_vars({"opening": "hi", "call_purpose": "x", "brief": bad})
+
+    def test_complete_set_passes(self):
+        dialer.check_vars({"opening": "hi", "brief": "b", "call_purpose": "p"})
+
+
+class QueueUrl(unittest.TestCase):
+    """A hand-built query string once produced `/poll&wait=20?token=...`."""
+
+    def setUp(self):
+        self.seen = {}
+        self.orig = dialer.request
+        dialer.request = lambda url, **kw: (self.seen.update(url=url, **kw), (200, {}))[1]
+
+    def tearDown(self):
+        dialer.request = self.orig
+
+    def test_token_and_params_are_encoded_once(self):
+        dialer.queue({"worker_url": "https://q.example", "consult_token": "t k/&"},
+                     "/poll", params={"wait": 20})
+        url = self.seen["url"]
+        self.assertEqual(url.count("?"), 1)
+        self.assertIn("token=t+k%2F%26", url)
+        self.assertIn("wait=20", url)
+
+
+class CallRecord(unittest.TestCase):
+    """Scrubbing hides the unredacted keys entirely rather than blanking them,
+    so the preference order decides what the supervisor reads back."""
+
+    def stub(self, payload):
+        dialer.retell = lambda cfg, path, **kw: (200, payload)
+
+    def setUp(self):
+        self.orig = dialer.retell
+
+    def tearDown(self):
+        dialer.retell = self.orig
+
+    def test_prefers_unscrubbed_with_tool_calls(self):
+        self.stub({"transcript_with_tool_calls": [{"role": "agent", "content": "a"}],
+                   "scrubbed_transcript_with_tool_calls": [{"role": "agent", "content": "b"}],
+                   "transcript": "c"})
+        self.assertEqual(dialer.call_record({}, "id")["source"], "transcript_with_tool_calls")
+
+    def test_falls_back_to_scrubbed(self):
+        self.stub({"scrubbed_transcript_with_tool_calls": [{"role": "agent", "content": "b"}]})
+        self.assertEqual(dialer.call_record({}, "id")["source"],
+                         "scrubbed_transcript_with_tool_calls")
+
+    def test_nothing_retained_returns_none(self):
+        self.stub({"call_status": "ended"})
+        self.assertIsNone(dialer.call_record({}, "id", settle=0))
+
+
+class EndedResult(unittest.TestCase):
+    """A take-over ends the agent's leg while Louie stays on the phone, and
+    transcription stops there -- reporting it as a hangup would present a
+    fragment as the outcome."""
+
+    def setUp(self):
+        self.orig = dialer.call_record
+
+    def tearDown(self):
+        dialer.call_record = self.orig
+
+    def stub(self, reason):
+        dialer.call_record = lambda cfg, cid, settle=0: {
+            "source": "transcript_with_tool_calls", "call_status": "ended",
+            "duration_ms": 1000, "disconnection_reason": reason,
+            "content": [{"role": "agent", "content": "hi"}]}
+
+    def test_hangup_is_an_ended_call(self):
+        self.stub("agent_hangup")
+        out = dialer.ended_result({}, "id", "ended")
+        self.assertTrue(out["call_ended"])
+        self.assertNotIn("event", out)
+
+    def test_take_over_is_not(self):
+        self.stub("call_take_over")
+        out = dialer.ended_result({}, "id", "ended")
+        self.assertFalse(out["call_ended"])
+        self.assertEqual(out["event"], "taken_over")
+        self.assertIn("still on the call", out["note"])
+
+    def test_missing_transcript_is_reported_not_invented(self):
+        dialer.call_record = lambda cfg, cid, settle=0: None
+        out = dialer.ended_result({}, "id", "ended")
+        self.assertIsNone(out["transcript"])
+
+
+class Journal(unittest.TestCase):
+    """The only record that survives claude.ai dropping an interrupted tool
+    call, so the intent must be on disk before the request goes out."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.orig = dialer.JOURNAL
+        dialer.JOURNAL = os.path.join(self.tmp, "state", "journal.jsonl")
+
+    def tearDown(self):
+        dialer.JOURNAL = self.orig
+
+    def test_entries_round_trip_in_order(self):
+        dialer.journal("answer", call_id="c1", text="first")
+        dialer.journal("steer", call_id="c1", text="second")
+        with open(dialer.JOURNAL, encoding="utf-8") as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+        self.assertEqual([r["command"] for r in rows], ["answer", "steer"])
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertIn("at", rows[0])
+
+    def test_intent_survives_without_an_outcome(self):
+        # What an interrupted turn leaves behind: the attempt, never the result.
+        dialer.journal("dispatch", to="+15550123")
+        with open(dialer.JOURNAL, encoding="utf-8") as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("status", rows[0])
+
+    def test_unwritable_path_does_not_break_a_live_call(self):
+        dialer.JOURNAL = os.path.join(self.tmp, "nul\0bad", "journal.jsonl")
+        dialer.journal("answer", call_id="c1")  # must not raise
+
+    def test_reader_handles_a_missing_file(self):
+        dialer.JOURNAL = os.path.join(self.tmp, "absent.jsonl")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            dialer.cmd_journal({}, Args(limit=10))
+        self.assertIn("nothing recorded yet", out.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

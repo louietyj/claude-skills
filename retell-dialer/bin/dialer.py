@@ -286,18 +286,32 @@ def cmd_watch(cfg, args):
     stop = threading.Event()
 
     def run_monitor():
-        try:
-            sock = ws.monitor(cfg["retell_api_key"], call_id, timeout=20)
-        except Exception as e:                      # noqa: BLE001 - reported, not raised
-            state["error"] = f"monitor: {type(e).__name__}: {e}"
-            return
+        # 4004 is "call not live yet", not "call over": a call that is still
+        # ringing closes with it, and the stream only exists once the callee
+        # picks up. Treating it as the end reports a hangup during the ring.
+        attempts = 0
+        while not stop.is_set():
+            try:
+                sock = ws.monitor(cfg["retell_api_key"], call_id, timeout=20)
+            except Exception as e:                  # noqa: BLE001 - reported, not raised
+                state["error"] = f"monitor: {type(e).__name__}: {e}"
+                return
+            code = pump(sock)
+            if code != 4004 or attempts >= 8 or stop.is_set():
+                if code is not None and code != 4004:
+                    state["ended"] = state["ended"] or f"ws {code}"
+                return
+            attempts += 1
+            time.sleep(min(4.0, 0.5 * 2 ** attempts))
+
+    def pump(sock):
+        """Drain one connection. Returns its close code, or None if we stopped."""
         try:
             while not stop.is_set():
                 raw = sock.recv(timeout=2)
                 if raw is None:
                     if sock.close_code is not None:
-                        state["ended"] = state["ended"] or f"ws {sock.close_code}"
-                        return
+                        return sock.close_code
                     continue
                 try:
                     msg = json.loads(raw)

@@ -31,6 +31,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
 STAGED = os.path.join(os.path.dirname(HERE), "state", "staged-call.json")
+JOURNAL = os.path.join(os.path.dirname(HERE), "state", "journal.jsonl")
 
 RETELL = "https://api.retellai.com"
 
@@ -95,6 +96,33 @@ def queue(cfg, path, *, method="GET", body=None, timeout=30, params=None):
 
 def emit(obj):
     print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+
+def journal(command, **fields):
+    """Record the intent before the request, flushed, so a process killed
+    mid-flight still leaves a trace. claude.ai drops an interrupted tool call
+    from the transcript; the sandbox disk outlives the turn, so this is the
+    only record that survives one. Never allowed to break a live call."""
+    try:
+        os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
+        with open(JOURNAL, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                 "command": command, **fields},
+                                ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError:
+        pass
+
+
+def cmd_journal(cfg, args):
+    """What this conversation actually did, transcript or no transcript."""
+    if not os.path.exists(JOURNAL):
+        return emit({"entries": [], "note": "nothing recorded yet"})
+    with open(JOURNAL, encoding="utf-8") as fh:
+        lines = [l for l in fh.read().splitlines() if l.strip()]
+    for line in lines[-args.limit:]:
+        print(line)
 
 
 # --- call status -------------------------------------------------------------
@@ -168,7 +196,9 @@ def cmd_dispatch(cfg, args):
                 f"placing it, you may still have done so -- an interrupted turn "
                 f"loses its tool calls. Check `watch --call-id {live}`, or pass "
                 f"--force to dial anyway.")
+    journal("dispatch", to=args.to, purpose=args.purpose)
     status, resp = create_call(cfg, read_variables(args), web=False, to=args.to)
+    journal("dispatch", to=args.to, status=status, call_id=(resp or {}).get("call_id"))
     if status not in (200, 201):
         die(f"dispatch failed ({status}): {json.dumps(resp)[:400]}")
     emit({"call_id": resp.get("call_id"), "call_status": resp.get("call_status"),
@@ -441,8 +471,10 @@ def cmd_answer(cfg, args):
     if not text.strip():
         die("refusing to send an empty answer")
 
+    journal("answer", call_id=args.call_id, text=text)
     status, body = queue(cfg, "/answer", method="POST", timeout=25,
                          body={"call_id": args.call_id, "text": text})
+    journal("answer", call_id=args.call_id, status=status)
     answered = {"answer_status": status, "answer_result": body}
     if status != 200:
         # Do not fall through to polling: the agent may still be holding, and
@@ -465,8 +497,10 @@ def cmd_steer(cfg, args):
     transcript as role `injected` -- not spoken by either party."""
     body = {"call_control": {"additional_context": args.text,
                              "trigger_response": args.speak_now}}
+    journal("steer", call_id=args.call_id, text=args.text, speak_now=args.speak_now)
     status, resp = retell(cfg, f"/v2/update-live-call/{args.call_id}",
                           method="PATCH", body=body)
+    journal("steer", call_id=args.call_id, status=status)
     emit({"status": status, "result": resp})
 
 
@@ -683,6 +717,10 @@ def main():
     c.add_argument("call_id")
     c.add_argument("--raw", action="store_true")
     c.set_defaults(fn=cmd_call)
+
+    j = sub.add_parser("journal", help="what this conversation actually did")
+    j.add_argument("--limit", type=int, default=30)
+    j.set_defaults(fn=cmd_journal)
 
     sub.add_parser("health", help="check queue, token, agent and number").set_defaults(fn=cmd_health)
     sub.add_parser("agent-pull", help="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)

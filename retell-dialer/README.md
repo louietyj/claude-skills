@@ -22,7 +22,7 @@ to avoid.
 | | |
 |---|---|
 | `SKILL.md` | the skill body — how to run a call |
-| `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript |
+| `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript, journal |
 | `bin/ws.py` | stdlib RFC 6455 client for Retell's live-transcript socket |
 | `worker/` | the Durable Object queue (`wrangler deploy`) |
 | `agent/agent.json` | the Retell agent + response engine, ids templated out |

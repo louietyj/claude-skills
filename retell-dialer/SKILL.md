@@ -160,6 +160,12 @@ watching and wants a course correction, he has to ask you for it.
   conversation back to you — it is attached automatically.
 - **A call still ringing is not a call that ended.** Handled, but a `4004` from
   the monitor socket means "not live yet", not "over".
+- **Keypresses are inaudible, to everyone.** DTMF travels out-of-band, so
+  neither Louie nor a live listener hears a tone — the digits are in the
+  transcript as `[TOOL press_digit]` and nowhere else. He cannot verify keypad
+  navigation by ear, and if a far-end system wants in-band tones instead, the
+  digits vanish silently and the menu simply repeats. A menu looping twice is
+  the signature; stop pressing and find another route rather than retrying.
 - **A take-over is not a hangup.** If Louie seizes the call from the dashboard,
   Retell ends the *agent's* leg — he is still on the phone. `watch` returns
   `event: taken_over`, and the dashboard says outright "Transcription is paused

@@ -55,6 +55,11 @@ The prompt is deliberately almost empty — `{{brief}}` plus the invariants. Thr
 dynamic variables are supplied per call (`opening`, `brief`, `call_purpose`), so
 each call's instructions are written fresh rather than configured once.
 
+Retell surcharges prompts above ~3,500 tokens. At this volume that is a rounding
+error against the cost of a stalled call, so write the dense brief; if one
+genuinely runs long, move the stable half (standing identity and insurance
+details) into a knowledge base rather than trimming decision authority.
+
 ## A phone number
 
 Buy one in the Retell dashboard (~$2/mo) or import a Twilio number, then put it

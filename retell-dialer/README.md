@@ -27,7 +27,7 @@ to avoid.
 | `worker/` | the Durable Object queue (`wrangler deploy`) |
 | `agent/agent.json` | the Retell agent + response engine, ids templated out |
 | `dev/webcall/` | localhost launcher, for exercising the loop without PSTN |
-| `references/` | writing a brief; provisioning |
+| `references/provisioning.md` | deploying the Worker, the agent, PII settings |
 
 ## Setup
 

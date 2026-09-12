@@ -23,7 +23,6 @@ MEMBERS = [
     "setup.sh",
     "bin/dialer.py",
     "bin/ws.py",
-    "references/brief.md",
     "references/provisioning.md",
     "config.json",
 ]

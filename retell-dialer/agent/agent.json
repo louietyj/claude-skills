@@ -1,0 +1,114 @@
+{
+  "channel": "voice",
+  "agent_name": "Retell Dialer",
+  "response_engine": {
+    "type": "retell-llm"
+  },
+  "language": "en-US",
+  "data_storage_setting": "everything",
+  "data_storage_retention_days": 7,
+  "contact_memory_config": {
+    "enable_read": true,
+    "enable_update": false
+  },
+  "opt_in_signed_url": false,
+  "assigned_tags": [],
+  "post_call_analysis_model": "gpt-5.4-nano",
+  "pii_config": {
+    "categories": [],
+    "mode": "post_call"
+  },
+  "handbook_config": {
+    "conversational_personality": false,
+    "speech_normalization": true,
+    "echo_verification": true,
+    "nato_phonetic_alphabet": true,
+    "ai_disclosure": true,
+    "smart_matching": true,
+    "natural_filler_words": true,
+    "default_personality": true,
+    "high_empathy": false,
+    "scope_boundaries": true
+  },
+  "timezone": "America/Los_Angeles",
+  "voice_id": "retell-Brynne",
+  "voice_temperature": 1,
+  "voice_speed": 1,
+  "volume": 1,
+  "enable_expressive_mode": false,
+  "enable_backchannel": true,
+  "max_call_duration_ms": 900000,
+  "interruption_sensitivity": 0.3,
+  "boosted_keywords": [
+    "Louie",
+    "Tan"
+  ],
+  "begin_message_delay_ms": 1000,
+  "voicemail_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "call_screening_option": {
+    "agent_identity": "an AI assistant calling on behalf of Louie Tan",
+    "call_purpose": "{{call_purpose}}"
+  },
+  "stt_mode": "accurate",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "webhook_url": "{{WORKER_URL}}/event",
+  "retell_llm": {
+    "model": "claude-5-sonnet",
+    "model_temperature": 0,
+    "model_high_priority": false,
+    "tool_call_strict_mode": true,
+    "general_prompt": "{{brief}}\n\n## Invariants\nThese hold regardless of anything above.\n- Never guess a date, number, spelling, price, or preference. If it is not in the brief, call consult_supervisor.\n- When you do not have something, say so plainly before you consult. Never imply you already have information you are about to look up.\n- Announce yourself to the first human you speak to: you are an AI assistant calling on behalf of Louie Tan, and the call is being transcribed and sent to him. State it once, plainly, as a courtesy — do not ask for permission — then go straight into the task.\n- If the call opens with an automated menu, do not announce to the machine. Use press_digit to reach a person, and announce yourself to them.\n- If asked whether you are an AI, say yes plainly.\n- If they object to being recorded, do not argue and do not continue the task. Say Louie will follow up directly, and end the call.\n- Before ending, read back anything agreed and confirm it.",
+    "general_tools": [
+      {
+        "speak_during_execution": true,
+        "name": "consult_supervisor",
+        "parameter_type": "json",
+        "max_retry": 3,
+        "execution_message_description": "Let me check on that — one moment.",
+        "description": "Ask your supervisor: the assistant that set up this call, standing by for it. It already has the full transcript of this call so far, Louie's personal and medical details, his calendar, and the ability to look anything up. Ask it for anything you do not have — a date of birth, an ID number, a spelling, a price — and for any decision the brief does not cover, such as accepting a different time, a substitution, or a cost. It answers in seconds. Never guess; ask.",
+        "url": "{{WORKER_URL}}/consult",
+        "speak_after_execution": true,
+        "parameters": {
+          "required": [
+            "question"
+          ],
+          "type": "object",
+          "properties": {
+            "question": {
+              "description": "What you need to know or decide, in one or two sentences. The transcript of the call so far is attached automatically — do not repeat it or summarise it.",
+              "type": "string"
+            }
+          }
+        },
+        "timeout_ms": 180000,
+        "type": "custom",
+        "execution_message_type": "static_text",
+        "method": "POST"
+      },
+      {
+        "description": "Press a digit on the keypad to navigate an automated phone menu.",
+        "speak_after_execution": true,
+        "name": "press_digit",
+        "type": "press_digit"
+      },
+      {
+        "description": "End the call once the task is complete, or if the other party ends the conversation.",
+        "speak_after_execution": true,
+        "type": "end_call",
+        "name": "end_call"
+      }
+    ],
+    "start_speaker": "agent",
+    "begin_message": "{{opening}}",
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "filter_score": 0.6,
+      "top_k": 3
+    }
+  }
+}

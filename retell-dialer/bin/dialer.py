@@ -28,6 +28,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
+STAGED = os.path.join(os.path.dirname(HERE), "state", "staged-call.json")
 
 RETELL = "https://api.retellai.com"
 
@@ -135,49 +136,98 @@ def read_variables(args):
     return {"opening": args.opening, "brief": brief, "call_purpose": args.purpose}
 
 
-def cmd_dispatch(cfg, args):
-    variables = read_variables(args)
+def create_call(cfg, variables, *, web, to=None):
     check_vars(variables)
-    if not args.web:
-        if not args.to:
-            die("--to is required for a PSTN call; --web needs no number")
-        if not cfg.get("from_number"):
-            die("no from_number in config -- buy a Retell number for PSTN, or "
-                "use `dispatch --web` to run the same loop as a browser call")
-
-    if args.web:
+    if web:
         path, body = "/v2/create-web-call", {"agent_id": cfg["agent_id"]}
     else:
         path = "/v2/create-phone-call"
-        body = {"from_number": cfg["from_number"], "to_number": args.to,
+        body = {"from_number": cfg["from_number"], "to_number": to,
                 "override_agent_id": cfg["agent_id"]}
     body["retell_llm_dynamic_variables"] = variables
+    return retell(cfg, path, method="POST", body=body)
 
-    status, resp = retell(cfg, path, method="POST", body=body)
+
+def cmd_dispatch(cfg, args):
+    if not args.to:
+        die("--to is required; for a browser call use `stage` + `serve`")
+    if not cfg.get("from_number"):
+        die("no from_number in config -- buy a Retell number for PSTN, or use "
+            "`stage` + `serve` to run the same loop as a browser call")
+    status, resp = create_call(cfg, read_variables(args), web=False, to=args.to)
     if status not in (200, 201):
         die(f"dispatch failed ({status}): {json.dumps(resp)[:400]}")
+    emit({"call_id": resp.get("call_id"), "call_status": resp.get("call_status"),
+          "call_type": resp.get("call_type")})
 
-    out = {"call_id": resp.get("call_id"), "call_status": resp.get("call_status"),
-           "call_type": resp.get("call_type")}
-    if args.web:
-        # In the fragment, so the token never reaches the dev server's log.
-        out["join_url"] = f"http://localhost:{args.port}/#token={resp['access_token']}"
-        out["note"] = "run `dialer serve` first, then open join_url"
-    emit(out)
+
+def cmd_stage(cfg, args):
+    """Park a brief for the launcher to dispatch when the browser is ready.
+
+    A registered web call expires within about a minute, so a token minted up
+    front loses the race against however long it takes someone to read the
+    message and click. Staging inverts that: the call is created by the click,
+    so it is always seconds old."""
+    variables = read_variables(args)
+    check_vars(variables)
+    os.makedirs(os.path.dirname(STAGED), exist_ok=True)
+    with open(STAGED, "w", encoding="utf-8") as fh:
+        json.dump(variables, fh, indent=2, ensure_ascii=False)
+    emit({"staged": os.path.basename(STAGED),
+          "call_purpose": variables["call_purpose"],
+          "next": f"open http://localhost:{args.port}/ and click Join call"})
 
 
 def cmd_serve(cfg, args):
-    """Static server for the web-call launcher. localhost specifically:
-    getUserMedia needs a secure context and file:// is not one."""
-    import functools
+    """Launcher for browser calls. Serves the page and mints a call on demand.
+
+    localhost specifically: getUserMedia needs a secure context, and file:// is
+    not one."""
     import http.server
 
     root = os.path.join(os.path.dirname(HERE), "dev", "webcall")
     if not os.path.exists(os.path.join(root, "retell-sdk.js")):
         die(f"no bundled SDK at {root} -- run dev/webcall/build.sh")
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=root, **kw)
+
+        def reply(self, obj, code=200):
+            raw = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self):
+            if self.path != "/dispatch":
+                return self.reply({"error": "not found"}, 404)
+            if not os.path.exists(STAGED):
+                return self.reply({"error": "nothing staged -- run `dialer stage`"}, 409)
+            with open(STAGED, encoding="utf-8") as fh:
+                variables = json.load(fh)
+            status, resp = create_call(cfg, variables, web=True)
+            if status not in (200, 201):
+                return self.reply({"error": "create-web-call failed",
+                                   "status": status, "body": resp}, 502)
+            print(f"dispatched {resp.get('call_id')}", flush=True)
+            self.reply({"call_id": resp.get("call_id"),
+                        "access_token": resp.get("access_token")})
+
+    class Server(http.server.ThreadingHTTPServer):
+        # On Windows the inherited allow_reuse_address lets a second bind to a
+        # live port succeed silently, while the first process goes on answering.
+        # That presents as code changes having no effect -- and here, as a stale
+        # launcher serving a page that no longer matches the CLI.
+        allow_reuse_address = False
+
     print(f"serving {root} on http://localhost:{args.port}/", flush=True)
-    http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler).serve_forever()
+    try:
+        Server(("127.0.0.1", args.port), Handler).serve_forever()
+    except OSError as e:
+        die(f"port {args.port} is already in use ({e}) -- stop the other launcher")
 
 
 def cmd_pending(cfg, args):
@@ -213,6 +263,89 @@ def poll_loop(cfg, call_id, budget):
             return {"call_ended": True, "call_id": call_id, "call_status": state}
         if call_id is None:
             call_id = find_ongoing_call(cfg)
+
+
+def cmd_watch(cfg, args):
+    """Supervise on two channels: the consult queue and the live transcript.
+
+    `poll` only wakes when the agent asks, which leaves the other half of
+    supervision unserved -- the agent mishandling something it does not know it
+    is mishandling. Retell's monitor websocket is consumed inside this call and
+    never surfaces as a stream; it just gives the command something to return
+    on besides a consult. Acting on what comes back is `steer`, which needs
+    nobody waiting on the far end."""
+    import threading
+
+    import ws
+
+    call_id = args.call_id or find_ongoing_call(cfg)
+    if not call_id:
+        die("no ongoing call found -- pass --call-id")
+
+    state = {"turns": [], "ended": None, "consult": None, "error": None, "types": set()}
+    stop = threading.Event()
+
+    def run_monitor():
+        try:
+            sock = ws.monitor(cfg["retell_api_key"], call_id, timeout=20)
+        except Exception as e:                      # noqa: BLE001 - reported, not raised
+            state["error"] = f"monitor: {type(e).__name__}: {e}"
+            return
+        try:
+            while not stop.is_set():
+                raw = sock.recv(timeout=2)
+                if raw is None:
+                    if sock.close_code is not None:
+                        state["ended"] = state["ended"] or f"ws {sock.close_code}"
+                        return
+                    continue
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                state["types"].add(msg.get("type", "?"))
+                if msg.get("type") == "call_ended":
+                    state["ended"] = "call_ended"
+                    return
+                turns = msg.get("transcript")
+                if isinstance(turns, list):
+                    state["turns"] = turns
+        finally:
+            sock.close()
+
+    def run_poll():
+        _, body = queue(cfg, "/poll", params={"wait": args.budget}, timeout=args.budget + 15)
+        if isinstance(body, dict) and body.get("question"):
+            state["consult"] = body
+
+    threads = [threading.Thread(target=t, daemon=True) for t in (run_monitor, run_poll)]
+    for t in threads:
+        t.start()
+
+    deadline = time.monotonic() + args.budget
+    seen = args.since
+    last_report = time.monotonic()
+    while time.monotonic() < deadline:
+        if state["consult"]:
+            stop.set()
+            return emit({"event": "consult", **state["consult"],
+                         "live_turns": len(state["turns"])})
+        if state["ended"]:
+            stop.set()
+            return emit({"event": "call_ended", "call_id": call_id,
+                         "why": state["ended"], "transcript": render_turns(state["turns"])})
+        grown = len(state["turns"]) > seen
+        if grown and time.monotonic() - last_report >= args.interval:
+            stop.set()
+            return emit({"event": "transcript", "call_id": call_id,
+                         "turns_total": len(state["turns"]),
+                         "new": render_turns(state["turns"][seen:]),
+                         "hint": "steer with `dialer steer`, or `watch --since N` to continue"})
+        time.sleep(0.4)
+
+    stop.set()
+    emit({"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
+          "monitor_error": state["error"], "message_types": sorted(state["types"])})
 
 
 def cmd_poll(cfg, args):
@@ -345,20 +478,36 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("dispatch", help="start a call with a brief written for it")
+    def brief_args(parser):
+        parser.add_argument("--opening", required=True,
+                            help="first line; carries the AI announcement")
+        parser.add_argument("--purpose", required=True,
+                            help="one phrase, for call screening")
+        parser.add_argument("--brief")
+        parser.add_argument("--brief-file")
+        parser.add_argument("--port", type=int, default=8765)
+
+    d = sub.add_parser("dispatch", help="place a PSTN call with a brief written for it")
     d.add_argument("--to", help="callee, E.164")
-    d.add_argument("--web", action="store_true",
-                   help="browser call instead of PSTN -- same consult loop, no number needed")
-    d.add_argument("--opening", required=True, help="first line; carries AI disclosure and recording consent")
-    d.add_argument("--purpose", required=True, help="one phrase, for call screening")
-    d.add_argument("--brief")
-    d.add_argument("--brief-file")
-    d.add_argument("--port", type=int, default=8765, help="dev launcher port, for --web")
+    brief_args(d)
     d.set_defaults(fn=cmd_dispatch)
 
-    sv = sub.add_parser("serve", help="dev static server for the --web launcher")
+    st = sub.add_parser("stage", help="park a brief for the browser launcher to dial")
+    brief_args(st)
+    st.set_defaults(fn=cmd_stage)
+
+    sv = sub.add_parser("serve", help="browser-call launcher (dev/test)")
     sv.add_argument("--port", type=int, default=8765)
     sv.set_defaults(fn=cmd_serve)
+
+    w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
+    w.add_argument("--call-id")
+    w.add_argument("--budget", type=int, default=POLL_BUDGET)
+    w.add_argument("--interval", type=int, default=15,
+                   help="seconds of new dialogue to accumulate before returning")
+    w.add_argument("--since", type=int, default=0,
+                   help="turns already seen; report only what is new")
+    w.set_defaults(fn=cmd_watch)
 
     p = sub.add_parser("poll", help="block until the agent consults, or the call ends")
     p.add_argument("--call-id")

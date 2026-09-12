@@ -37,7 +37,6 @@
 not cover and watch the consult fire.</p>
 
 <div class="bar">
-  <input id="token" placeholder="access_token from `dialer dispatch --web`" spellcheck="false">
   <button id="start">Join call</button>
   <button id="stop" disabled>Hang up</button>
 </div>
@@ -49,56 +48,64 @@ not cover and watch the consult fire.</p>
 <script>
   const $ = id => document.getElementById(id);
   const setStatus = t => { $("status").textContent = t; };
-
-  // The token is long and opaque; pasting it by hand is exactly the friction
-  // this page exists to remove, so `dialer dispatch --web` prints a URL with it
-  // already in the fragment. A fragment, not a query string, so it stays out of
-  // the server's request log.
-  const fromUrl = new URLSearchParams(location.hash.slice(1)).get("token");
-  if (fromUrl) $("token").value = fromUrl;
-
-  const client = new Retell.RetellWebClient();
-
-  client.on("call_started", () => setStatus("connected — speak"));
-  client.on("call_ended", () => {
-    setStatus("call ended");
-    $("start").disabled = false;
-    $("stop").disabled = true;
-  });
-  client.on("error", e => {
-    setStatus("error: " + (e?.message || e));
-    client.stopCall();
-  });
-
-  // The SDK re-sends the whole transcript on every update rather than a delta,
-  // so redraw instead of appending — appending duplicates every turn.
-  client.on("update", update => {
-    const turns = update?.transcript;
+  const renderTurns = turns => {
     if (!Array.isArray(turns)) return;
+    // The SDK re-sends the whole transcript each time rather than a delta, so
+    // redraw instead of appending.
     $("transcript").replaceChildren(...turns.map(t => {
       const el = document.createElement("div");
       el.className = "turn " + (t.role === "agent" ? "agent" : "user");
-      el.innerHTML = "<span class='who'></span>";
-      el.firstChild.textContent = t.role === "agent" ? "agent" : "you";
-      el.append(t.content ?? "");
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = t.role === "agent" ? "agent" : "you";
+      el.append(who, t.content ?? "");
       return el;
     }));
     window.scrollTo(0, document.body.scrollHeight);
-  });
+  };
+
+  // The call is created by this click, not handed over in advance. A
+  // registered web call expires in about a minute, so a token minted when the
+  // message was written has usually gone stale by the time anyone clicks it --
+  // which reads as "the button does nothing".
+  let client = null;
+
+  const wire = c => {
+    c.on("status", s => {
+      setStatus(s);
+      const live = s === "live" || s === "connecting";
+      $("start").disabled = live;
+      $("stop").disabled = !live;
+    });
+    c.on("transcript", renderTurns);
+    c.on("update", e => renderTurns(e?.transcript));
+    c.on("end", () => setStatus("call ended"));
+    c.on("error", e => setStatus("error: " + (e?.message || e)));
+  };
 
   $("start").onclick = async () => {
-    const accessToken = $("token").value.trim();
-    if (!accessToken) return setStatus("paste an access_token first");
     $("start").disabled = true;
-    setStatus("connecting…");
+    setStatus("dialling…");
     try {
-      await client.startCall({ accessToken });
+      const r = await fetch("/dispatch", { method: "POST" });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || ("dispatch failed: " + r.status));
+      setStatus("connecting… " + body.call_id);
+      if (!client) { client = new Retell.RetellWebClient(); wire(client); }
+      await client.startCall({ accessToken: body.access_token });
+      // Autoplay policy blocks the agent's audio unless playback resumes from
+      // inside a user gesture, which this click still is.
+      await client.startAudioPlayback?.();
       $("stop").disabled = false;
     } catch (e) {
-      setStatus("failed to start: " + (e?.message || e));
+      console.error(e);
+      setStatus("failed: " + (e?.message || e));
       $("start").disabled = false;
     }
   };
 
-  $("stop").onclick = () => client.stopCall();
+  $("stop").onclick = () => { client?.stopCall(); setStatus("call ended"); };
+
+  window.addEventListener("error", e => setStatus("page error: " + e.message));
+  setStatus(window.Retell ? "idle -- SDK loaded" : "SDK FAILED TO LOAD");
 </script>

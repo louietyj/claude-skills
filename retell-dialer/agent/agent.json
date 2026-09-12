@@ -6,7 +6,6 @@
   },
   "language": "en-US",
   "data_storage_setting": "everything",
-  "data_storage_retention_days": 7,
   "contact_memory_config": {
     "enable_read": true,
     "enable_update": false
@@ -37,13 +36,14 @@
   "volume": 1,
   "enable_expressive_mode": false,
   "enable_backchannel": false,
-  "max_call_duration_ms": 900000,
+  "max_call_duration_ms": 1800000,
   "interruption_sensitivity": 0.3,
   "boosted_keywords": [
     "Louie",
     "Tan"
   ],
   "begin_message_delay_ms": 1000,
+  "ring_duration_ms": 60000,
   "voicemail_option": {
     "action": {
       "type": "hangup"

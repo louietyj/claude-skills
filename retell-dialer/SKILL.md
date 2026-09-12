@@ -121,24 +121,25 @@ dialer journal                         # what you actually did, after an interru
 (the invariants fix the announcement wording). `--purpose` is a short phrase for
 call screening.
 
-`watch` blocks and returns on whichever comes first — a consult, roughly
-`--interval` seconds of new dialogue, or the call ending. Then you act and call
-it again.
+`watch` blocks and returns on the first of four things: a consult, the call
+ending, `--interval` seconds of *new dialogue* having accumulated, or
+`--budget` expiring with nothing to report. Then you act and call it again.
 
-`--budget` is how long a single `watch` blocks before returning empty — 200s by
-default, sized to finish inside the sandbox's 300s hard kill, which discards all
-output when it fires. `--since` is how many turns you have already seen: pass
-back the `turns_total` from the previous `watch` and you get only what is new
-instead of the whole conversation again.
+The two timers cover different situations, which is why both exist.
+`--interval` is a floor on batching rather than a cap on waiting: it only fires
+once somebody has actually spoken, and it keeps `watch` from returning once per
+word. `--budget` governs **silence** — hold music, a long recorded menu, the
+other party gone to check something — where no turns arrive and `--interval`
+never fires at all. It defaults to 200s, sized to finish inside the sandbox's
+300s hard kill, which discards all output when it fires.
 
-**Choose `--interval` for what the call is doing.** A consult returns
-immediately whatever it is set to, so a long interval never delays the thing
-that actually needs you; it only decides how often you get an unprompted look.
-Tool calls are finite on claude.ai and every return spends one, so bias long:
-45–60s while an IVR is being navigated or the line is on hold, where there is
-nothing to react to, and 15–20s once a negotiation is live and a steer might
-matter. Use judgement — the default of 30 is a compromise, not a
-recommendation.
+`--since` is how many turns you have already seen: pass back `turns_total` from
+the previous `watch` to get only what is new.
+
+A consult returns immediately whatever these are set to, so neither ever delays
+the thing that actually needs you. Tool calls are finite on claude.ai and every
+return spends one, so lower `--interval` to 15–20s only when a negotiation is
+live and a steer might matter; leave it at 30 otherwise.
 
 ### After any interjection, read the journal first
 

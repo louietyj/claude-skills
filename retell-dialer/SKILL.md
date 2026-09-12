@@ -139,12 +139,16 @@ agreed.
 
 ### If Louie wants to listen or take over
 
-Point him at **`dashboard.retellai.com/live-monitoring`**, which lists ongoing
-calls and offers live transcript, listen-in, take-over and hang-up. It reaches
-Retell directly and needs nothing from you — so this works from claude.ai, where
-you could not host a WebRTC page even if you wanted to. Offer it for the first
-few real calls; a take-over silences the agent permanently, so after one, the
-call is his.
+Point him at **`dashboard.retellai.com/live-monitoring`**. Clicking the ongoing
+call opens a panel with a live transcript and three controls: `Live Listen`,
+`Take Over`, `End Call`. Listening is silent to the other side and reversible
+(`Exit Live Listen`); taking over is confirm-gated and permanent. It reaches
+Retell directly and needs nothing from you, so it works alongside this skill on
+claude.ai. Offer it for the first few real calls.
+
+**That page cannot send text.** Listen, seize, or hang up are the only options,
+so `steer` is the only way to redirect a call without taking it — if he is
+watching and wants a course correction, he has to ask you for it.
 
 ## Things that will bite you
 
@@ -158,9 +162,9 @@ call is his.
   the monitor socket means "not live yet", not "over".
 - **A take-over is not a hangup.** If Louie seizes the call from the dashboard,
   Retell ends the *agent's* leg — he is still on the phone. `watch` returns
-  `event: taken_over`, and the transcript stops dead at that moment: nothing
-  said afterwards is recorded anywhere. Ask him how it went; do not report the
-  truncated transcript as the outcome.
+  `event: taken_over`, and the dashboard says outright "Transcription is paused
+  while you're on the call": nothing after that moment is recorded anywhere.
+  Ask him how it went; never report the truncated transcript as the outcome.
 - **Never re-import the agent JSON in the dashboard.** It forks a new `agent_id`
   and silently orphans the config. Agent changes go through `/update-agent` and
   `/update-retell-llm`, which mutate in place.

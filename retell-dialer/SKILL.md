@@ -49,10 +49,17 @@ stuff: the spelling of the name, the old address as well as the current one, the
 insurance group number as well as the member ID, what was tried last time, who
 they spoke to before, the reference number from the letter.
 
-**A consult is for judgment, not lookup.** If the answer was knowable before you
-dialled — in memory, the calendar, a file, anywhere you could have reached — it
-belonged in the brief, and spending hold time on it is your planning failure
-showing up on someone else's phone. Go and fetch it first.
+**The test is whether it was knowable before you dialled** — not whether it is a
+fact. A member ID, a policy number, the spelling of a street: enumerable, so
+they belong in the brief, and spending hold time on them is a planning failure
+playing out on someone else's phone.
+
+But plenty of answers are a *function of what the other side says* and could not
+have been preloaded — whether the slot they just offered clears the calendar
+once driving time is counted, whether a quoted price beats the one already in
+hand. You hold the calendar, maps and memory; the agent holds none of them and
+cannot be given all of them. Those lookups are exactly what the consult is for.
+Reserve it for what their answer made necessary, and preload everything else.
 
 Write it as whatever prose and bullets fit the call — it is a prompt, not a
 form. What it has to carry:

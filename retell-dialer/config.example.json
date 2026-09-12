@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Copy to config.json, which is gitignored -- this repo is public.",
+    "",
+    "consult_token  gates /poll and /answer, and /answer writes words into the",
+    "               mouth of an agent on a live call.",
+    "worker_url     /consult is deliberately unauthenticated (Retell's tool",
+    "               config sends no query params), so the URL is the only thing",
+    "               keeping strangers from injecting consults. Treat as secret.",
+    "from_number    E.164. Empty means web calls only."
+  ],
+
+  "retell_api_key": "key_...",
+  "agent_id": "agent_...",
+  "llm_id": "llm_...",
+  "worker_url": "https://consult-queue.EXAMPLE.workers.dev",
+  "consult_token": "...",
+  "from_number": ""
+}

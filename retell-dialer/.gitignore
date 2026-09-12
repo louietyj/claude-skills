@@ -1,0 +1,19 @@
+# Holds the Retell API key (places calls, spends credit) and the consult token
+# (writes words into the mouth of an agent on a live call). This repo is public.
+config.json
+!config.example.json
+
+# Packaged skill -- bundles the config, so the artefact is a credential too.
+*.zip
+
+# Live agent/LLM config pulled from Retell, for diffing. Carries the worker URL.
+agent/.live-*.json
+
+state/
+__pycache__/
+
+# Bundled SDK: 560KB of livekit-client, rebuildable via dev/webcall/build.sh
+dev/webcall/retell-sdk.js
+
+# Cloudflare account id cache, written by wrangler.
+.wrangler/

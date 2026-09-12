@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Retell dialer — web call</title>
+<!--
+  Testing affordance, not the production path: a real call goes out over PSTN
+  via `dialer dispatch --to` and needs no browser. This exists so the loop
+  can be exercised without a phone number on the account — the brief is written
+  exactly as it would be for a real call, and you pick up instead of a
+  receptionist. Served over http://localhost because getUserMedia needs a secure
+  context and file:// is not one.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 0 auto;
+         padding: 1.5rem 1rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 .25rem; }
+  .sub { opacity: .65; margin: 0 0 1.25rem; }
+  .bar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+         margin-bottom: 1rem; }
+  input { flex: 1 1 18rem; min-width: 0; padding: .5rem; font: inherit;
+          font-family: ui-monospace, monospace; }
+  button { padding: .5rem 1rem; font: inherit; cursor: pointer; }
+  #status { font-family: ui-monospace, monospace; padding: .5rem .75rem;
+            border-left: 3px solid currentColor; opacity: .8; margin-bottom: 1rem; }
+  #transcript { display: flex; flex-direction: column; gap: .5rem; }
+  .turn { padding: .5rem .75rem; border-radius: .4rem; max-width: 85%;
+          white-space: pre-wrap; overflow-wrap: anywhere; }
+  .agent { background: color-mix(in oklab, currentColor 10%, transparent);
+           align-self: flex-start; }
+  .user  { background: color-mix(in oklab, currentColor 18%, transparent);
+           align-self: flex-end; }
+  .who { display: block; font-size: .75rem; opacity: .6; }
+</style>
+
+<h1>Retell dialer — web call</h1>
+<p class="sub">You are the person being called. Ask it something its brief does
+not cover and watch the consult fire.</p>
+
+<div class="bar">
+  <input id="token" placeholder="access_token from `dialer dispatch --web`" spellcheck="false">
+  <button id="start">Join call</button>
+  <button id="stop" disabled>Hang up</button>
+</div>
+
+<div id="status">idle</div>
+<div id="transcript"></div>
+
+<script src="retell-sdk.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const setStatus = t => { $("status").textContent = t; };
+
+  // The token is long and opaque; pasting it by hand is exactly the friction
+  // this page exists to remove, so `dialer dispatch --web` prints a URL with it
+  // already in the fragment. A fragment, not a query string, so it stays out of
+  // the server's request log.
+  const fromUrl = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (fromUrl) $("token").value = fromUrl;
+
+  const client = new Retell.RetellWebClient();
+
+  client.on("call_started", () => setStatus("connected — speak"));
+  client.on("call_ended", () => {
+    setStatus("call ended");
+    $("start").disabled = false;
+    $("stop").disabled = true;
+  });
+  client.on("error", e => {
+    setStatus("error: " + (e?.message || e));
+    client.stopCall();
+  });
+
+  // The SDK re-sends the whole transcript on every update rather than a delta,
+  // so redraw instead of appending — appending duplicates every turn.
+  client.on("update", update => {
+    const turns = update?.transcript;
+    if (!Array.isArray(turns)) return;
+    $("transcript").replaceChildren(...turns.map(t => {
+      const el = document.createElement("div");
+      el.className = "turn " + (t.role === "agent" ? "agent" : "user");
+      el.innerHTML = "<span class='who'></span>";
+      el.firstChild.textContent = t.role === "agent" ? "agent" : "you";
+      el.append(t.content ?? "");
+      return el;
+    }));
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+
+  $("start").onclick = async () => {
+    const accessToken = $("token").value.trim();
+    if (!accessToken) return setStatus("paste an access_token first");
+    $("start").disabled = true;
+    setStatus("connecting…");
+    try {
+      await client.startCall({ accessToken });
+      $("stop").disabled = false;
+    } catch (e) {
+      setStatus("failed to start: " + (e?.message || e));
+      $("start").disabled = false;
+    }
+  };
+
+  $("stop").onclick = () => client.stopCall();
+</script>

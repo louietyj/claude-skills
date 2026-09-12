@@ -260,7 +260,7 @@ def poll_loop(cfg, call_id, budget):
 
         state = call_status(cfg, call_id)
         if state in ("ended", "error"):
-            return {"call_ended": True, "call_id": call_id, "call_status": state}
+            return ended_result(cfg, call_id, state)
         if call_id is None:
             call_id = find_ongoing_call(cfg)
 
@@ -346,8 +346,8 @@ def cmd_watch(cfg, args):
                          "live_turns": len(state["turns"])})
         if state["ended"]:
             stop.set()
-            return emit({"event": "call_ended", "call_id": call_id,
-                         "why": state["ended"], "transcript": render_turns(state["turns"])})
+            return emit({"event": "call_ended",
+                         **ended_result(cfg, call_id, state["ended"])})
         grown = len(state["turns"]) > seen
         if grown and time.monotonic() - last_report >= args.interval:
             stop.set()
@@ -360,6 +360,22 @@ def cmd_watch(cfg, args):
     stop.set()
     emit({"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
           "monitor_error": state["error"], "message_types": sorted(state["types"])})
+
+
+def ended_result(cfg, call_id, why):
+    """A hangup and the record of it, in one return. Whoever is supervising
+    wants the transcript every time a call ends, so charging them a round trip
+    for it buys nothing."""
+    out = {"call_ended": True, "call_id": call_id, "call_status": why}
+    rec = call_record(cfg, call_id, settle=10)
+    if not rec:
+        return {**out, "transcript": None, "note": "nothing retained yet"}
+    out["disconnection_reason"] = rec["disconnection_reason"]
+    out["duration_ms"] = rec["duration_ms"]
+    out["source"] = rec["source"]
+    content = rec["content"]
+    out["transcript"] = render_turns(content) if isinstance(content, list) else content
+    return out
 
 
 def cmd_poll(cfg, args):
@@ -415,28 +431,48 @@ def render_turns(turns):
     return lines
 
 
-def cmd_transcript(cfg, args):
-    status, body = retell(cfg, f"/v2/get-call/{args.call_id}")
-    if status != 200:
-        die(f"get-call returned {status}: {json.dumps(body)[:300]}")
-    # Under `everything_except_pii` Retell retains only the scrubbed variants,
-    # so the unscrubbed keys are absent rather than empty. Take what exists.
-    for key in ("transcript_with_tool_calls", "scrubbed_transcript_with_tool_calls",
-                "transcript", "scrubbed_transcript"):
-        content = body.get(key)
-        if not content:
-            continue
-        head = {"source": key, "call_status": body.get("call_status"),
-                "duration_ms": body.get("duration_ms"),
-                "disconnection_reason": body.get("disconnection_reason")}
-        if args.raw or not isinstance(content, list):
-            emit({**head, "content": content})
-        else:
-            print(json.dumps(head, indent=2))
-            print("\n".join(render_turns(content)))
+# Under `everything_except_pii` Retell retains only the scrubbed variants, so
+# the unscrubbed keys are absent rather than empty. Take whichever exists.
+TRANSCRIPT_KEYS = ("transcript_with_tool_calls", "scrubbed_transcript_with_tool_calls",
+                   "transcript", "scrubbed_transcript")
+
+
+def call_record(cfg, call_id, settle=0):
+    """The finished call, or None if nothing is retained yet.
+
+    `settle` retries for a few seconds, because Retell finalises a transcript a
+    moment after the call drops: a read issued the instant a hangup is detected
+    comes back empty."""
+    deadline = time.monotonic() + settle
+    while True:
+        status, body = retell(cfg, f"/v2/get-call/{call_id}", timeout=15)
+        if status == 200:
+            for key in TRANSCRIPT_KEYS:
+                if body.get(key):
+                    return {"source": key, "call_status": body.get("call_status"),
+                            "duration_ms": body.get("duration_ms"),
+                            "disconnection_reason": body.get("disconnection_reason"),
+                            "content": body[key]}
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(2)
+
+
+def show_record(rec, raw=False):
+    head = {k: v for k, v in rec.items() if k != "content"}
+    if raw or not isinstance(rec["content"], list):
+        emit({**head, "content": rec["content"]})
         return
-    emit({"note": "no transcript retained", "call_status": body.get("call_status"),
-          "keys": sorted(body.keys())})
+    print(json.dumps(head, indent=2))
+    print("\n".join(render_turns(rec["content"])))
+
+
+def cmd_transcript(cfg, args):
+    rec = call_record(cfg, args.call_id, settle=args.settle)
+    if not rec:
+        return emit({"note": "nothing retained yet",
+                     "call_status": call_status(cfg, args.call_id)})
+    show_record(rec, args.raw)
 
 
 def cmd_call(cfg, args):
@@ -467,6 +503,41 @@ def cmd_call(cfg, args):
             print("\n".join(render_turns(turns)))
         return
     emit(body)
+
+
+def cmd_health(cfg, args):
+    """Check every link before a call rather than during one -- a dead queue
+    otherwise strands `consult_supervisor` with someone on hold."""
+    checks, ok = [], True
+
+    status, body = request(f"{cfg['worker_url']}/health", timeout=15)
+    good = status == 200 and isinstance(body, dict) and body.get("ok")
+    checks.append(("consult queue", good, f"{cfg['worker_url']} -> {status}"))
+    ok &= bool(good)
+
+    status, _ = queue(cfg, "/pending", timeout=15)
+    checks.append(("queue token", status == 200, f"/pending -> {status}"))
+    ok &= status == 200
+
+    status, agent = retell(cfg, f"/get-agent/{cfg['agent_id']}", timeout=20)
+    checks.append(("retell agent", status == 200,
+                   agent.get("agent_name", "?") if status == 200 else f"-> {status}"))
+    ok &= status == 200
+
+    if status == 200:
+        hook = agent.get("webhook_url") or ""
+        checks.append(("agent webhook", hook.startswith(cfg["worker_url"]),
+                       hook or "unset -- hangups will not punt a held consult"))
+
+    have_number = bool(cfg.get("from_number"))
+    checks.append(("from_number", have_number,
+                   cfg.get("from_number") or "unset -- PSTN calls will be refused"))
+
+    width = max(len(name) for name, _, _ in checks)
+    for name, good, detail in checks:
+        print(f"  [{'ok' if good else 'FAIL'}] {name.ljust(width)}  {detail}")
+    if not ok:
+        sys.exit(1)
 
 
 def cmd_agent_pull(cfg, args):
@@ -548,6 +619,8 @@ def main():
     t.add_argument("call_id")
     t.add_argument("--raw", action="store_true",
                    help="full objects including per-word timings (~10x larger)")
+    t.add_argument("--settle", type=int, default=10,
+                   help="seconds to retry while Retell finalises the transcript")
     t.set_defaults(fn=cmd_transcript)
 
     c = sub.add_parser("call", help="the call as Retell's webhook sent it, pre-scrub")
@@ -555,6 +628,7 @@ def main():
     c.add_argument("--raw", action="store_true")
     c.set_defaults(fn=cmd_call)
 
+    sub.add_parser("health", help="check queue, token, agent and number").set_defaults(fn=cmd_health)
     sub.add_parser("agent-pull", help="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)
 
     args = ap.parse_args()

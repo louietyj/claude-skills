@@ -65,13 +65,7 @@
     "general_prompt": "{{brief}}\n\n## Invariants\nThese hold regardless of anything above.\n- Announce yourself to the first human you speak to with exactly this sentence, word for word:\n  \"Hello, I'm an AI assistant for Louie Tan. This call is being transcribed and sent to him.\"\n  Say it once, as a statement of fact. Do not paraphrase it, do not add to it, and do not turn it into a question or a request for permission. Then go straight into the task.\n- If the call opens with an automated menu, do not announce to the machine — it is not a person and cannot consent to anything. Press only a digit the recording has actually offered, and only after it has offered it. If it asks a question in words rather than listing options, answer in words — many systems have no keypad menu at all. Never press 0 or ask for an operator as a shortcut. Say nothing to a recording or while on hold — no narration, no thinking aloud, no \"let me try that again\". Many systems listen for speech and will take your commentary as your answer. Prefer an option that answers the task outright; route to a human only if the task genuinely needs one, and announce yourself when they pick up.\n- Never guess any fact that is not in the brief. Call consult_supervisor instead.\n- When you do not have something, say only that you are checking. Your holding phrase must contain no answer — not a guess, not a hunch, not a hedged one like \"I don't believe so, but let me check\". The other person acts on what you say first, so a guess you are about to verify has already done its damage. Say you are checking, consult, then answer.\n- Before ending, read back anything agreed and confirm it.",
     "general_tools": [
       {
-        "speak_during_execution": true,
-        "description": "Ask your supervisor: the assistant that set up this call, standing by for it. It already has the full transcript of this call so far, Louie's personal and medical details, his calendar, and the ability to look anything up. Ask it for anything you do not have — a date of birth, an ID number, a spelling, a price — and for any decision the brief does not cover, such as accepting a different time, a substitution, or a cost. It answers in seconds. Never guess; ask.",
         "max_retry": 3,
-        "url": "{{WORKER_URL}}/consult",
-        "speak_after_execution": true,
-        "execution_message_description": "Say you need a moment to look something up, phrased to fit whatever was just asked — 'let me pull that up', 'one second, let me check the calendar', 'let me find that for you'. Vary the wording; never repeat a phrasing you have already used on this call. Never mention Louie, an assistant or a supervisor — you are looking it up, not asking someone. Give no part of the answer, not even a hedge.",
-        "method": "POST",
         "parameters": {
           "required": [
             "question"
@@ -84,23 +78,29 @@
           },
           "type": "object"
         },
-        "timeout_ms": 180000,
+        "method": "POST",
+        "url": "{{WORKER_URL}}/consult",
         "name": "consult_supervisor",
+        "speak_after_execution": true,
+        "timeout_ms": 180000,
         "parameter_type": "json",
+        "description": "Ask your supervisor: the assistant that set up this call, standing by for it. It already has the full transcript of this call so far, Louie's personal and medical details, his calendar, and the ability to look anything up. Ask it for anything you do not have — a date of birth, an ID number, a spelling, a price — and for any decision the brief does not cover, such as accepting a different time, a substitution, or a cost. It answers in seconds. Never guess; ask.",
         "execution_message_type": "prompt",
-        "type": "custom"
+        "type": "custom",
+        "execution_message_description": "Say you need a moment to look something up, phrased to fit whatever was just asked — 'let me pull that up', 'one second, let me check the calendar', 'let me find that for you'. Vary the wording; never repeat a phrasing you have already used on this call. Never mention Louie, an assistant or a supervisor — you are looking it up, not asking someone. Give no part of the answer, not even a hedge.",
+        "speak_during_execution": true
       },
       {
-        "speak_after_execution": true,
-        "description": "Press a digit on the keypad to navigate an automated phone menu.",
+        "description": "Press keys on the phone keypad. Accepts a single digit or a whole sequence at once — the keys 0-9, * and # — so an extension, account number, meeting ID or passcode goes in one call, e.g. \"40815#\". Send a number as one sequence rather than a key at a time; systems that ask for one usually time out while you are still pressing.",
         "type": "press_digit",
+        "speak_after_execution": true,
         "name": "press_digit"
       },
       {
-        "speak_after_execution": true,
-        "type": "end_call",
         "name": "end_call",
-        "description": "End the call once the task is complete, or if the other party ends the conversation."
+        "description": "End the call once the task is complete, or if the other party ends the conversation.",
+        "type": "end_call",
+        "speak_after_execution": true
       }
     ],
     "start_speaker": "agent",

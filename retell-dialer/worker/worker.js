@@ -87,10 +87,31 @@ export class ConsultQueue {
         return json({ error: "answer: need call_id and text in a JSON body (or as query params)" }, 400);
       }
       const p = this.pending.get(call_id);
-      if (!p) return json({ ok: false, error: "no such pending consult" }, 404);
+      if (!p) {
+        // A 404 here means the consult was already answered, and on claude.ai
+        // the likeliest answerer is the caller itself in a turn it can no
+        // longer see: an interrupted turn has its tool calls stripped from the
+        // transcript, so the answer it sent leaves no trace on its side. Hand
+        // back what was actually delivered, rather than leaving it to conclude
+        // that something else is answering its consults.
+        const prior = await this.ctx.storage.get(`answered:${call_id}`);
+        return json({
+          ok: false,
+          error: "no such pending consult",
+          ...(prior ? {
+            already_answered: prior,
+            note: "This consult was already answered with the text above. If you " +
+                  "do not remember sending it, you probably did, in a turn that " +
+                  "was interrupted -- claude.ai drops aborted tool calls from the " +
+                  "transcript. To change it now, use `steer`.",
+          } : {}),
+        }, 404);
+      }
       clearTimeout(p.timer);
       this.pending.delete(call_id);
       p.resolve(json(text));
+      await this.ctx.storage.put(`answered:${call_id}`,
+        { text, at: new Date().toISOString(), question: p.q });
       return json({ ok: true, waited_ms: Date.now() - p.at });
     }
 

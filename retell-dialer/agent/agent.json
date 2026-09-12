@@ -36,7 +36,7 @@
   "voice_speed": 1,
   "volume": 1,
   "enable_expressive_mode": false,
-  "enable_backchannel": true,
+  "enable_backchannel": false,
   "max_call_duration_ms": 900000,
   "interruption_sensitivity": 0.3,
   "boosted_keywords": [

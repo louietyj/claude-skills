@@ -156,6 +156,18 @@ def cmd_dispatch(cfg, args):
     if not cfg.get("from_number"):
         die("no from_number in config -- buy a Retell number for PSTN, or use "
             "`stage` + `serve` to run the same loop as a browser call")
+
+    # An interrupted turn has its tool calls stripped from the transcript, so a
+    # dispatch that already happened can look like one that never did -- and
+    # the cost of believing that is ringing a stranger twice. Retell is the
+    # record, not the transcript.
+    if not args.force:
+        live = find_ongoing_call(cfg)
+        if live:
+            die(f"a call is already ongoing ({live}). If you do not remember "
+                f"placing it, you may still have done so -- an interrupted turn "
+                f"loses its tool calls. Check `watch --call-id {live}`, or pass "
+                f"--force to dial anyway.")
     status, resp = create_call(cfg, read_variables(args), web=False, to=args.to)
     if status not in (200, 201):
         die(f"dispatch failed ({status}): {json.dumps(resp)[:400]}")
@@ -433,10 +445,15 @@ def cmd_answer(cfg, args):
                          body={"call_id": args.call_id, "text": text})
     answered = {"answer_status": status, "answer_result": body}
     if status != 200:
-        # Do not fall through to polling: the agent is still holding, and the
-        # operator needs to see the failure now, not after a 200s block.
-        emit({**answered, "hint": "the consult is still held -- check `pending` "
-                                  "for the live call_id and resend"})
+        # Do not fall through to polling: the agent may still be holding, and
+        # the operator needs to see this now, not after a 200s block.
+        hint = ("the consult is still held -- check `pending` for the live "
+                "call_id and resend")
+        if status == 404 and isinstance(body, dict) and body.get("already_answered"):
+            hint = ("already answered -- nothing is holding. Read "
+                    "answer_result.already_answered before concluding anything "
+                    "else answered it; use `steer` to change course.")
+        emit({**answered, "hint": hint})
         sys.exit(1)
 
     print(json.dumps(answered, ensure_ascii=False), file=sys.stderr)
@@ -611,6 +628,8 @@ def main():
 
     d = sub.add_parser("dispatch", help="place a PSTN call with a brief written for it")
     d.add_argument("--to", help="callee, E.164")
+    d.add_argument("--force", action="store_true",
+                   help="dial even though another call is already ongoing")
     brief_args(d)
     d.set_defaults(fn=cmd_dispatch)
 

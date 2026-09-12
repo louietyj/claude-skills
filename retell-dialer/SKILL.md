@@ -130,9 +130,29 @@ slot, asked for a window, judged the counter-offer out of band *without
 consulting again*, and fell back to a callback. "Say 8pm" buys one turn and
 another consult.
 
-`steer` needs nobody waiting on the far end — use it when `watch` shows the call
-drifting, or when Louie tells you something new mid-call. It lands as an
-`injected` turn; `--speak-now` makes the agent raise it immediately.
+**Check before you authorise.** You have tools and Louie is right there — if a
+consult asks you to accept a time, a price or a commitment, verify it before
+saying yes: read the calendar, count the travel, ask him in chat. The agent
+cannot do any of that, which is the whole reason it asked. Granting a band you
+have not checked is how a conflict gets booked; it has already happened once.
+Two seconds looking is cheaper than a call to undo it.
+
+`steer` needs nobody waiting on the far end — use it when Louie tells you
+something new mid-call, or when the agent is genuinely going wrong. It lands as
+an `injected` turn. `--speak-now` makes the agent say something immediately
+instead of waiting for its turn, which interrupts whoever is mid-sentence: use
+it only when the correction cannot wait, and leave it off for context that can
+land naturally.
+
+**Steer far less than you want to.** The agent is a capable model that can hear
+the call; you are reading a lagging, partial transcript. Telling it things it
+can plainly observe — that it is in a phone menu, that nobody has picked up yet
+— wastes a turn and muddies its context. Worse, `watch` shows utterances
+truncated mid-word, so a correction based on what you think you read can simply
+be wrong: on one call a steer "corrected" a keypress that had been right. If
+something looks off, prefer waiting one more `watch` over steering on a partial
+line, and treat the fuller transcript in a consult payload as the better
+picture.
 
 When the call ends, `watch` returns the transcript with it. Tell Louie what was
 agreed.
@@ -160,6 +180,14 @@ watching and wants a course correction, he has to ask you for it.
   conversation back to you — it is attached automatically.
 - **A call still ringing is not a call that ended.** Handled, but a `4004` from
   the monitor socket means "not live yet", not "over".
+- **On claude.ai, an interrupted turn loses its tool calls.** If Louie hits stop
+  to interject, the call you had just made is stripped from your transcript —
+  it still happened, you just cannot see it. So never conclude "I did not do X"
+  from X being absent. After any interruption, re-read state from the server,
+  which is the record: `pending`, `watch`, `transcript`. A repeat `answer`
+  returns the text already delivered, and `dispatch` refuses while a call is
+  live, precisely because your own transcript cannot be trusted here. A `steer`
+  has no such guard — re-sending one injects it twice.
 - **Keypresses are inaudible, to everyone.** DTMF travels out-of-band, so
   neither Louie nor a live listener hears a tone — the digits are in the
   transcript as `[TOOL press_digit]` and nowhere else. He cannot verify keypad

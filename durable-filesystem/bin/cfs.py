@@ -310,6 +310,28 @@ def check_rev_belongs(meta: dict, path: str, rev: str) -> None:
         )
 
 
+MAX_STALE_REV_ATTEMPTS = 5
+
+
+def _rev_if_content_unchanged(path: str, held_rev: str) -> str | None:
+    """If `path` is byte-identical now to what `held_rev` held (an X->Y->X rev
+    bump), return the current rev to retry with. None otherwise -- content
+    that actually differs needs the real rejection, since a diff might change
+    what the caller writes; so does a held_rev that can't even be fetched
+    (invented, expired, foreign), which the caller's stale_rev_error already
+    handles.
+    """
+    try:
+        held_data, held_meta = content_download({"path": f"rev:{held_rev}"})
+        check_rev_belongs(held_meta, path, held_rev)
+    except CfsError:
+        return None
+    current_data, current_meta = content_download({"path": api_path(path)})
+    if current_data != held_data:
+        return None
+    return current_meta["rev"]
+
+
 # --------------------------------------------------------------------------
 # argument values: literal, @file, or - for stdin
 # --------------------------------------------------------------------------
@@ -788,29 +810,42 @@ def upload_bytes(path: str, data: bytes, args, verb: str = "write") -> dict:
     Dropbox reports both failures as a 'conflict': a stale rev under mode=update,
     and an existing path under mode=add. They need opposite advice -- re-read
     versus pick another path -- so they must not share an error message.
+
+    A stale rev with identical content retries against the current rev
+    instead of failing (see ``_rev_if_content_unchanged``), bounded by
+    MAX_STALE_REV_ATTEMPTS so sustained contention still fails loudly.
     """
     mode = write_mode(args, path)
-    try:
-        return content_upload(
-            {
-                "path": api_path(path),
-                "mode": mode,
-                "autorename": False,
-                "strict_conflict": True,
-                "mute": True,
-            },
-            data,
-        )
-    except CfsError as exc:
-        if args.new and "conflict" in str(exc):
-            raise CfsError(
-                f"{path} already exists, so --new refused to create it. Nothing was "
-                "written. Read the file and pass --rev <rev> if you meant to "
-                "overwrite it, or choose a different path."
-            ) from exc
-        if args.rev and "conflict" in str(exc):
-            raise stale_rev_error(path, args.rev, verb) from exc
-        raise
+    for _ in range(MAX_STALE_REV_ATTEMPTS):
+        try:
+            return content_upload(
+                {
+                    "path": api_path(path),
+                    "mode": mode,
+                    "autorename": False,
+                    "strict_conflict": True,
+                    "mute": True,
+                },
+                data,
+            )
+        except CfsError as exc:
+            if args.new and "conflict" in str(exc):
+                raise CfsError(
+                    f"{path} already exists, so --new refused to create it. Nothing was "
+                    "written. Read the file and pass --rev <rev> if you meant to "
+                    "overwrite it, or choose a different path."
+                ) from exc
+            if args.rev and "conflict" in str(exc):
+                upgraded = _rev_if_content_unchanged(path, args.rev)
+                if upgraded is None:
+                    raise stale_rev_error(path, args.rev, verb) from exc
+                mode = {".tag": "update", "update": upgraded}
+                continue
+            raise
+    raise CfsError(
+        f"Gave up on {verb} to {path}: it keeps being rewritten to identical "
+        "content faster than the write can land. Try again."
+    )
 
 
 def write_mode(args, path: str):
@@ -897,11 +932,14 @@ def cmd_edit(args) -> str:
                     "the rev each call returns to the next."
                 )
 
-    if meta["rev"] != args.rev:
-        # The current rev IS disclosed, but only alongside the diff that earns
-        # it: base plus delta reconstructs the file, which is the same bar `diff`
-        # already clears. What must never happen is the rev arriving alone.
-        raise stale_rev_error(path, args.rev, "edit")
+    rev = meta["rev"]
+    if rev != args.rev:
+        # Tolerate the stale rev if content hasn't actually moved (`text` above
+        # is already current); otherwise the real rejection, diff included.
+        upgraded = _rev_if_content_unchanged(path, args.rev)
+        if upgraded is None:
+            raise stale_rev_error(path, args.rev, "edit")
+        rev = upgraded
 
     old, new = edits[0]
     if old == new:
@@ -910,24 +948,33 @@ def cmd_edit(args) -> str:
 
     if updated == text:
         raise CfsError("Replacement produced no change; nothing written.")
-    try:
-        result = content_upload(
-            {
-                "path": api_path(path),
-                "mode": {".tag": "update", "update": args.rev},
-                "autorename": False,
-                "strict_conflict": True,
-                "mute": True,
-            },
-            updated.encode("utf-8"),
-        )
-    except CfsError as exc:
-        # The check above races: the file can move between that download and
-        # this upload. Same failure, so it must not produce a different error.
-        if "conflict" in str(exc):
-            raise stale_rev_error(path, args.rev, "edit") from exc
-        raise
-    return f"Edited {path}.\nnew rev: {result['rev']}"
+
+    payload_bytes = updated.encode("utf-8")
+    for _ in range(MAX_STALE_REV_ATTEMPTS):
+        try:
+            result = content_upload(
+                {
+                    "path": api_path(path),
+                    "mode": {".tag": "update", "update": rev},
+                    "autorename": False,
+                    "strict_conflict": True,
+                    "mute": True,
+                },
+                payload_bytes,
+            )
+            return f"Edited {path}.\nnew rev: {result['rev']}"
+        except CfsError as exc:
+            # The check above races, so this can conflict too; same tolerance.
+            if "conflict" not in str(exc):
+                raise
+            upgraded = _rev_if_content_unchanged(path, args.rev)
+            if upgraded is None:
+                raise stale_rev_error(path, args.rev, "edit") from exc
+            rev = upgraded
+    raise CfsError(
+        f"Gave up editing {path}: it keeps being rewritten to identical "
+        "content faster than the edit can land. Try again."
+    )
 
 
 def _diagnose_no_match(text: str, old: str) -> str:

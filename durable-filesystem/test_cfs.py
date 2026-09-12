@@ -505,6 +505,163 @@ class TestCheckRevBelongs(unittest.TestCase):
         cfs.check_rev_belongs({}, "/memory/a.md", "r1")
 
 
+class TestRevIfContentUnchanged(unittest.TestCase):
+    def _patch_download(self, held_data, current_data, current_rev="r2"):
+        def fake(payload):
+            if payload["path"].startswith("rev:"):
+                return held_data, {"path_display": "/f", "rev": "r1"}
+            return current_data, {"path_display": "/f", "rev": current_rev}
+
+        original = cfs.content_download
+        cfs.content_download = fake
+        self.addCleanup(setattr, cfs, "content_download", original)
+
+    def test_returns_current_rev_when_content_matches(self):
+        self._patch_download(b"same", b"same")
+        self.assertEqual(cfs._rev_if_content_unchanged("/f", "r1"), "r2")
+
+    def test_returns_none_when_content_differs(self):
+        self._patch_download(b"old", b"new")
+        self.assertIsNone(cfs._rev_if_content_unchanged("/f", "r1"))
+
+    def test_an_unfetchable_held_rev_is_not_tolerated(self):
+        # An invented or expired rev can't even be downloaded; that must
+        # degrade to None (a real stale-rev rejection), not propagate as a
+        # raw error from inside the tolerance check.
+        def fake(payload):
+            raise cfs.CfsError("Path does not exist.")
+
+        original = cfs.content_download
+        cfs.content_download = fake
+        self.addCleanup(setattr, cfs, "content_download", original)
+        self.assertIsNone(cfs._rev_if_content_unchanged("/f", "invented"))
+
+    def test_a_held_rev_belonging_to_another_file_is_not_tolerated(self):
+        # Same degrade-gracefully path as an invented or expired rev: this
+        # isn't proof of anything for /f, so it's None, not a raised error --
+        # the caller's own stale_rev_error still explains what's wrong.
+        def fake(payload):
+            return b"x", {"path_display": "/other.md", "rev": "r1"}
+
+        original = cfs.content_download
+        cfs.content_download = fake
+        self.addCleanup(setattr, cfs, "content_download", original)
+        self.assertIsNone(cfs._rev_if_content_unchanged("/f", "r1"))
+
+
+class TestUploadBytesTolerance(unittest.TestCase):
+    """upload_bytes backs both write and upload."""
+
+    def _args(self, argv):
+        return cfs.build_parser().parse_args(argv)
+
+    def _patch(self, download, upload):
+        original_d, original_u = cfs.content_download, cfs.content_upload
+        cfs.content_download, cfs.content_upload = download, upload
+        self.addCleanup(setattr, cfs, "content_download", original_d)
+        self.addCleanup(setattr, cfs, "content_upload", original_u)
+
+    def test_stale_rev_with_identical_content_retries_and_succeeds(self):
+        modes_tried = []
+
+        def fake_download(payload):
+            return b"same", {"path_display": "/f", "rev": "r2"}
+
+        def fake_upload(payload, data):
+            modes_tried.append(payload["mode"])
+            if payload["mode"]["update"] == "r1":
+                raise cfs.CfsError("conflict")
+            return {"rev": "r3"}
+
+        self._patch(fake_download, fake_upload)
+        args = self._args(["write", "/f", "--rev", "r1"])
+        self.assertEqual(cfs.upload_bytes("/f", b"same", args), {"rev": "r3"})
+        self.assertEqual(modes_tried[-1], {".tag": "update", "update": "r2"})
+
+    def test_stale_rev_with_different_content_still_raises(self):
+        def fake_download(payload):
+            if payload["path"].startswith("rev:"):
+                return b"old", {"path_display": "/f", "rev": "r1"}
+            return b"new", {"path_display": "/f", "rev": "r2"}
+
+        def fake_upload(payload, data):
+            raise cfs.CfsError("conflict")
+
+        self._patch(fake_download, fake_upload)
+        original_diff = cfs.diff_report
+        cfs.diff_report = lambda *a, **k: "CHANGED: ...\nrev: r2"
+        self.addCleanup(setattr, cfs, "diff_report", original_diff)
+
+        args = self._args(["write", "/f", "--rev", "r1"])
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.upload_bytes("/f", b"old", args)
+        self.assertIn("Stale rev", str(ctx.exception))
+
+    def test_sustained_contention_gives_up_rather_than_looping_forever(self):
+        counter = {"n": 1}
+
+        def fake_download(payload):
+            counter["n"] += 1
+            return b"same", {"path_display": "/f", "rev": f"r{counter['n']}"}
+
+        def fake_upload(payload, data):
+            raise cfs.CfsError("conflict")
+
+        self._patch(fake_download, fake_upload)
+        args = self._args(["write", "/f", "--rev", "r1"])
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.upload_bytes("/f", b"same", args)
+        self.assertIn("Gave up", str(ctx.exception))
+
+
+class TestEditTolerance(unittest.TestCase):
+    def _args(self, argv):
+        return cfs.build_parser().parse_args(argv)
+
+    def _stdin(self, text):
+        sys.stdin = io.StringIO(text)
+        self.addCleanup(setattr, sys, "stdin", sys.__stdin__)
+
+    def _patch(self, download, upload):
+        original_d, original_u = cfs.content_download, cfs.content_upload
+        cfs.content_download, cfs.content_upload = download, upload
+        self.addCleanup(setattr, cfs, "content_download", original_d)
+        self.addCleanup(setattr, cfs, "content_upload", original_u)
+
+    def test_round_tripped_content_edits_against_the_current_rev(self):
+        text = "hello\n"
+        modes_tried = []
+
+        def fake_download(payload):
+            return text.encode(), {"path_display": "/f", "rev": "r2"}
+
+        def fake_upload(payload, data):
+            modes_tried.append(payload["mode"])
+            return {"rev": "r3"}
+
+        self._patch(fake_download, fake_upload)
+        self._stdin("hello\n@@\ngoodbye\n")
+        result = cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1", "--delim", "@@"]))
+        self.assertEqual(result, "Edited /f.\nnew rev: r3")
+        self.assertEqual(modes_tried, [{".tag": "update", "update": "r2"}])
+
+    def test_genuinely_changed_content_still_raises_before_touching_the_edit(self):
+        def fake_download(payload):
+            if payload["path"].startswith("rev:"):
+                return b"old\n", {"path_display": "/f", "rev": "r1"}
+            return b"new\n", {"path_display": "/f", "rev": "r2"}
+
+        self._patch(fake_download, lambda payload, data: self.fail("should not upload"))
+        original_diff = cfs.diff_report
+        cfs.diff_report = lambda *a, **k: "CHANGED: ...\nrev: r2"
+        self.addCleanup(setattr, cfs, "diff_report", original_diff)
+
+        self._stdin("old\n@@\nchanged\n")
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1", "--delim", "@@"]))
+        self.assertIn("Stale rev", str(ctx.exception))
+
+
 class TestDiffThresholds(unittest.TestCase):
     def test_fraction_stays_under_the_context_break_even(self):
         # Past ~1/7 the diff is the longer read, so a larger fraction would

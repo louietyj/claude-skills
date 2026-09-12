@@ -31,7 +31,7 @@ Note that the skill, not the Dropbox connector, must be used for all writes. The
 Every write to an existing file requires that file's current `rev`, obtainable only by reading it. This single mechanism enforces both guardrails at once:
 
 - **Read-before-write**, because the rev cannot be named without a read.
-- **No stale writes**, because Dropbox verifies the rev server-side (`mode=update` + `strict_conflict`) and rejects the upload on mismatch.
+- **No stale writes**, because Dropbox verifies the rev server-side (`mode=update` + `strict_conflict`) and rejects the upload on mismatch — unless the current content is byte-identical to what the caller's rev held (an X→Y→X round trip), in which case `write`/`edit` retry against the current rev instead of failing. A diff might change what the caller writes; a no-op diff can't, so there's nothing to hand back for review.
 
 No local "last read" state is kept, and none would be trustworthy if it were — the sandbox is per-conversation and can reset mid-session, so anything cached locally would be unreliable exactly when it mattered. Pushing the check to the server also makes it correct across two conversations writing concurrently.
 
@@ -79,7 +79,7 @@ python test_cfs.py         # 70 offline tests, no network
 bash integration_test.sh   # 164 live tests against the app folder
 ```
 
-The offline suite covers path traversal, edit ambiguity, SEARCH/REPLACE parsing including tagged markers and marker detection, JSON and delimiter payloads, the write-mode rules, the retry policy, and root protection. The integration suite covers every command against the real API, including the guardrails only the server can enforce:
+The offline suite covers path traversal, edit ambiguity, SEARCH/REPLACE parsing including tagged markers and marker detection, JSON and delimiter payloads, the write-mode rules, the retry policy, stale-rev tolerance for identical content, and root protection. The integration suite covers every command against the real API, including the guardrails only the server can enforce:
 
 - a stale-rev write is rejected **and verified not to have clobbered**
 - every rev-disclosure path is asserted against the file's actual current rev

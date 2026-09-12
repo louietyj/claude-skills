@@ -299,6 +299,23 @@ expect_err_json "write with stale rev" "stale\|changed" '{"content":"clobber"}' 
 body $ROOT/a.md | grep -q "clobber" && bad "stale write did not clobber" \
   || ok "stale write did not clobber"
 
+echo "=== edit tolerates a stale-but-content-identical rev (X->Y->X) ==="
+# The write side of this is covered later, alongside the existing abba.md
+# round-trip test.
+expect_ok_json "seed round-trip file" '{"content": "start\n"}' \
+  $CFS write $ROOT/roundtrip.md --new --json
+RREV=$(revof $ROOT/roundtrip.md)
+expect_ok_json "detour" '{"content": "detour\n"}' \
+  $CFS write $ROOT/roundtrip.md --rev "$RREV" --json
+DREV=$(revof $ROOT/roundtrip.md)
+expect_ok_json "back to the original bytes, under a new rev" '{"content": "start\n"}' \
+  $CFS write $ROOT/roundtrip.md --rev "$DREV" --json
+OUT=$(echo '{"old_str":"start","new_str":"changed"}' | $CFS edit $ROOT/roundtrip.md --rev "$RREV" 2>&1)
+echo "$OUT" | grep -qi "stale" && bad "edit against a content-identical stale rev succeeds" \
+  || ok "edit against a content-identical stale rev succeeds"
+body $ROOT/roundtrip.md | grep -q "^changed$" \
+  && ok "the tolerated edit actually landed" || bad "the tolerated edit actually landed"
+
 echo "=== ambiguous edit ==="
 REV=$(revof $ROOT/a.md)
 expect_ok_json "write repeated content" '{"content": "todo\nkeep\ntodo\n"}' \
@@ -462,9 +479,9 @@ $CFS diff $ROOT/d.md --since "$D3" --full | grep -q -- "+new line 5" \
 rm -f big.tmp big2.tmp
 
 echo "=== content restored to an earlier state (x -> y -> x) ==="
-# Identical content does not imply an identical rev. Answering on content alone
-# promised a rev that Dropbox then rejects -- with a message saying the file
-# changed, which is itself wrong here, because only the rev moved.
+# Identical content does not imply an identical rev, but it does mean the
+# caller has already seen what's live: write/edit tolerate the stale rev and
+# retry against the current one instead of rejecting.
 expect_ok_json "seed the round-trip file" '{"content":"hello x world\n"}' \
   $CFS write $ROOT/abba.md --new --json
 RA=$(revof $ROOT/abba.md)
@@ -486,11 +503,13 @@ echo "$OUT" | grep -qi "stale" \
 echo "$OUT" | grep -q "$RC" \
   && ok "diff hands over the usable current rev" \
   || bad "diff hands over the usable current rev"
-# The bug in full: taking diff's word for it and writing with the old rev.
-printf 'anything\n' | $CFS write $ROOT/abba.md --rev "$RA" --stdin >/dev/null 2>&1 \
-  && bad "the old rev really is rejected" || ok "the old rev really is rejected"
-printf 'accepted\n' | $CFS write $ROOT/abba.md --rev "$RC" --stdin >/dev/null 2>&1 \
-  && ok "the rev diff handed over really works" || bad "the rev diff handed over really works"
+# The old rev is content-identical to current, so the write is tolerated
+# rather than rejected -- no need to go via diff's handed-over rev at all.
+printf 'accepted\n' | $CFS write $ROOT/abba.md --rev "$RA" --stdin >/dev/null 2>&1 \
+  && ok "a content-identical stale rev is tolerated, not rejected" \
+  || bad "a content-identical stale rev is tolerated, not rejected"
+body $ROOT/abba.md | grep -q "^accepted$" \
+  && ok "the tolerated write actually landed" || bad "the tolerated write actually landed"
 
 # And when the caller's rev IS current, say so without a spurious rev handover.
 RD=$(revof $ROOT/abba.md)

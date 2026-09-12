@@ -406,7 +406,10 @@ def cmd_watch(cfg, args):
                              **ended_result(cfg, call_id, live)})
         if state["consult"]:
             stop.set()
-            return emit({"event": "consult", **state["consult"],
+            consult = dict(state["consult"])
+            if isinstance(consult.get("transcript"), str):
+                consult["transcript"] += IN_PROGRESS
+            return emit({"event": "consult", **consult,
                          "live_turns": len(state["turns"])})
         if state["ended"]:
             stop.set()
@@ -417,7 +420,7 @@ def cmd_watch(cfg, args):
             stop.set()
             return emit({"event": "transcript", "call_id": call_id,
                          "turns_total": len(state["turns"]),
-                         "new": render_turns(state["turns"][seen:]),
+                         "new": render_turns(state["turns"][seen:], live=True),
                          "hint": "steer with `dialer steer`, or `watch --since N` to continue"})
         time.sleep(0.4)
 
@@ -504,9 +507,16 @@ def cmd_steer(cfg, args):
     emit({"status": status, "result": resp})
 
 
-def render_turns(turns):
+IN_PROGRESS = "  [...utterance may still be in progress]"
+
+
+def render_turns(turns, live=False):
     """Flatten to readable lines, dropping the per-word timings each turn
-    carries -- they outweigh the text about ten to one."""
+    carries -- they outweigh the text about ten to one.
+
+    `live` marks the last line, because the monitor streams an utterance as it
+    is spoken: the final turn is routinely a sentence cut mid-word, and a steer
+    written against it can contradict what was actually said."""
     lines = []
     for t in turns:
         role = t.get("role")
@@ -516,6 +526,8 @@ def render_turns(turns):
             lines.append(f"  [RESULT] {t.get('content', '')}")
         else:
             lines.append(f"{role}: {(t.get('content') or '').strip()}")
+    if live and lines:
+        lines[-1] += IN_PROGRESS
     return lines
 
 
@@ -678,8 +690,10 @@ def main():
     w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
     w.add_argument("--call-id")
     w.add_argument("--budget", type=int, default=POLL_BUDGET)
-    w.add_argument("--interval", type=int, default=15,
-                   help="seconds of new dialogue to accumulate before returning")
+    w.add_argument("--interval", type=int, default=30,
+                   help="seconds of new dialogue to accumulate before returning; "
+                        "raise it while navigating an IVR or on hold, lower it at "
+                        "a decision point. A consult returns immediately either way")
     w.add_argument("--since", type=int, default=0,
                    help="turns already seen; report only what is new")
     w.set_defaults(fn=cmd_watch)

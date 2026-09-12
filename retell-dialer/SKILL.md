@@ -110,7 +110,7 @@ call turned up back to `profile.md`.
 ```bash
 dialer health                          # queue, token, agent, number
 dialer dispatch --to +1... --purpose "…" --opening "…" --brief-file brief.md
-dialer watch --call-id <id> [--budget 200] [--interval 15] [--since N]
+dialer watch --call-id <id> [--budget 200] [--interval 30] [--since N]
 dialer answer <call_id> "your answer"  # answers AND resumes watching
 dialer steer  <call_id> "context" [--speak-now]
 dialer transcript <call_id>
@@ -124,6 +124,32 @@ call screening.
 `watch` blocks and returns on whichever comes first — a consult, roughly
 `--interval` seconds of new dialogue, or the call ending. Then you act and call
 it again.
+
+**Choose `--interval` for what the call is doing.** A consult returns
+immediately whatever it is set to, so a long interval never delays the thing
+that actually needs you; it only decides how often you get an unprompted look.
+Tool calls are finite on claude.ai and every return spends one, so bias long:
+45–60s while an IVR is being navigated or the line is on hold, where there is
+nothing to react to, and 15–20s once a negotiation is live and a steer might
+matter. Use judgement — the default of 30 is a compromise, not a
+recommendation.
+
+### After any interjection, read the journal first
+
+**Any time a new user message arrives while a call is live, run `dialer
+journal` before your next `answer`, `steer` or `dispatch` on that call. No
+exceptions, whatever the transcript appears to show.**
+
+A new message means a turn boundary, and a turn boundary is exactly where
+claude.ai drops an in-flight tool call. This is a habit, not a diagnosis: do not
+try to notice whether something is missing, because the interruption erases the
+evidence you would notice it by. An answer you already sent looks identical to
+one you never sent. It is one local read against your own ledger — cheap enough
+to do on every resumed turn, including the many where nothing was lost.
+
+This has already cost a real call: a dropped `answer` had told the office to
+keep the original appointment, the supervisor sent a contradicting one, and the
+receptionist asked "wait, do you want me to cancel it or not?"
 
 **When a consult comes back, answer it in your very next tool call.** Not after
 a sentence of explanation — every second you spend writing prose is silence on
@@ -143,9 +169,10 @@ booked.
 
 `steer` injects context without the agent asking. Use it when Louie tells you
 something new, or when the agent is genuinely going wrong — not to narrate what
-it can already hear. And remember you are reading a lagging, truncated copy:
-`watch` cuts utterances mid-word, and one steer "corrected" a keypress that had
-been right. Wait for the next `watch` rather than act on a partial line.
+it can already hear. A live view marks its last line
+`[...utterance may still be in progress]`: that sentence is still being spoken
+and may end differently, so never steer on it. Wait for the next `watch` — one
+steer "corrected" a keypress that had been right.
 
 **Avoid `--speak-now` unless it absolutely cannot wait.** It makes the agent
 talk over whoever is mid-sentence. Without it the context lands on the next
@@ -175,10 +202,9 @@ ask you.
 - **A `4004` from the monitor socket means "not live yet", not "over"** — a
   ringing call closes with it.
 - **An interrupted tool call vanishes from your transcript.** It still ran, so
-  never conclude "I did not do X" from X being absent. **Run `dialer journal`
-  after any interruption** — it records every dispatch, answer and steer before
-  sending, and survives the turn. `answer` also returns the text already
-  delivered, and `dispatch` refuses while a call is live.
+  never conclude "I did not do X" from X being absent — see the journal rule
+  above. `answer` also returns the text already delivered, and `dispatch`
+  refuses while a call is live.
 - **Keypresses are inaudible, to everyone.** DTMF is out-of-band, so no one
   hears a tone; the digits appear only as `[TOOL press_digit]`. A far-end
   system wanting in-band tones drops them silently and the menu repeats — a

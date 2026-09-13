@@ -298,18 +298,18 @@ class ResumeAfterActing(unittest.TestCase):
         for name, fn in self.saved.items():
             setattr(dialer, name, fn)
 
-    def run_cli(self, *argv):
-        old = sys.argv
-        sys.argv = ["dialer", *argv]
+    def run_cli(self, *argv, stdin="he is free after 5\n"):
+        old = sys.argv, sys.stdin
+        sys.argv, sys.stdin = ["dialer", *argv], io.StringIO(stdin)
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 with contextlib.redirect_stderr(io.StringIO()):
                     dialer.main()
         finally:
-            sys.argv = old
+            sys.argv, sys.stdin = old
 
     def test_answer_resumes_watching(self):
-        self.run_cli("answer", "call_1:qab12", "go ahead")
+        self.run_cli("answer", "call_1:qab12")
         self.assertEqual(self.seen["call_id"], "call_1")
         self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
 
@@ -319,30 +319,29 @@ class ResumeAfterActing(unittest.TestCase):
         sent = {}
         dialer.queue = lambda cfg, path, **kw: (sent.update(kw.get("body") or {}),
                                                 (200, {"ok": True}))[1]
-        self.run_cli("answer", "call_1:qab12", "go ahead")
+        self.run_cli("answer", "call_1:qab12")
         self.assertEqual(sent["consult_id"], "call_1:qab12")
 
     def test_answer_refuses_a_bare_call_id(self):
         with self.assertRaises(SystemExit):
-            self.run_cli("answer", "call_1", "go ahead")
+            self.run_cli("answer", "call_1")
         self.assertEqual(self.seen, {})
 
     def test_a_settled_consult_does_not_resume(self):
         dialer.queue = lambda cfg, path, **kw: (404, {"prior": {"outcome": "timed_out"}})
         with self.assertRaises(SystemExit):
-            self.run_cli("answer", "call_1:qab12", "too late")
+            self.run_cli("answer", "call_1:qab12")
         self.assertEqual(self.seen, {})
 
     def test_steer_resumes_watching_too(self):
-        self.run_cli("steer", "call_1", "he is free after 5")
+        self.run_cli("steer", "call_1")
         self.assertEqual(self.seen["call_id"], "call_1")
         self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
 
     def test_both_accept_the_same_overrides(self):
-        for cmd, target, text in (("answer", "call_1:qab12", "yes"),
-                                  ("steer", "call_1", "context")):
+        for cmd, target in (("answer", "call_1:qab12"), ("steer", "call_1")):
             self.seen.clear()
-            self.run_cli(cmd, target, text, "--interval", "5",
+            self.run_cli(cmd, target, "--interval", "5",
                          "--budget", "60", "--since", "7")
             self.assertEqual((self.seen["interval"], self.seen["budget"],
                               self.seen["since"]), (5, 60, 7))
@@ -350,11 +349,34 @@ class ResumeAfterActing(unittest.TestCase):
     def test_a_failed_steer_does_not_resume(self):
         dialer.retell = lambda cfg, path, **kw: (400, {"error": "call ended"})
         with self.assertRaises(SystemExit):
-            self.run_cli("steer", "call_1", "too late")
+            self.run_cli("steer", "call_1")
         self.assertEqual(self.seen, {})
 
     def test_an_idle_watch_stays_slower(self):
         self.assertGreater(dialer.WATCH_INTERVAL, dialer.FOLLOW_INTERVAL)
+
+    def test_text_arrives_verbatim_from_stdin(self):
+        # A "$50" passed as a double-quoted argument reached the queue as "0".
+        sent = {}
+        stub = lambda cfg, path, **kw: (sent.update(kw.get("body") or {}), (200, {"ok": True}))[1]
+        dialer.queue = dialer.retell = stub
+        literal = 'It\'s $50 -- `not` a "$(command)" \\n\n'
+        self.run_cli("answer", "call_1:qab12", stdin=literal)
+        self.assertEqual(sent["text"], literal.strip())
+        self.run_cli("steer", "call_1", stdin=literal)
+        self.assertEqual(sent["call_control"]["additional_context"], literal.strip())
+
+    def test_text_as_an_argument_is_refused(self):
+        for argv in (("answer", "call_1:qab12", "costs 0"), ("steer", "call_1", "costs 0")):
+            with self.assertRaises(SystemExit):
+                self.run_cli(*argv)
+        self.assertEqual(self.seen, {})
+
+    def test_empty_stdin_is_refused(self):
+        for argv in (("answer", "call_1:qab12"), ("steer", "call_1")):
+            with self.assertRaises(SystemExit):
+                self.run_cli(*argv, stdin="  \n")
+        self.assertEqual(self.seen, {})
 
 
 if __name__ == "__main__":

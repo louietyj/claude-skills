@@ -425,8 +425,9 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
                 consult["transcript"] += IN_PROGRESS
             view = live_view(state["turns"], seen)
             if consult.get("consult_id"):
-                view["hint"] = (f'answer with `dialer answer {consult["consult_id"]} "..." '
-                                f'--since {resume_point(state["turns"], seen)}`')
+                view["hint"] = (f'answer with: dialer answer {consult["consult_id"]} '
+                                f'--since {resume_point(state["turns"], seen)} '
+                                "<<'EOF', your text, then EOF alone on the last line")
             return {"event": "consult", **consult,
                     "turns": view["turns"], "hint": view["hint"]}
         if state["ended"]:
@@ -487,6 +488,33 @@ def cmd_poll(cfg, args):
     emit(poll_loop(cfg, args.call_id, args.budget))
 
 
+def read_text(args, target):
+    """The answer or steer text, read raw from stdin.
+
+    As an argument it passes through the shell first, and under call pressure
+    nobody escapes it: a "$50" in double quotes reached the agent as "0". A
+    quoted heredoc hands the bytes over untouched."""
+    usage = ("pass the text on stdin in a quoted heredoc, so the shell leaves $, "
+             f"quotes and backticks alone:\n\n  dialer {args.cmd} {target} <<'EOF'\n"
+             "  your text\n  EOF")
+    if args.text is not None:
+        die(f"text given as an argument has already been rewritten by the shell -- {usage}")
+    if sys.stdin is None or sys.stdin.isatty():
+        die(usage)
+    # A forgotten heredoc can leave stdin an open pipe with nothing coming, and
+    # blocking on that with someone on the line is the worst way to fail.
+    try:
+        import select
+        if not select.select([sys.stdin], [], [], 2)[0]:
+            die(usage)
+    except (OSError, ValueError):
+        pass  # not selectable: a test double, or a pipe on Windows
+    text = sys.stdin.read().strip()
+    if not text:
+        die(f"refusing to send empty text -- {usage}")
+    return text
+
+
 def cmd_answer(cfg, args):
     """Answer, then resume watching in the same process -- see the module
     docstring for why these are not two commands.
@@ -499,12 +527,7 @@ def cmd_answer(cfg, args):
     call_id, sep, _ = args.consult_id.partition(":")
     if not sep:
         die("pass the consult_id from the consult (e.g. call_8f2e:q7c1), not the call_id")
-    text = args.text
-    if args.text_file:
-        with open(args.text_file, encoding="utf-8") as fh:
-            text = fh.read().strip()
-    if not text.strip():
-        die("refusing to send an empty answer")
+    text = read_text(args, args.consult_id)
 
     journal("answer", call_id=call_id, consult_id=args.consult_id, text=text)
     status, body = queue(cfg, "/answer", method="POST", timeout=25,
@@ -532,9 +555,10 @@ def cmd_steer(cfg, args):
     Resumes watching afterwards for the same reason `answer` does: an
     injection is a bet on how the agent will use it, and the only way to know
     is to hear the next few turns."""
-    body = {"call_control": {"additional_context": args.text,
+    text = read_text(args, args.call_id)
+    body = {"call_control": {"additional_context": text,
                              "trigger_response": args.speak_now}}
-    journal("steer", call_id=args.call_id, text=args.text, speak_now=args.speak_now)
+    journal("steer", call_id=args.call_id, text=text, speak_now=args.speak_now)
     status, resp = retell(cfg, f"/v2/update-live-call/{args.call_id}",
                           method="PATCH", body=body)
     journal("steer", call_id=args.call_id, status=status)
@@ -773,14 +797,14 @@ def main():
 
     a = sub.add_parser("answer", help="answer a consult and resume watching")
     a.add_argument("consult_id", help="from the consult, e.g. call_8f2e:q7c1")
-    a.add_argument("text", nargs="?", default="")
-    a.add_argument("--text-file")
+    # Accepted only to be refused with the heredoc form; see read_text.
+    a.add_argument("text", nargs="?", help=argparse.SUPPRESS)
     watch_args(a, FOLLOW_INTERVAL)
     a.set_defaults(fn=cmd_answer)
 
     s = sub.add_parser("steer", help="inject context mid-call, then resume watching")
     s.add_argument("call_id")
-    s.add_argument("text")
+    s.add_argument("text", nargs="?", help=argparse.SUPPRESS)
     s.add_argument("--speak-now", action="store_true",
                    help="speak immediately instead of waiting for their turn")
     watch_args(s, FOLLOW_INTERVAL)

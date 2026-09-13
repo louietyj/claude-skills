@@ -157,8 +157,11 @@ dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
                   off by an interruption? Watch again without it and you get
                   the whole call so far.
 
-dialer answer CONSULT_ID "text"  [watch flags]
-dialer steer  CALL_ID    "text"  [--speak-now] [watch flags]
+dialer answer CONSULT_ID [watch flags] <<'EOF'
+dialer steer  CALL_ID [--speak-now] [watch flags] <<'EOF'
+    The text goes on stdin through a quoted heredoc, closed by EOF alone on
+    its own line. Never as an argument: the shell rewrites it first, and
+    "$50" arrives as "0".
     Send, then keep watching in the same process: same returns, same flags,
     but --interval defaults to 15. The next turn or two is what shows
     whether you were understood; raise it again once that is clear.
@@ -198,9 +201,11 @@ $ dialer watch call_8f2e --since 3
 {"event": "consult", "consult_id": "call_8f2e:q7c1",
  "question": "They offered Tuesday 2pm. Accept?",
  "transcript": "...", "turns": "6 + 1 in progress",
- "hint": "answer with `dialer answer call_8f2e:q7c1 \"...\" --since 6`"}
+ "hint": "answer with: dialer answer call_8f2e:q7c1 --since 6 <<'EOF', your text, then EOF alone on the last line"}
 
-$ dialer answer call_8f2e:q7c1 "No afternoons. Any weekday before 11am next week." --since 6
+$ dialer answer call_8f2e:q7c1 --since 6 <<'EOF'
+No afternoons. Any weekday before 11am next week.
+EOF
 {"event": "transcript", "turns": "9 + 1 in progress", "new": [...],
  "hint": "continue with `--since 9` on watch, answer or steer"}
 
@@ -210,7 +215,9 @@ $ dialer journal
 {"at": "...", "command": "answer", "call_id": "call_8f2e", "consult_id": "call_8f2e:q7c1", "text": "No afternoons. ..."}
 {"at": "...", "command": "answer", "call_id": "call_8f2e", "consult_id": "call_8f2e:q7c1", "status": 200}
 
-$ dialer steer call_8f2e "Louie says Wednesday afternoon also works." --since 9
+$ dialer steer call_8f2e --since 9 <<'EOF'
+Louie says Wednesday afternoon also works.
+EOF
 {"event": "call_ended", "call_ended": true, "disconnection_reason": "agent_hangup",
  "transcript": ["agent: Hello, I'm an AI assistant for Louie Tan. ...", "...",
                 "agent: Thanks so much, goodbye."]}

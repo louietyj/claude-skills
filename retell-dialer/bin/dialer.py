@@ -421,25 +421,27 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
             consult = dict(state["consult"])
             if isinstance(consult.get("transcript"), str):
                 consult["transcript"] += IN_PROGRESS
+            view = live_view(state["turns"], seen)
             return {"event": "consult", **consult,
-                    "live_turns": len(state["turns"])}
+                    "turns": view["turns"], "hint": view["hint"]}
         if state["ended"]:
             stop.set()
             return {"event": "call_ended",
                     **ended_result(cfg, call_id, state["ended"])}
-        grown = len(state["turns"]) > seen
-        if grown and time.monotonic() - last_report >= interval:
+        # The turn at `seen` is the one left in progress last time; it only
+        # counts as news once a turn after it exists, which also means it is
+        # finished. Otherwise the same half-sentence is reported again.
+        finished = len(state["turns"]) > seen + 1
+        if finished and time.monotonic() - last_report >= interval:
             stop.set()
             return {"event": "transcript", "call_id": call_id,
-                    "turns_total": len(state["turns"]),
-                    "new": render_turns(state["turns"][seen:], live=True),
-                    "hint": "steer with `dialer steer`, or `watch --since N` to continue"}
+                    **live_view(state["turns"], seen)}
         time.sleep(0.4)
 
     stop.set()
-    # `turns_total: 0` alone is ambiguous -- a silent call and a dead socket
-    # look identical -- so say which it was.
-    return {"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
+    # An empty `new` alone is ambiguous -- a silent call and a dead socket look
+    # identical -- so say which it was.
+    return {"event": "idle", "call_id": call_id, **live_view(state["turns"], seen),
             "monitor": state["error"] or ("receiving" if state["types"] else "no frames")}
 
 
@@ -555,6 +557,19 @@ def render_turns(turns, live=False):
     if live and lines:
         lines[-1] += IN_PROGRESS
     return lines
+
+
+def live_view(turns, since):
+    """What a live watch reports past `since`, and where to resume.
+
+    The last turn may still be being spoken, so it is never counted as seen:
+    the next watch starts *at* it and shows the finished sentence, rather than
+    after it with the rest of the sentence lost."""
+    in_progress = len(turns) > since
+    done = len(turns) - 1 if in_progress else since
+    return {"turns": f"{done} + 1 in progress" if in_progress else str(done),
+            "new": render_turns(turns[since:], live=True),
+            "hint": f"continue with `--since {done}` on watch, answer or steer"}
 
 
 # Under `everything_except_pii` Retell retains only the scrubbed variants, so

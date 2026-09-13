@@ -121,7 +121,7 @@ dialer watch --call-id ID [--interval 30] [--budget 200] [--since N]
     Blocks, then returns on the first of:
       consult       immediately, whatever the timers are set to
       call_ended    with the full transcript
-      transcript    new dialogue, once --interval seconds have passed
+      transcript    a finished turn, once --interval seconds have passed
       idle          --budget ran out and nobody spoke
     Act on what it returned, then watch again.
 
@@ -132,7 +132,9 @@ dialer watch --call-id ID [--interval 30] [--budget 200] [--since N]
     --budget N    The cap for silence -- hold music, a long menu, "let me
                   check" -- where --interval never fires. Keep it at or under
                   200: the sandbox kills at 300s and discards all output.
-    --since N     Turns already seen. Pass back the last turns_total.
+    --since N     Where to resume; every return's hint carries the number.
+                  "18 + 1 in progress" resumes at 18, so that turn comes back
+                  finished rather than cut off.
 
 dialer answer CALL_ID "text"  [watch flags]
 dialer steer  CALL_ID "text"  [--speak-now] [watch flags]

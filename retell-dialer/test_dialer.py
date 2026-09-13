@@ -113,6 +113,31 @@ class RenderTurns(unittest.TestCase):
         self.assertEqual(lines, ["agent: Hi"])
 
 
+class LiveView(unittest.TestCase):
+    """A cursor that counted the half-spoken last turn skipped the rest of it:
+    "agent: It is." was reported cut off, and the next watch started after it."""
+
+    def turns(self, *contents):
+        return [{"role": "agent", "content": c} for c in contents]
+
+    def test_in_progress_turn_is_not_counted_as_seen(self):
+        view = dialer.live_view(self.turns("a", "b", "It is."), since=1)
+        self.assertEqual(view["turns"], "2 + 1 in progress")
+        self.assertIn("--since 2", view["hint"])
+
+    def test_resuming_shows_that_turn_finished(self):
+        first = dialer.live_view(self.turns("a", "It is."), since=0)
+        resume = int(first["hint"].split("--since ")[1].split("`")[0])
+        later = dialer.live_view(
+            self.turns("a", "It is. How's the audio?", "Fine"), since=resume)
+        self.assertEqual(later["new"][0], "agent: It is. How's the audio?")
+
+    def test_nothing_past_the_cursor(self):
+        view = dialer.live_view(self.turns("a", "b"), since=2)
+        self.assertEqual((view["turns"], view["new"]), ("2", []))
+        self.assertIn("--since 2", view["hint"])
+
+
 class CheckVars(unittest.TestCase):
     """An unset variable renders as a literal `{{brief}}` -- a live call with
     no instructions at all."""

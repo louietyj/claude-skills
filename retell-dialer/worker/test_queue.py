@@ -1,5 +1,6 @@
 """Exercise the consult queue against `wrangler dev`: concurrent consults on
-one call, retries, stale answers, hangups.
+one call, retries, stale answers, hangups, and two calls supervised at once
+by separate conversations.
 
     (cd worker && npx wrangler dev --port 8799 --var CONSULT_TOKEN:testtoken)
     python worker/test_queue.py
@@ -100,5 +101,60 @@ check("hangup releases every held consult",
 _, gone = req("/answer", "POST", {"consult_id": items[0]["consult_id"], "text": "late"})
 check("a late answer after hangup says the call ended",
       (gone.get("prior") or {}).get("outcome") == "call_ended", gone)
+
+# Two calls at once, as two separate conversations would run them: consults
+# interleave, each watcher polls for its own call, and neither ever sees,
+# answers or ends the other's.
+tx1, ox1 = held("call_x", "X: accept 9am?")
+ty1, oy1 = held("call_y", "Y: date of birth?")
+tx2, ox2 = held("call_x", "X: and the hygienist?")
+seen_by = {}
+
+
+def watcher(call_id, rounds):
+    got = []
+    for _ in range(rounds):
+        _, p = req(f"/poll?wait=3&call_id={call_id}")
+        got.append(p.get("question"))
+        if p.get("consult_id"):
+            req("/answer", "POST", {"consult_id": p["consult_id"],
+                                    "text": f"answer to {p['question']}"})
+    seen_by[call_id] = got
+
+
+wx = threading.Thread(target=watcher, args=("call_x", 3))
+wy = threading.Thread(target=watcher, args=("call_y", 2))
+wx.start()
+wy.start()
+wx.join(30)
+wy.join(30)
+for t in (tx1, ty1, tx2):
+    t.join(5)
+check("each watcher sees only its own call's consults, oldest first",
+      seen_by.get("call_x") == ["X: accept 9am?", "X: and the hygienist?", None]
+      and seen_by.get("call_y") == ["Y: date of birth?", None], seen_by)
+check("every consult gets the answer to its own question",
+      [o[0][1] if o else None for o in (ox1, ox2, oy1)]
+      == ["answer to X: accept 9am?", "answer to X: and the hygienist?",
+          "answer to Y: date of birth?"], (ox1, ox2, oy1))
+
+# The same question on two calls is two consults, not a retry of one.
+tx3, ox3 = held("call_x", "Same question?")
+ty3, oy3 = held("call_y", "Same question?")
+_, pend = req("/pending")
+both = {i["call_id"] for i in pend["items"] if i["question"] == "Same question?"}
+check("identical questions on two calls both stay pending",
+      both == {"call_x", "call_y"} and tx3.is_alive() and ty3.is_alive(), pend)
+
+# One call hanging up releases only its own consults.
+req("/event", "POST", {"event": "call_ended", "call": {"call_id": "call_x"}}, auth=False)
+tx3.join(5)
+check("a hangup releases that call's consult", not tx3.is_alive() and bool(ox3), ox3)
+check("and leaves the other call's consult held", ty3.is_alive())
+_, py = req("/poll?wait=2&call_id=call_y")
+req("/answer", "POST", {"consult_id": py["consult_id"], "text": "still here"})
+ty3.join(5)
+check("which is still answerable afterwards", oy3 and oy3[0][1] == "still here", oy3)
+req("/event", "POST", {"event": "call_ended", "call": {"call_id": "call_y"}}, auth=False)
 
 sys.exit(1 if failed else 0)

@@ -124,8 +124,12 @@ dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file b
                   inline). Files last the whole conversation; shell
                   variables do not.
     Prints {"call_id": "call_…", "call_status": "registered"}; that call_id is
-    the CALL_ID below. Refuses while another call is live, naming that call's
-    id: watch it rather than dialling again.
+    the CALL_ID below.
+    If any call is already live it refuses instead, printing each one's
+    call_id, number, start time and brief. One of them the call you were
+    placing (an interrupted turn loses the tool call, not the call)? Watch
+    it. None of them? It is another conversation's: leave it alone and
+    dispatch again with --force.
 
 dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
     Defaults as shown. Blocks, then prints one JSON object whose "event" is

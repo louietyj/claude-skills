@@ -156,16 +156,39 @@ def call_status(cfg, call_id):
     return body.get("call_status") if status == 200 and isinstance(body, dict) else None
 
 
+LIVE_STATUSES = ("registered", "ongoing")
+
+
+def live_calls(cfg):
+    """Every call on the account not yet over, newest first; None if Retell
+    could not be asked.
+
+    Filtered here rather than by Retell: its status filter has no "registered",
+    which is what a call not yet connected reports -- and a call still ringing
+    is exactly what an interrupted dispatch leaves behind."""
+    status, body = retell(cfg, "/v2/list-calls", method="POST", timeout=15,
+                          body={"sort_order": "descending", "limit": 50})
+    if status != 200 or not isinstance(body, list):
+        return None
+    return [c for c in body if c.get("call_status") in LIVE_STATUSES]
+
+
 def find_ongoing_call(cfg):
     """The first poll happens before any consult has revealed an id."""
-    status, body = retell(
-        cfg, "/v2/list-calls", method="POST", timeout=15,
-        body={"filter_criteria": {"call_status": ["ongoing"]}, "limit": 10},
-    )
-    if status != 200 or not isinstance(body, list) or not body:
-        return None
-    newest = max(body, key=lambda c: c.get("start_timestamp") or 0)
-    return newest.get("call_id")
+    calls = live_calls(cfg)
+    return calls[0].get("call_id") if calls else None
+
+
+def describe_call(c):
+    """Enough of a live call to recognise it as the one you meant to place."""
+    ts = c.get("start_timestamp")
+    variables = c.get("retell_llm_dynamic_variables") or {}
+    return {"call_id": c.get("call_id"), "call_status": c.get("call_status"),
+            "to": c.get("to_number"),
+            "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts / 1000)) if ts else None,
+            "purpose": variables.get("call_purpose"),
+            "opening": variables.get("opening"),
+            "brief": variables.get("brief")}
 
 
 # --- commands ----------------------------------------------------------------
@@ -212,14 +235,22 @@ def cmd_dispatch(cfg, args):
     # An interrupted turn has its tool calls stripped from the transcript, so a
     # dispatch that already happened can look like one that never did -- and
     # the cost of believing that is ringing a stranger twice. Retell is the
-    # record, not the transcript.
+    # record, not the transcript. But a live call may equally belong to another
+    # conversation, so show each one in full and let the caller tell them apart
+    # rather than guessing which it is.
     if not args.force:
-        live = find_ongoing_call(cfg)
+        live = live_calls(cfg)
+        if live is None:
+            die("could not list live calls to check that none is yours -- retry, "
+                "or pass --force")
         if live:
-            die(f"a call is already ongoing ({live}). If you do not remember "
-                f"placing it, you may still have done so -- an interrupted turn "
-                f"loses its tool calls. Check `watch {live}`, or pass "
-                f"--force to dial anyway.")
+            emit({"refused": "calls are already live on this account",
+                  "live_calls": [describe_call(c) for c in live],
+                  "next": ("If one of these is the call you were placing (an interrupted "
+                           "turn loses the tool call, not the call), watch it: "
+                           "`dialer watch CALL_ID`. If none is, it belongs to another "
+                           "conversation: leave it alone and dispatch again with --force.")})
+            sys.exit(1)
     journal("dispatch", to=args.to, purpose=args.purpose)
     status, resp = create_call(cfg, read_variables(args), web=False, to=args.to)
     journal("dispatch", to=args.to, status=status, call_id=(resp or {}).get("call_id"))
@@ -346,10 +377,6 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
     import threading
 
     import ws
-
-    call_id = call_id or find_ongoing_call(cfg)
-    if not call_id:
-        die("no ongoing call found -- pass the call_id dispatch printed")
 
     state = {"turns": [], "by_id": {}, "ended": None, "consult": None,
              "error": None, "types": set()}
@@ -786,7 +813,8 @@ def main():
                             help="turns already seen; report only what is new")
 
     w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
-    w.add_argument("call_id", nargs="?", help="default: the ongoing call")
+    # Required: guessing "the ongoing call" picks another conversation's.
+    w.add_argument("call_id", help="as dispatch printed it")
     watch_args(w, WATCH_INTERVAL)
     w.set_defaults(fn=cmd_watch)
 

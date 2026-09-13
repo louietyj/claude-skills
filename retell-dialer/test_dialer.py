@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -136,6 +137,108 @@ class LiveView(unittest.TestCase):
         view = dialer.live_view(self.turns("a", "b"), since=2)
         self.assertEqual((view["turns"], view["new"]), ("2", []))
         self.assertIn("--since 2", view["hint"])
+
+
+class DispatchGuard(unittest.TestCase):
+    """dispatch refuses while any call is live, because an interrupted turn can
+    hide a dispatch that happened. But the live call may be another
+    conversation's, so the refusal must show enough to tell them apart."""
+
+    def setUp(self):
+        self.saved = {n: getattr(dialer, n) for n in ("retell", "journal", "create_call")}
+        dialer.journal = lambda *a, **kw: None
+        self.created = []
+        dialer.create_call = lambda cfg, variables, **kw: (
+            self.created.append(kw), (201, {"call_id": "call_new", "call_status": "registered"}))[1]
+
+    def tearDown(self):
+        for name, fn in self.saved.items():
+            setattr(dialer, name, fn)
+
+    def live(self, *calls, status=200):
+        dialer.retell = lambda cfg, path, **kw: (status, list(calls))
+
+    def dispatch(self, force=False):
+        args = Args(to="+15550100", force=force, opening="hi", purpose="p",
+                    brief="the brief", brief_file=None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                dialer.cmd_dispatch({"from_number": "+15550199"}, args)
+                code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue()
+
+    def call(self, call_id, status, brief):
+        return {"call_id": call_id, "call_status": status, "to_number": "+15550142",
+                "start_timestamp": 1_700_000_000_000,
+                "retell_llm_dynamic_variables": {"brief": brief, "call_purpose": "reschedule",
+                                                 "opening": "Hello"}}
+
+    def test_refusal_shows_every_live_call_with_its_brief(self):
+        # "registered" is a call not yet connected -- the likeliest shape of a
+        # dispatch this conversation lost to an interruption.
+        self.live(self.call("call_a", "ongoing", "dentist brief"),
+                  self.call("call_b", "registered", "pharmacy brief"),
+                  self.call("call_c", "ended", "old brief"))
+        code, out = self.dispatch()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.created, [])
+        shown = json.loads(out)["live_calls"]
+        self.assertEqual([c["call_id"] for c in shown], ["call_a", "call_b"])
+        self.assertEqual(shown[0]["brief"], "dentist brief")
+        self.assertEqual(shown[0]["to"], "+15550142")
+
+    def test_nothing_live_dials(self):
+        self.live(self.call("call_c", "ended", "old brief"))
+        code, _ = self.dispatch()
+        self.assertEqual((code, len(self.created)), (0, 1))
+
+    def test_force_dials_alongside_another_conversations_call(self):
+        self.live(self.call("call_a", "ongoing", "someone else's brief"))
+        code, _ = self.dispatch(force=True)
+        self.assertEqual((code, len(self.created)), (0, 1))
+
+    def test_unlistable_calls_refuse_rather_than_dial_blind(self):
+        self.live(status=500)
+        code, _ = self.dispatch()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.created, [])
+
+
+class WatchIsolation(unittest.TestCase):
+    """Two conversations can each be supervising a call. A watch has to ask the
+    queue for its own call's consults, or it hands over the other one's."""
+
+    def test_watch_polls_only_its_own_call(self):
+        params_seen = []
+
+        def queue(cfg, path, params=None, **kw):
+            params_seen.append(params or {})
+            if (params or {}).get("call_id") == "call_b":
+                return 200, {"consult_id": "call_b:q1", "call_id": "call_b", "question": "B?"}
+            return 200, {"pending": None}
+
+        def no_socket(*a, **kw):
+            raise OSError("no monitor socket in tests")
+
+        fake_ws = types.ModuleType("ws")
+        fake_ws.monitor = no_socket
+        saved = sys.modules.get("ws"), dialer.queue, dialer.call_status
+        sys.modules["ws"], dialer.queue = fake_ws, queue
+        dialer.call_status = lambda cfg, cid: "ongoing"
+        try:
+            out = dialer.watch_loop({"retell_api_key": "k"}, "call_a", budget=1, interval=30)
+        finally:
+            if saved[0] is None:
+                sys.modules.pop("ws", None)
+            else:
+                sys.modules["ws"] = saved[0]
+            dialer.queue, dialer.call_status = saved[1], saved[2]
+        self.assertEqual(out["event"], "idle")
+        self.assertTrue(params_seen)
+        self.assertTrue(all(p.get("call_id") == "call_a" for p in params_seen), params_seen)
 
 
 class CheckVars(unittest.TestCase):

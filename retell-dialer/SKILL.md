@@ -41,9 +41,10 @@ The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
 `/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
 one breaks on the other.
 
-Puts `dialer` on PATH and proves the consult queue answers. If it **fails, stop
-and tell Louie** — do not place a call. Without the queue, `consult_supervisor`
-times out with a stranger holding the line.
+Puts `dialer` on PATH and runs `dialer health`. Its output is a transcript of
+work already done: nothing in it needs running again this conversation. If it
+**fails, stop and tell Louie** — do not place a call. Without the queue,
+`consult_supervisor` times out with a stranger holding the line.
 
 **Never re-derive the path or set a shell variable for it.** Shell state dies
 with the bash call that set it. Just call `dialer`.
@@ -109,7 +110,8 @@ call turned up back to `profile.md`.
 
 ```text
 dialer health
-    Queue, token, agent, webhook, number. If anything fails, do not dial.
+    Queue, token, agent, webhook, number. setup.sh already ran it; run it
+    again only to diagnose a failure.
 
 dialer dispatch --to +1... --opening "…" --purpose "…" --brief-file FILE
     --opening     First thing spoken: the announcement (wording fixed by the

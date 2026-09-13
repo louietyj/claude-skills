@@ -1,6 +1,7 @@
 #!/bin/bash
-# Puts `dialer` on PATH and proves the consult queue is reachable. Idempotent --
-# re-run it rather than working out whether it already ran.
+# Puts `dialer` on PATH and proves the consult queue is reachable, printing each
+# step as it runs so the caller reads the output as work already done rather
+# than a list of things to go and do.
 #
 # The sandbox reboots between assistant turns but keeps its disk for the length
 # of a conversation, so one run covers every later turn. A new conversation gets
@@ -39,6 +40,22 @@ DIALER_PY=$(find_dialer_py) || {
   exit 1
 }
 
+RULE_H='════════'
+RULE_S='────────'
+TOTAL=2
+
+begin() {  # $1 = step number, $2 = what runs, as displayed
+  printf '\n%s[%d/%d] %s\n' "$RULE_S" "$1" "$TOTAL" "$2"
+}
+
+end() {  # $1 = step number, $2 = exit status
+  printf '%s[%d/%d] end (exit %d)\n' "$RULE_S" "$1" "$TOTAL" "$2"
+}
+
+printf '%s RETELL DIALER SETUP %s\n' "$RULE_H" "$RULE_H"
+printf 'What follows is a transcript of %d steps as they ran.\n' "$TOTAL"
+
+begin 1 'install the `dialer` shim'
 BIN_DIR=""
 for dir in /usr/local/bin /usr/bin "$HOME/.local/bin"; do
   mkdir -p "$dir" 2>/dev/null || true
@@ -68,16 +85,27 @@ case ":$PATH:" in
   *) echo "warning: $BIN_DIR is not on PATH; run: export PATH=\"$BIN_DIR:\$PATH\"" >&2 ;;
 esac
 
+echo "$BIN_DIR/dialer -> $PY $DIALER_PY"
+end 1 0
+
 # Reach the queue now. A dead queue discovered mid-call means a receptionist on
 # hold and no way to answer; discovered here it is just a message to the user.
-if ! "$BIN_DIR/dialer" health; then
-  echo "" >&2
-  echo "dialer is on PATH but the consult queue is not answering." >&2
-  echo "Do NOT place a call until this is fixed: consult_supervisor would" >&2
-  echo "time out mid-conversation with someone on the line." >&2
+begin 2 'dialer health'
+rc=0
+"$BIN_DIR/dialer" health || rc=$?
+end 2 $rc
+
+status=READY; [ $rc -eq 0 ] || status=DOWN
+printf '\n%s RETELL DIALER %s %s\n' "$RULE_H" "$status" "$RULE_H"
+printf '  [1/2] dialer shim ..... OK -- installed\n'
+if [ $rc -ne 0 ]; then
+  printf '  [2/2] dialer health ... FAILED\n'
+  printf '\nDo NOT place a call: consult_supervisor would time out mid-conversation\n'
+  printf 'with someone on the line. Tell Louie which check failed above.\n'
   exit 1
 fi
-
-echo ""
-echo "ready -- \`dialer\` is on PATH and the consult queue is up."
-echo "Placing a call needs the user's explicit go-ahead, every time."
+printf '  [2/2] dialer health ... OK -- queue, token, agent, webhook, number\n'
+printf '\nBoth steps are done for the rest of this conversation. This output is a\n'
+printf 'transcript of work already done, not a plan: do not re-run this script or\n'
+printf '`dialer health`.\n'
+printf "\nNext: Louie's explicit go-ahead for this call, then \`dialer dispatch\`.\n"

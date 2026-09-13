@@ -70,9 +70,11 @@ any interjection, because detecting the drop from the inside is impossible by
 construction.
 
 **Three things are structural rather than advisory**, each having cost a call:
-`answer` re-polls in the same process, since two commands invite prose between
-them and that prose is dead air on a stranger's phone; every request is built by
-urllib rather than curl, because `curl -G` folds the body into the query string
+`answer` and `steer` resume watching in the same process — two commands invite
+prose between them, and that prose is dead air on a stranger's phone — and they
+resume at a tighter interval than an idle `watch`, because the turns right after
+you act are the ones that say whether you were understood; every request is
+built by urllib rather than curl, because `curl -G` folds the body into the query string
 and sends none; and both `watch` and `poll` check Retell's call status
 themselves, because neither the queue nor the monitor socket can tell "still
 talking" from "hung up twenty seconds ago".

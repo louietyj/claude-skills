@@ -9,8 +9,9 @@ queue, answers, and the held request is released -- the agent speaks the answer.
 Three things here are structural rather than advisory, because each one cost
 live calls when it was left to the caller:
 
-  * `answer` re-polls in the same process -- two commands invite prose between
-    them, and that prose is dead air on a stranger's phone.
+  * `answer` and `steer` resume watching in the same process -- two commands
+    invite prose between them, and that prose is dead air on a stranger's
+    phone.
   * Requests are built by urllib, never curl. `curl -G` folds the body into the
     query string and sends none, which hung three calls on an empty req.json().
   * Both `watch` and `poll` check Retell's call status themselves. Neither the
@@ -38,6 +39,8 @@ RETELL = "https://api.retellai.com"
 # Nests inside the claude.ai sandbox's 300s hard kill, which discards all output
 # when it fires -- an overrun loses the question, not just the tail of it.
 POLL_BUDGET = 200
+WATCH_INTERVAL = 30       # batching floor for an ordinary watch
+FOLLOW_INTERVAL = 15      # tighter, for the watch that resumes after you act
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
 DYNAMIC_VARS = ("opening", "brief", "call_purpose")
@@ -330,7 +333,7 @@ def poll_loop(cfg, call_id, budget):
             call_id = find_ongoing_call(cfg)
 
 
-def cmd_watch(cfg, args):
+def watch_loop(cfg, call_id, budget, interval, since=0):
     """Supervise on two channels: the consult queue and the live transcript.
 
     `poll` only wakes when the agent asks, which leaves the other half of
@@ -343,7 +346,7 @@ def cmd_watch(cfg, args):
 
     import ws
 
-    call_id = args.call_id or find_ongoing_call(cfg)
+    call_id = call_id or find_ongoing_call(cfg)
     if not call_id:
         die("no ongoing call found -- pass --call-id")
 
@@ -394,7 +397,7 @@ def cmd_watch(cfg, args):
             sock.close()
 
     def run_poll():
-        _, body = queue(cfg, "/poll", params={"wait": args.budget}, timeout=args.budget + 15)
+        _, body = queue(cfg, "/poll", params={"wait": budget}, timeout=budget + 15)
         if isinstance(body, dict) and body.get("question"):
             state["consult"] = body
 
@@ -402,8 +405,8 @@ def cmd_watch(cfg, args):
     for t in threads:
         t.start()
 
-    deadline = time.monotonic() + args.budget
-    seen = args.since
+    deadline = time.monotonic() + budget
+    seen = since
     last_report = time.monotonic()
     next_status = 0.0
     while time.monotonic() < deadline:
@@ -412,33 +415,36 @@ def cmd_watch(cfg, args):
             live = call_status(cfg, call_id)
             if live in ("ended", "error") and not state["consult"]:
                 stop.set()
-                return emit({"event": "call_ended",
-                             **ended_result(cfg, call_id, live)})
+                return {"event": "call_ended", **ended_result(cfg, call_id, live)}
         if state["consult"]:
             stop.set()
             consult = dict(state["consult"])
             if isinstance(consult.get("transcript"), str):
                 consult["transcript"] += IN_PROGRESS
-            return emit({"event": "consult", **consult,
-                         "live_turns": len(state["turns"])})
+            return {"event": "consult", **consult,
+                    "live_turns": len(state["turns"])}
         if state["ended"]:
             stop.set()
-            return emit({"event": "call_ended",
-                         **ended_result(cfg, call_id, state["ended"])})
+            return {"event": "call_ended",
+                    **ended_result(cfg, call_id, state["ended"])}
         grown = len(state["turns"]) > seen
-        if grown and time.monotonic() - last_report >= args.interval:
+        if grown and time.monotonic() - last_report >= interval:
             stop.set()
-            return emit({"event": "transcript", "call_id": call_id,
-                         "turns_total": len(state["turns"]),
-                         "new": render_turns(state["turns"][seen:], live=True),
-                         "hint": "steer with `dialer steer`, or `watch --since N` to continue"})
+            return {"event": "transcript", "call_id": call_id,
+                    "turns_total": len(state["turns"]),
+                    "new": render_turns(state["turns"][seen:], live=True),
+                    "hint": "steer with `dialer steer`, or `watch --since N` to continue"}
         time.sleep(0.4)
 
     stop.set()
     # `turns_total: 0` alone is ambiguous -- a silent call and a dead socket
     # look identical -- so say which it was.
-    emit({"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
-          "monitor": state["error"] or ("receiving" if state["types"] else "no frames")})
+    return {"event": "idle", "call_id": call_id, "turns_total": len(state["turns"]),
+            "monitor": state["error"] or ("receiving" if state["types"] else "no frames")}
+
+
+def cmd_watch(cfg, args):
+    emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
 
 
 def ended_result(cfg, call_id, why):
@@ -475,7 +481,7 @@ def cmd_poll(cfg, args):
 
 
 def cmd_answer(cfg, args):
-    """Answer, then resume polling in the same process -- see the module
+    """Answer, then resume watching in the same process -- see the module
     docstring for why these are not two commands."""
     text = args.text
     if args.text_file:
@@ -502,19 +508,29 @@ def cmd_answer(cfg, args):
         sys.exit(1)
 
     print(json.dumps(answered, ensure_ascii=False), file=sys.stderr)
-    emit(poll_loop(cfg, args.call_id, args.budget))
+    emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
 
 
 def cmd_steer(cfg, args):
     """Push-side: inject context without waiting to be asked. Lands in the
-    transcript as role `injected` -- not spoken by either party."""
+    transcript as role `injected` -- not spoken by either party.
+
+    Resumes watching afterwards for the same reason `answer` does: an
+    injection is a bet on how the agent will use it, and the only way to know
+    is to hear the next few turns."""
     body = {"call_control": {"additional_context": args.text,
                              "trigger_response": args.speak_now}}
     journal("steer", call_id=args.call_id, text=args.text, speak_now=args.speak_now)
     status, resp = retell(cfg, f"/v2/update-live-call/{args.call_id}",
                           method="PATCH", body=body)
     journal("steer", call_id=args.call_id, status=status)
-    emit({"status": status, "result": resp})
+    sent = {"steer_status": status, "steer_result": resp}
+    if status not in (200, 204):
+        emit({**sent, "hint": "the context did not land -- the call may have ended"})
+        sys.exit(1)
+
+    print(json.dumps(sent, ensure_ascii=False), file=sys.stderr)
+    emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
 
 
 IN_PROGRESS = "  [...utterance may still be in progress]"
@@ -697,15 +713,19 @@ def main():
     sv.add_argument("--port", type=int, default=8765)
     sv.set_defaults(fn=cmd_serve)
 
+    def watch_args(parser, interval):
+        parser.add_argument("--budget", type=int, default=POLL_BUDGET)
+        parser.add_argument("--interval", type=int, default=interval,
+                            help="seconds of new dialogue to accumulate before "
+                                 "returning; raise it while navigating an IVR or on "
+                                 "hold, lower it at a decision point. A consult "
+                                 f"returns immediately either way (default {interval})")
+        parser.add_argument("--since", type=int, default=0,
+                            help="turns already seen; report only what is new")
+
     w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
     w.add_argument("--call-id")
-    w.add_argument("--budget", type=int, default=POLL_BUDGET)
-    w.add_argument("--interval", type=int, default=30,
-                   help="seconds of new dialogue to accumulate before returning; "
-                        "raise it while navigating an IVR or on hold, lower it at "
-                        "a decision point. A consult returns immediately either way")
-    w.add_argument("--since", type=int, default=0,
-                   help="turns already seen; report only what is new")
+    watch_args(w, WATCH_INTERVAL)
     w.set_defaults(fn=cmd_watch)
 
     p = sub.add_parser("poll", help="block until the agent consults, or the call ends")
@@ -713,18 +733,19 @@ def main():
     p.add_argument("--budget", type=int, default=POLL_BUDGET)
     p.set_defaults(fn=cmd_poll)
 
-    a = sub.add_parser("answer", help="answer a consult and resume polling")
+    a = sub.add_parser("answer", help="answer a consult and resume watching")
     a.add_argument("call_id")
     a.add_argument("text", nargs="?", default="")
     a.add_argument("--text-file")
-    a.add_argument("--budget", type=int, default=POLL_BUDGET)
+    watch_args(a, FOLLOW_INTERVAL)
     a.set_defaults(fn=cmd_answer)
 
-    s = sub.add_parser("steer", help="inject context mid-call, unprompted")
+    s = sub.add_parser("steer", help="inject context mid-call, then resume watching")
     s.add_argument("call_id")
     s.add_argument("text")
     s.add_argument("--speak-now", action="store_true",
                    help="speak immediately instead of waiting for their turn")
+    watch_args(s, FOLLOW_INTERVAL)
     s.set_defaults(fn=cmd_steer)
 
     sub.add_parser("pending", help="non-blocking peek at the queue").set_defaults(fn=cmd_pending)

@@ -110,9 +110,9 @@ call turned up back to `profile.md`.
 ```bash
 dialer health                          # queue, token, agent, number
 dialer dispatch --to +1... --purpose "…" --opening "…" --brief-file brief.md
-dialer watch --call-id <id> [--budget 200] [--interval 30] [--since N]
-dialer answer <call_id> "your answer"  # answers AND resumes watching
-dialer steer  <call_id> "context" [--speak-now]
+dialer watch  --call-id <id> [--budget 200] [--interval 30] [--since N]
+dialer answer <call_id> "your answer"    # answers, then watches [same flags]
+dialer steer  <call_id> "context"        # injects, then watches [same flags]
 dialer transcript <call_id>
 dialer journal                         # what you actually did, after an interrupt
 ```
@@ -136,10 +136,16 @@ never fires at all. It defaults to 200s, sized to finish inside the sandbox's
 `--since` is how many turns you have already seen: pass back `turns_total` from
 the previous `watch` to get only what is new.
 
-A consult returns immediately whatever these are set to, so neither ever delays
-the thing that actually needs you. Tool calls are finite on claude.ai and every
-return spends one, so lower `--interval` to 15–20s only when a negotiation is
-live and a steer might matter; leave it at 30 otherwise.
+`answer` and `steer` both end by watching, and take the same three flags —
+`--interval` defaults to 15s there rather than 30. What you just sent is a bet
+on how the agent will use it, and the turn or two that follows is the stretch
+you most need to see; it is also the cheapest moment to catch a
+misinterpretation, while the agent is still mid-conversation.
+
+A consult returns immediately whatever these are set to, so neither timer ever
+delays the thing that actually needs you. Tool calls are finite on claude.ai
+and every return spends one, so raise `--interval` back up once whatever you
+sent has clearly landed.
 
 ### After any interjection, read the journal first
 
@@ -174,9 +180,9 @@ in chat. This is the adversarial review, and it is the half most easily skipped
 under time pressure — a band granted unchecked is how a conflicting slot got
 booked.
 
-`steer` injects context without the agent asking. Use it when Louie tells you
-something new, or when the agent is genuinely going wrong — not to narrate what
-it can already hear. A live view marks its last line
+`steer` injects context without the agent asking, then watches what the agent
+does with it. Use it when Louie tells you something new, or when the agent is
+genuinely going wrong — not to narrate what it can already hear. A live view marks its last line
 `[...utterance may still be in progress]`: that sentence is still being spoken
 and may end differently, so never steer on it. Wait for the next `watch` — one
 steer "corrected" a keypress that had been right.

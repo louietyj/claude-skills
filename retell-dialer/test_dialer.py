@@ -251,5 +251,65 @@ class Journal(unittest.TestCase):
         self.assertIn("nothing recorded yet", out.getvalue())
 
 
+class ResumeAfterActing(unittest.TestCase):
+    """Acting on a call is a bet on how the agent will use what you sent, so
+    both commands resume watching -- at a tighter interval than an idle watch,
+    because this is the stretch you most need to see."""
+
+    def setUp(self):
+        self.saved = {n: getattr(dialer, n)
+                      for n in ("load_config", "queue", "retell", "watch_loop", "journal")}
+        self.seen = {}
+        dialer.load_config = lambda: {}
+        dialer.journal = lambda *a, **kw: None
+        dialer.queue = lambda cfg, path, **kw: (200, {"ok": True})
+        dialer.retell = lambda cfg, path, **kw: (200, {"ok": True})
+        dialer.watch_loop = lambda cfg, call_id, budget, interval, since=0: (
+            self.seen.update(call_id=call_id, budget=budget,
+                             interval=interval, since=since),
+            {"event": "idle"})[1]
+
+    def tearDown(self):
+        for name, fn in self.saved.items():
+            setattr(dialer, name, fn)
+
+    def run_cli(self, *argv):
+        old = sys.argv
+        sys.argv = ["dialer", *argv]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    dialer.main()
+        finally:
+            sys.argv = old
+
+    def test_answer_resumes_watching(self):
+        self.run_cli("answer", "call_1", "go ahead")
+        self.assertEqual(self.seen["call_id"], "call_1")
+        self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
+
+    def test_steer_resumes_watching_too(self):
+        self.run_cli("steer", "call_1", "he is free after 5")
+        self.assertEqual(self.seen["call_id"], "call_1")
+        self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
+
+    def test_both_accept_the_same_overrides(self):
+        for cmd, text in (("answer", "yes"), ("steer", "context")):
+            self.seen.clear()
+            self.run_cli(cmd, "call_1", text, "--interval", "5",
+                         "--budget", "60", "--since", "7")
+            self.assertEqual((self.seen["interval"], self.seen["budget"],
+                              self.seen["since"]), (5, 60, 7))
+
+    def test_a_failed_steer_does_not_resume(self):
+        dialer.retell = lambda cfg, path, **kw: (400, {"error": "call ended"})
+        with self.assertRaises(SystemExit):
+            self.run_cli("steer", "call_1", "too late")
+        self.assertEqual(self.seen, {})
+
+    def test_an_idle_watch_stays_slower(self):
+        self.assertGreater(dialer.WATCH_INTERVAL, dialer.FOLLOW_INTERVAL)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

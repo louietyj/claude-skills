@@ -107,45 +107,45 @@ call turned up back to `profile.md`.
 
 ## Running the call
 
-```bash
-dialer health                          # queue, token, agent, number
-dialer dispatch --to +1... --purpose "…" --opening "…" --brief-file brief.md
-dialer watch  --call-id <id> [--budget 200] [--interval 30] [--since N]
-dialer answer <call_id> "your answer"    # answers, then watches [same flags]
-dialer steer  <call_id> "context"        # injects, then watches [same flags]
-dialer transcript <call_id>
-dialer journal                         # what you actually did, after an interrupt
+```text
+dialer health
+    Queue, token, agent, webhook, number. If anything fails, do not dial.
+
+dialer dispatch --to +1... --opening "…" --purpose "…" --brief-file FILE
+    --opening     First thing spoken: the announcement (wording fixed by the
+                  invariants) plus one line of purpose.
+    --purpose     Short phrase, for call screening.
+    Refuses while another call is live.
+
+dialer watch --call-id ID [--interval 30] [--budget 200] [--since N]
+    Blocks, then returns on the first of:
+      consult       immediately, whatever the timers are set to
+      call_ended    with the full transcript
+      transcript    new dialogue, once --interval seconds have passed
+      idle          --budget ran out and nobody spoke
+    Act on what it returned, then watch again.
+
+    --interval N  Batching floor, not a wait: it never returns on silence,
+                  it just stops watch returning once per word. ~15 while
+                  negotiating, 30 in ordinary talk, ~60 through a phone menu.
+                  Every return spends one of your finite tool calls.
+    --budget N    The cap for silence -- hold music, a long menu, "let me
+                  check" -- where --interval never fires. Keep it at or under
+                  200: the sandbox kills at 300s and discards all output.
+    --since N     Turns already seen. Pass back the last turns_total.
+
+dialer answer CALL_ID "text"  [watch flags]
+dialer steer  CALL_ID "text"  [--speak-now] [watch flags]
+    Send, then keep watching in the same process: same returns, same flags,
+    but --interval defaults to 15. The next turn or two is what shows
+    whether you were understood; raise it again once that is clear.
+
+dialer transcript CALL_ID
+    Post-call only; mid-call, use watch.
+
+dialer journal
+    What you actually sent, on disk. See the rule below.
 ```
-
-`--opening` is the first thing spoken: the announcement plus one line of purpose
-(the invariants fix the announcement wording). `--purpose` is a short phrase for
-call screening.
-
-`watch` blocks and returns on the first of four things: a consult, the call
-ending, `--interval` seconds of *new dialogue* having accumulated, or
-`--budget` expiring with nothing to report. Then you act and call it again.
-
-The two timers cover different situations, which is why both exist.
-`--interval` is a floor on batching rather than a cap on waiting: it only fires
-once somebody has actually spoken, and it keeps `watch` from returning once per
-word. `--budget` governs **silence** — hold music, a long recorded menu, the
-other party gone to check something — where no turns arrive and `--interval`
-never fires at all. It defaults to 200s, sized to finish inside the sandbox's
-300s hard kill, which discards all output when it fires.
-
-`--since` is how many turns you have already seen: pass back `turns_total` from
-the previous `watch` to get only what is new.
-
-`answer` and `steer` both end by watching, and take the same three flags —
-`--interval` defaults to 15s there rather than 30. What you just sent is a bet
-on how the agent will use it, and the turn or two that follows is the stretch
-you most need to see; it is also the cheapest moment to catch a
-misinterpretation, while the agent is still mid-conversation.
-
-A consult returns immediately whatever these are set to, so neither timer ever
-delays the thing that actually needs you. Tool calls are finite on claude.ai
-and every return spends one, so raise `--interval` back up once whatever you
-sent has clearly landed.
 
 ### After any interjection, read the journal first
 

@@ -26,6 +26,7 @@ to avoid.
 | `bin/ws.py` | stdlib RFC 6455 client for Retell's live-transcript socket |
 | `test_dialer.py` | offline regression tests — `python test_dialer.py` |
 | `worker/` | the Durable Object queue (`wrangler deploy`) |
+| `worker/test_queue.py` | queue tests against `wrangler dev` — see its docstring |
 | `agent/agent.json` | the Retell agent + response engine, ids templated out |
 | `dev/webcall/` | localhost launcher, for exercising the loop without PSTN |
 | `references/provisioning.md` | deploying the Worker, the agent, PII settings |

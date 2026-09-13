@@ -309,9 +309,29 @@ class ResumeAfterActing(unittest.TestCase):
             sys.argv = old
 
     def test_answer_resumes_watching(self):
-        self.run_cli("answer", "call_1", "go ahead")
+        self.run_cli("answer", "call_1:qab12", "go ahead")
         self.assertEqual(self.seen["call_id"], "call_1")
         self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
+
+    def test_answer_sends_the_consult_id(self):
+        # The agent can ask a second question while the first is waiting; an
+        # answer addressed only to the call could land on either.
+        sent = {}
+        dialer.queue = lambda cfg, path, **kw: (sent.update(kw.get("body") or {}),
+                                                (200, {"ok": True}))[1]
+        self.run_cli("answer", "call_1:qab12", "go ahead")
+        self.assertEqual(sent["consult_id"], "call_1:qab12")
+
+    def test_answer_refuses_a_bare_call_id(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("answer", "call_1", "go ahead")
+        self.assertEqual(self.seen, {})
+
+    def test_a_settled_consult_does_not_resume(self):
+        dialer.queue = lambda cfg, path, **kw: (404, {"prior": {"outcome": "timed_out"}})
+        with self.assertRaises(SystemExit):
+            self.run_cli("answer", "call_1:qab12", "too late")
+        self.assertEqual(self.seen, {})
 
     def test_steer_resumes_watching_too(self):
         self.run_cli("steer", "call_1", "he is free after 5")
@@ -319,9 +339,10 @@ class ResumeAfterActing(unittest.TestCase):
         self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
 
     def test_both_accept_the_same_overrides(self):
-        for cmd, text in (("answer", "yes"), ("steer", "context")):
+        for cmd, target, text in (("answer", "call_1:qab12", "yes"),
+                                  ("steer", "call_1", "context")):
             self.seen.clear()
-            self.run_cli(cmd, "call_1", text, "--interval", "5",
+            self.run_cli(cmd, target, text, "--interval", "5",
                          "--budget", "60", "--since", "7")
             self.assertEqual((self.seen["interval"], self.seen["budget"],
                               self.seen["since"]), (5, 60, 7))

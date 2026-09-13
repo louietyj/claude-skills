@@ -320,7 +320,8 @@ def poll_loop(cfg, call_id, budget):
                     "note": "window expired, nothing pending -- poll again"}
 
         window = int(min(POLL_WINDOW, remaining)) or 1
-        status, body = queue(cfg, "/poll", params={"wait": window}, timeout=window + 10)
+        params = {"wait": window, **({"call_id": call_id} if call_id else {})}
+        status, body = queue(cfg, "/poll", params=params, timeout=window + 10)
         if status == 200 and isinstance(body, dict) and body.get("question"):
             return body
         if status not in (200, 0):
@@ -397,7 +398,8 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
             sock.close()
 
     def run_poll():
-        _, body = queue(cfg, "/poll", params={"wait": budget}, timeout=budget + 15)
+        _, body = queue(cfg, "/poll", params={"wait": budget, "call_id": call_id},
+                        timeout=budget + 15)
         if isinstance(body, dict) and body.get("question"):
             state["consult"] = body
 
@@ -422,6 +424,9 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
             if isinstance(consult.get("transcript"), str):
                 consult["transcript"] += IN_PROGRESS
             view = live_view(state["turns"], seen)
+            if consult.get("consult_id"):
+                view["hint"] = (f'answer with `dialer answer {consult["consult_id"]} "..." '
+                                f'--since {resume_point(state["turns"], seen)}`')
             return {"event": "consult", **consult,
                     "turns": view["turns"], "hint": view["hint"]}
         if state["ended"]:
@@ -484,7 +489,16 @@ def cmd_poll(cfg, args):
 
 def cmd_answer(cfg, args):
     """Answer, then resume watching in the same process -- see the module
-    docstring for why these are not two commands."""
+    docstring for why these are not two commands.
+
+    Answers by consult id, not call id: the agent can ask a second question
+    while the first is still waiting, and an answer written against one must
+    never land on the other."""
+    # Ids are `<call_id>:q<hex>`, so the call to resume watching needs no
+    # second argument.
+    call_id, sep, _ = args.consult_id.partition(":")
+    if not sep:
+        die("pass the consult_id from the consult (e.g. call_8f2e:q7c1), not the call_id")
     text = args.text
     if args.text_file:
         with open(args.text_file, encoding="utf-8") as fh:
@@ -492,25 +506,23 @@ def cmd_answer(cfg, args):
     if not text.strip():
         die("refusing to send an empty answer")
 
-    journal("answer", call_id=args.call_id, text=text)
+    journal("answer", call_id=call_id, consult_id=args.consult_id, text=text)
     status, body = queue(cfg, "/answer", method="POST", timeout=25,
-                         body={"call_id": args.call_id, "text": text})
-    journal("answer", call_id=args.call_id, status=status)
+                         body={"consult_id": args.consult_id, "text": text})
+    journal("answer", call_id=call_id, consult_id=args.consult_id, status=status)
     answered = {"answer_status": status, "answer_result": body}
     if status != 200:
-        # Do not fall through to polling: the agent may still be holding, and
-        # the operator needs to see this now, not after a 200s block.
-        hint = ("the consult is still held -- check `pending` for the live "
-                "call_id and resend")
-        if status == 404 and isinstance(body, dict) and body.get("already_answered"):
-            hint = ("already answered -- nothing is holding. Read "
-                    "answer_result.already_answered before concluding anything "
-                    "else answered it; use `steer` to change course.")
+        # Do not fall through to watching: the operator needs to see this now,
+        # not after a 200s block.
+        hint = "the answer did not land -- check the consult_id and resend"
+        if status == 404:
+            hint = ("nothing is waiting on that consult. answer_result.prior says "
+                    "what became of it; answer_result.pending lists any still waiting.")
         emit({**answered, "hint": hint})
         sys.exit(1)
 
     print(json.dumps(answered, ensure_ascii=False), file=sys.stderr)
-    emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
+    emit(watch_loop(cfg, call_id, args.budget, args.interval, args.since))
 
 
 def cmd_steer(cfg, args):
@@ -559,14 +571,17 @@ def render_turns(turns, live=False):
     return lines
 
 
-def live_view(turns, since):
-    """What a live watch reports past `since`, and where to resume.
-
-    The last turn may still be being spoken, so it is never counted as seen:
+def resume_point(turns, since):
+    """The last turn may still be being spoken, so it is never counted as seen:
     the next watch starts *at* it and shows the finished sentence, rather than
     after it with the rest of the sentence lost."""
+    return len(turns) - 1 if len(turns) > since else since
+
+
+def live_view(turns, since):
+    """What a live watch reports past `since`, and where to resume."""
     in_progress = len(turns) > since
-    done = len(turns) - 1 if in_progress else since
+    done = resume_point(turns, since)
     return {"turns": f"{done} + 1 in progress" if in_progress else str(done),
             "new": render_turns(turns[since:], live=True),
             "hint": f"continue with `--since {done}` on watch, answer or steer"}
@@ -757,7 +772,7 @@ def main():
     p.set_defaults(fn=cmd_poll)
 
     a = sub.add_parser("answer", help="answer a consult and resume watching")
-    a.add_argument("call_id")
+    a.add_argument("consult_id", help="from the consult, e.g. call_8f2e:q7c1")
     a.add_argument("text", nargs="?", default="")
     a.add_argument("--text-file")
     watch_args(a, FOLLOW_INTERVAL)

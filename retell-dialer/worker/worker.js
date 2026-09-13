@@ -12,13 +12,41 @@ const PUNT_MS = 90_000;
 const POLL_MS = 220_000;
 const CALL_TTL_MS = 6 * 60 * 60 * 1000;
 const PUNT = "Tell them you'll confirm and call back shortly. Do not guess.";
+const OUTCOME_NOTES = {
+  answered: "Already answered with the text above. If you do not remember sending it, " +
+            "you probably did, in a turn that was interrupted -- claude.ai drops aborted " +
+            "tool calls from the transcript. To change course now, use `steer`.",
+  timed_out: "Nobody answered within 90s, so the agent was told to promise a callback. " +
+             "If it still matters, use `steer`.",
+  call_ended: "The call ended before this was answered.",
+};
 const json = (o, c = 200) =>
   new Response(JSON.stringify(o), { status: c, headers: { "content-type": "application/json" } });
 
 export class ConsultQueue {
   constructor(ctx) {
     this.ctx = ctx;
-    this.pending = new Map();   // call_id -> {q, transcript, at, resolve, timer}
+    this.pending = new Map();   // consult_id -> {call_id, q, transcript, at, resolve, timer}
+  }
+
+  // Every consult ends exactly one way -- answered, timed out, or its call
+  // ended -- and the outcome is kept, so an answer that arrives too late is
+  // told what happened rather than handed a bare 404.
+  async settle(consultId, outcome, reply, text) {
+    const p = this.pending.get(consultId);
+    if (!p) return null;
+    clearTimeout(p.timer);
+    this.pending.delete(consultId);
+    try { p.resolve(json(reply)); } catch {}
+    await this.ctx.storage.put(`consult:${consultId}`,
+      { question: p.q, outcome, ...(text ? { text } : {}), at: new Date().toISOString() });
+    return p;
+  }
+
+  queuedFor(callId) {
+    return [...this.pending]
+      .filter(([, p]) => p.call_id === callId)
+      .sort((a, b) => a[1].at - b[1].at);
   }
 
   async fetch(req) {
@@ -28,27 +56,27 @@ export class ConsultQueue {
     if (pathname === "/consult") {
       const b = await body();
       if (!b) return json({ error: "consult: body was not JSON" }, 400);
-      const id = b?.call?.call_id ?? `anon-${Date.now()}`;
+      const callId = b?.call?.call_id ?? `anon-${Date.now()}`;
+      const q = b?.args?.question ?? "(no question)";
 
-      // Idempotency: Retell may retry (max_retry) and re-POST the same consult.
-      // Retire the previous entry for this call_id so a retry never orphans a
-      // socket. Delivery is idempotent: /poll may hand out the same question
-      // more than once, and only /answer or the punt removes it.
-      const prev = this.pending.get(id);
-      if (prev) {
-        clearTimeout(prev.timer);
-        this.pending.delete(id);
-        try { prev.resolve(json(PUNT)); } catch {}
+      // Retell retries a consult (max_retry) by re-POSTing the same question,
+      // and the retry takes over the original's slot rather than queueing a
+      // duplicate. A different question is a second consult and queues behind
+      // the first: replacing it would stall a question nobody ever saw.
+      // Delivery is idempotent -- /poll hands out the oldest until it settles.
+      const retry = this.queuedFor(callId).find(([, p]) => p.q === q);
+      const consultId = retry ? retry[0] : `${callId}:q${crypto.randomUUID().slice(0, 4)}`;
+      if (retry) {
+        clearTimeout(retry[1].timer);
+        try { retry[1].resolve(json(PUNT)); } catch {}
       }
 
       return new Promise(resolve => {
-        const timer = setTimeout(() => {
-          if (this.pending.has(id)) { this.pending.delete(id); resolve(json(PUNT)); }
-        }, PUNT_MS);
-        this.pending.set(id, {
-          q: b?.args?.question ?? "(no question)",
+        const timer = setTimeout(() => this.settle(consultId, "timed_out", PUNT), PUNT_MS);
+        this.pending.set(consultId, {
+          call_id: callId, q,
           transcript: b?.call?.transcript ?? null,
-          at: prev?.at ?? Date.now(),
+          at: retry ? retry[1].at : Date.now(),
           resolve, timer,
         });
       });
@@ -64,15 +92,22 @@ export class ConsultQueue {
       const waitMs = Number.isFinite(asked) && asked > 0
         ? Math.min(asked * 1000, POLL_MS)
         : POLL_MS;
+      const callId = searchParams.get("call_id");
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline) {
         // Bail the moment the client goes away, so an abandoned loop can never
         // outlive its caller and consume a question nobody receives.
         if (req.signal?.aborted) return json({ pending: null });
-        const oldest = [...this.pending].sort((a, b) => a[1].at - b[1].at)[0];
+        const oldest = [...this.pending]
+          .filter(([, p]) => !callId || p.call_id === callId)
+          .sort((a, b) => a[1].at - b[1].at)[0];
         if (oldest) {
-          const [id, p] = oldest;
-          return json({ call_id: id, question: p.q, waiting_ms: Date.now() - p.at, transcript: p.transcript });
+          const [consultId, p] = oldest;
+          return json({
+            consult_id: consultId, call_id: p.call_id, question: p.q,
+            waiting_ms: Date.now() - p.at, transcript: p.transcript,
+            queued_behind: this.queuedFor(p.call_id).length - 1,
+          });
         }
         await new Promise(r => setTimeout(r, 250));
       }
@@ -81,38 +116,39 @@ export class ConsultQueue {
 
     if (pathname === "/answer") {
       const b = await body();
-      const call_id = b?.call_id ?? searchParams.get("call_id");
-      const text    = b?.text    ?? searchParams.get("text");
-      if (!call_id || !text) {
-        return json({ error: "answer: need call_id and text in a JSON body (or as query params)" }, 400);
+      const text = b?.text;
+      let consultId = b?.consult_id;
+      if (!text || !(consultId || b?.call_id)) {
+        return json({ error: "answer: need consult_id and text in a JSON body" }, 400);
       }
-      const p = this.pending.get(call_id);
+      // A client that predates consult ids names only the call. That can only
+      // be resolved while exactly one consult is waiting on it.
+      if (!consultId) {
+        const queued = this.queuedFor(b.call_id);
+        if (queued.length > 1) {
+          return json({ ok: false, error: "several consults are waiting; answer by consult_id",
+                        pending: queued.map(([id, p]) => ({ consult_id: id, question: p.q })) }, 409);
+        }
+        consultId = queued[0]?.[0] ?? `${b.call_id}:none`;
+      }
+
+      const p = await this.settle(consultId, "answered", text, text);
       if (!p) {
-        // A 404 here means the consult was already answered, and on claude.ai
-        // the likeliest answerer is the caller itself in a turn it can no
-        // longer see: an interrupted turn has its tool calls stripped from the
-        // transcript, so the answer it sent leaves no trace on its side. Hand
-        // back what was actually delivered, rather than leaving it to conclude
-        // that something else is answering its consults.
-        const prior = await this.ctx.storage.get(`answered:${call_id}`);
+        // On claude.ai the likeliest reason for "already answered" is the caller
+        // itself, in a turn it can no longer see: an interrupted turn has its
+        // tool calls stripped from the transcript. Hand back what actually
+        // happened, rather than leaving it to conclude something else answered.
+        const prior = await this.ctx.storage.get(`consult:${consultId}`);
+        const callId = consultId.split(":")[0];
         return json({
           ok: false,
           error: "no such pending consult",
-          ...(prior ? {
-            already_answered: prior,
-            note: "This consult was already answered with the text above. If you " +
-                  "do not remember sending it, you probably did, in a turn that " +
-                  "was interrupted -- claude.ai drops aborted tool calls from the " +
-                  "transcript. To change it now, use `steer`.",
-          } : {}),
+          ...(prior ? { prior, note: OUTCOME_NOTES[prior.outcome] } : {}),
+          pending: this.queuedFor(callId).map(([id, w]) => ({ consult_id: id, question: w.q })),
         }, 404);
       }
-      clearTimeout(p.timer);
-      this.pending.delete(call_id);
-      p.resolve(json(text));
-      await this.ctx.storage.put(`answered:${call_id}`,
-        { text, at: new Date().toISOString(), question: p.q });
-      return json({ ok: true, waited_ms: Date.now() - p.at });
+      return json({ ok: true, waited_ms: Date.now() - p.at,
+                    queued_behind: this.queuedFor(p.call_id).length });
     }
 
     // Retell's webhooks, captured verbatim. Two jobs: a hangup releases any
@@ -128,11 +164,8 @@ export class ConsultQueue {
       if (!id) return json({ ok: false, error: "no call_id" }, 400);
 
       if (event === "call_ended" || event === "call_analyzed") {
-        const held = this.pending.get(id);
-        if (held) {
-          clearTimeout(held.timer);
-          this.pending.delete(id);
-          try { held.resolve(json(PUNT)); } catch {}
+        for (const [consultId] of this.queuedFor(id)) {
+          await this.settle(consultId, "call_ended", PUNT);
         }
       }
       // Keyed by event as well as call: call_ended and call_analyzed carry
@@ -159,7 +192,7 @@ export class ConsultQueue {
       return json({
         count: this.pending.size,
         items: [...this.pending].map(([id, p]) =>
-          ({ call_id: id, question: p.q, waiting_ms: Date.now() - p.at })),
+          ({ consult_id: id, call_id: p.call_id, question: p.q, waiting_ms: Date.now() - p.at })),
       });
     }
 

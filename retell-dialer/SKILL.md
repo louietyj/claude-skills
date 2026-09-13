@@ -131,7 +131,8 @@ dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
     Defaults as shown. Blocks, then prints one JSON object whose "event" is
     the first of:
       consult       Immediately, whatever the timers say. "question" is what
-                    the agent asked; "transcript" is the call so far.
+                    the agent asked, "consult_id" is what you answer, and
+                    "transcript" is the call so far.
       transcript    A finished turn, once --interval seconds have passed.
                     "new" is the lines since --since.
       idle          --budget ran out and nobody spoke. "monitor": "no frames"
@@ -140,7 +141,8 @@ dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
       call_ended    With the full "transcript".
       taken_over    Louie took the call over; see below.
     consult, transcript and idle carry "hint", naming the --since to pass
-    next. Act on what came back, then watch again.
+    next; a consult's hint is the whole answer command. Act on what came
+    back, then watch again.
 
     --interval N  Batching floor, not a wait: it never returns on silence,
                   it just stops watch returning once per word. ~15 while
@@ -155,19 +157,22 @@ dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
                   off by an interruption? Watch again without it and you get
                   the whole call so far.
 
-dialer answer CALL_ID "text"  [watch flags]
-dialer steer  CALL_ID "text"  [--speak-now] [watch flags]
+dialer answer CONSULT_ID "text"  [watch flags]
+dialer steer  CALL_ID    "text"  [--speak-now] [watch flags]
     Send, then keep watching in the same process: same returns, same flags,
     but --interval defaults to 15. The next turn or two is what shows
     whether you were understood; raise it again once that is clear.
+    If the agent asks something new before you answer, it queues: answering
+    one consult returns the next straight away.
 
 dialer transcript CALL_ID
     Post-call only; mid-call, use watch.
 
 dialer journal
     Every dispatch, answer and steer, one JSON line each, written before the
-    request goes out: {"at", "command", "call_id", "text"}, followed by a
-    line with its "status" (for dispatch, also the new "call_id"). A line
+    request goes out: {"at", "command", "call_id", "text"} (answer adds
+    "consult_id"), followed by a line with its "status" (for dispatch, also
+    the new "call_id"). A line
     with no status after it was cut off in flight and may still have landed;
     resend an answer if unsure, since a duplicate fails and shows the text
     that landed. See the rule below.
@@ -190,19 +195,20 @@ $ dialer watch call_8f2e
  "hint": "continue with `--since 3` on watch, answer or steer"}
 
 $ dialer watch call_8f2e --since 3
-{"event": "consult", "question": "They offered Tuesday 2pm. Accept?",
+{"event": "consult", "consult_id": "call_8f2e:q7c1",
+ "question": "They offered Tuesday 2pm. Accept?",
  "transcript": "...", "turns": "6 + 1 in progress",
- "hint": "continue with `--since 6` on watch, answer or steer"}
+ "hint": "answer with `dialer answer call_8f2e:q7c1 \"...\" --since 6`"}
 
-$ dialer answer call_8f2e "No afternoons. Any weekday before 11am next week." --since 6
+$ dialer answer call_8f2e:q7c1 "No afternoons. Any weekday before 11am next week." --since 6
 {"event": "transcript", "turns": "9 + 1 in progress", "new": [...],
  "hint": "continue with `--since 9` on watch, answer or steer"}
 
         Louie, in chat: "Wednesday afternoon works too"
 
 $ dialer journal
-{"at": "...", "command": "answer", "call_id": "call_8f2e", "text": "No afternoons. ..."}
-{"at": "...", "command": "answer", "call_id": "call_8f2e", "status": 200}
+{"at": "...", "command": "answer", "call_id": "call_8f2e", "consult_id": "call_8f2e:q7c1", "text": "No afternoons. ..."}
+{"at": "...", "command": "answer", "call_id": "call_8f2e", "consult_id": "call_8f2e:q7c1", "status": 200}
 
 $ dialer steer call_8f2e "Louie says Wednesday afternoon also works." --since 9
 {"event": "call_ended", "call_ended": true, "disconnection_reason": "agent_hangup",
@@ -234,7 +240,7 @@ answer depends on first — the journal, a calendar read — and write no prose:
 every second of it is silence on the line. `answer` resumes watching in the
 same process precisely so there is no gap to fill. This rule cost three live
 calls to learn. After 90 seconds unanswered the agent is told to promise a
-callback rather than guess, and a late answer fails.
+callback rather than guess, and a late answer fails saying so.
 
 Answer with **authority, not instructions** — a band, same as the brief. On a
 live call one band answer carried four turns unaided: it declined the offered

@@ -18,16 +18,16 @@
     "mode": "post_call"
   },
   "handbook_config": {
-    "conversational_personality": false,
-    "speech_normalization": true,
+    "conversational_personality": true,
+    "high_empathy": true,
     "echo_verification": true,
     "nato_phonetic_alphabet": true,
-    "ai_disclosure": true,
+    "scope_boundaries": true,
+    "default_personality": false,
     "smart_matching": true,
-    "natural_filler_words": true,
-    "default_personality": true,
-    "high_empathy": false,
-    "scope_boundaries": true
+    "speech_normalization": true,
+    "ai_disclosure": true,
+    "natural_filler_words": true
   },
   "timezone": "America/Los_Angeles",
   "voice_id": "retell-Brynne",
@@ -58,7 +58,7 @@
   "user_dtmf_options": {},
   "webhook_url": "{{WORKER_URL}}/event",
   "retell_llm": {
-    "model": "claude-5-sonnet",
+    "model": "gpt-5.6-terra",
     "model_temperature": 0,
     "model_high_priority": false,
     "tool_call_strict_mode": true,

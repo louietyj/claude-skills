@@ -74,11 +74,14 @@ already paid for. Just proceed: fill the form, press submit, read the page.
 A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
 adds a per-attempt `history` naming the solver that refused and why.
 
-Most pages never reach this. Cloudflare and DataDome only challenge a visitor
-they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com and
-scrapingcourse's own "Cloudflare challenge" all load untouched. Solving is for
-sites that gate *every* visitor -- archive.today and its mirrors (archive.ph,
-archive.is, archive.md) are the ones you will hit.
+Most pages never reach this. Cloudflare and DataDome mostly challenge only a
+visitor they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com
+and scrapingcourse's own "Cloudflare challenge" all load untouched. Some sites
+put Cloudflare's "Just a moment..." page in front of every visitor --
+egov.uscis.gov does -- and cloak gets through it on its own in a few seconds;
+`nav` waits for that and reports it solved like any other. Paid solving is for
+sites that gate every visitor behind a real captcha -- archive.today and its
+mirrors (archive.ph, archive.is, archive.md) are the ones you will hit.
 
 This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
 the solver as a stub. Without a key the solver is absent and nothing else

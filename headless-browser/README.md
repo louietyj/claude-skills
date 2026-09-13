@@ -41,7 +41,29 @@ Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progres
 
 `setup.sh` installs pinchtab from [louietyj/pinchtab](https://github.com/louietyj/pinchtab) rather than upstream npm, replacing the managed binary the npm package fetched and leaving its bundled docs alone. Upstream ships the CapSolver solver as an unimplemented stub (`internal/autosolver/external/capsolver.go` returns `"not yet implemented"`), so a captcha page is detected, abandoned, and reported as an unexplained `solved:false`. The fork implements it and fixes three bugs found around it: detection matching vendor names as bare substrings anywhere in the document, sitekeys being unreachable on explicitly-rendered widgets, and `/solve` reporting `solved:true` on a challenge it never detected. `PINCHTAB_USE_FORK=0` stays on the npm build.
 
-Most sites never need it. Cloudflare, DataDome and friends score each visitor and only challenge a bad one; cloak's fingerprint scores fine, and SteamDB, g2.com and scrapingcourse's own "Cloudflare challenge" page all load with no challenge at all. What needs solving is a site that gates *every* visitor regardless of reputation — archive.today and its mirrors are the ones worth caring about. Most public "captcha demo" pages are useless for testing: they use dummy sitekeys (`1x0000…`, `3x0000…`) that no solving service will process.
+Most sites never need it. Cloudflare, DataDome and friends score each visitor and mostly challenge only a bad one; cloak's fingerprint scores fine, and SteamDB, g2.com and scrapingcourse's own "Cloudflare challenge" page all load with no challenge at all. What needs solving is a site that gates *every* visitor behind a real captcha regardless of reputation — archive.today and its mirrors are the ones worth caring about. Most public "captcha demo" pages are useless for testing: they use dummy sitekeys (`1x0000…`, `3x0000…`) that no solving service will process.
+
+Cloudflare's current *managed* challenge ("Just a moment…", `cType: 'managed'`) is different, and egov.uscis.gov shows it to every visitor. Cloak passes it unaided in a few seconds, which pinchtab logs as solver `cleared`. CapSolver cannot clear it: the widget sits in a closed shadow root with no readable sitekey, and Cloudflare issues `cf_clearance` to the browser that ran the check — CapSolver only offers that as a proxied `AntiCloudflareTask`.
+
+## Debugging
+
+Reproduce in the local sandbox ([`../dev/sandbox.sh`](../dev/sandbox.sh), see the repo README) rather than on Windows. To test a fork change, build it for linux into the work directory and point setup at it:
+
+```bash
+(cd ~/pinchtab && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ~/claude-skills/dev/work/pinchtab-linux-amd64 ./cmd/pinchtab)
+dev/sandbox.sh sh 'PINCHTAB_FORK_BIN_URL=file:///work/pinchtab-linux-amd64 bash /mnt/skills/user/headless-browser/setup.sh'
+```
+
+The solver's log lines (`autosolver_start`, `autosolver_attempt`, `autosolver_failure`, …) are not in `/root/.pinchtab/server.log`; they belong to the browser instance. `pinchtab config get server.token` prints a redacted value, so read the token from the file:
+
+```bash
+T=$(node -p 'require("/root/.pinchtab/config.json").server.token')
+for id in $(curl -s -H "Authorization: Bearer $T" localhost:9867/instances | grep -oE 'inst_[a-z0-9]+' | sort -u); do
+  curl -s -H "Authorization: Bearer $T" localhost:9867/instances/$id/logs
+done | grep autosolver
+```
+
+`pinchtab cookies clear` drops a `cf_clearance` from an earlier pass, which otherwise makes a rerun load the page without a challenge.
 
 `autoSolver.solverTimeoutSec` is set to 150, not the 30s default. A reCAPTCHA image challenge routinely runs past 60s, and the default kills the poll *after* CapSolver has already been paid for the solve.
 

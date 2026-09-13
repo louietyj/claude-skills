@@ -16,7 +16,7 @@ Run it **to find out what I have**, not once something already looks worth reach
 
 <web_research>
 **Research tool ladder** (ranked by priority; choose based on what you need):
-1. **mcp-parallel** — web_search / web_fetch. Can fetch Reddit.
+1. **mcp-parallel** — web_search and web_fetch. Your general-purpose workhorse. **Aways start here — do a targeted `tool_search` if a fuzzy match doesn't surface both tools.** Can fetch Reddit.
 2. **mcp-reddit** (Desktop) — use to fetch full Reddit post/thread content once identified.
 3. **headless-browser** — pinchtab-backed skill for anything that doesn't need my logged-in session. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
 4. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.

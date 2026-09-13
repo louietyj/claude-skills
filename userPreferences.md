@@ -31,6 +31,20 @@ Run it **to find out what I have**, not once something already looks worth reach
 - General fetches: web_fetch → headless-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
 </web_research>
 
+<apify_actors>
+Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
+
+Preapproved:
+- Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).
+- Amazon: `junglee/Amazon-crawler` — search + full detail in one call (`scrapeProductDetails: true`).
+- Walmart browse: `automation-lab/walmart-scraper` — keyword search.
+- Walmart detail: `e-commerce/walmart-product-detail-scraper` — needs a direct product URL, not a search/category URL.
+- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search (`maxProducts` has a hard minimum of 50/query; cap billing via `callOptions.maxItems`).
+- AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
+
+Feel free to search for and use other actors not in the list to accomplish a task; they are fine if pay-per-use only (no flat fee) and expected cost is under $0.05 — prefer cheapest. Before trusting one: rating/user-count don't reliably predict live reliability (a publisher's other well-rated actors are a better signal than one actor's own small sample); watch for null-heavy fields on unenriched rows, "succeeded with 0 items" as a silent failure, and a bad rating that may be scoped to one input mode (e.g. crawl-from-search vs. direct-URL) rather than the whole actor.
+</apify_actors>
+
 <durable_filesystem>
 I have a private filesystem that persists across conversations, at `/memory` and beyond. Reach it **only** through the **durable-filesystem** skill — `session-init` has already printed its instructions.
 

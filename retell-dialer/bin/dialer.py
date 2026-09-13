@@ -218,7 +218,7 @@ def cmd_dispatch(cfg, args):
         if live:
             die(f"a call is already ongoing ({live}). If you do not remember "
                 f"placing it, you may still have done so -- an interrupted turn "
-                f"loses its tool calls. Check `watch --call-id {live}`, or pass "
+                f"loses its tool calls. Check `watch {live}`, or pass "
                 f"--force to dial anyway.")
     journal("dispatch", to=args.to, purpose=args.purpose)
     status, resp = create_call(cfg, read_variables(args), web=False, to=args.to)
@@ -348,7 +348,7 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
 
     call_id = call_id or find_ongoing_call(cfg)
     if not call_id:
-        die("no ongoing call found -- pass --call-id")
+        die("no ongoing call found -- pass the call_id dispatch printed")
 
     state = {"turns": [], "by_id": {}, "ended": None, "consult": None,
              "error": None, "types": set()}
@@ -700,18 +700,25 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    ap = argparse.ArgumentParser(prog="dialer", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # The caller works from SKILL.md, so the help lists only what it uses. The
+    # module docstring and the dev commands (added with `description=` rather
+    # than `help=`, so they stay out of the listing) read as more manual to go
+    # digging in.
+    ap = argparse.ArgumentParser(
+        prog="dialer",
+        description="Place a supervised call: dispatch, then watch / answer / steer "
+                    "until it ends. SKILL.md is the full reference.")
+    sub = ap.add_subparsers(
+        dest="cmd", required=True,
+        metavar="{dispatch,watch,answer,steer,transcript,journal,health}")
 
     def brief_args(parser):
         parser.add_argument("--opening", required=True,
                             help="first line; carries the AI announcement")
         parser.add_argument("--purpose", required=True,
                             help="one phrase, for call screening")
-        parser.add_argument("--brief")
-        parser.add_argument("--brief-file")
-        parser.add_argument("--port", type=int, default=8765)
+        parser.add_argument("--brief", help="the brief, inline")
+        parser.add_argument("--brief-file", help="or the brief, from a file")
 
     d = sub.add_parser("dispatch", help="place a PSTN call with a brief written for it")
     d.add_argument("--to", help="callee, E.164")
@@ -720,11 +727,12 @@ def main():
     brief_args(d)
     d.set_defaults(fn=cmd_dispatch)
 
-    st = sub.add_parser("stage", help="park a brief for the browser launcher to dial")
+    st = sub.add_parser("stage", description="park a brief for the browser launcher to dial")
     brief_args(st)
+    st.add_argument("--port", type=int, default=8765)
     st.set_defaults(fn=cmd_stage)
 
-    sv = sub.add_parser("serve", help="browser-call launcher (dev/test)")
+    sv = sub.add_parser("serve", description="browser-call launcher (dev/test)")
     sv.add_argument("--port", type=int, default=8765)
     sv.set_defaults(fn=cmd_serve)
 
@@ -739,11 +747,11 @@ def main():
                             help="turns already seen; report only what is new")
 
     w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
-    w.add_argument("--call-id")
+    w.add_argument("call_id", nargs="?", help="default: the ongoing call")
     watch_args(w, WATCH_INTERVAL)
     w.set_defaults(fn=cmd_watch)
 
-    p = sub.add_parser("poll", help="block until the agent consults, or the call ends")
+    p = sub.add_parser("poll", description="block until the agent consults, or the call ends")
     p.add_argument("--call-id")
     p.add_argument("--budget", type=int, default=POLL_BUDGET)
     p.set_defaults(fn=cmd_poll)
@@ -763,7 +771,7 @@ def main():
     watch_args(s, FOLLOW_INTERVAL)
     s.set_defaults(fn=cmd_steer)
 
-    sub.add_parser("pending", help="non-blocking peek at the queue").set_defaults(fn=cmd_pending)
+    sub.add_parser("pending", description="non-blocking peek at the queue").set_defaults(fn=cmd_pending)
 
     t = sub.add_parser("transcript", help="post-call transcript with tool calls woven in")
     t.add_argument("call_id")
@@ -773,7 +781,7 @@ def main():
                    help="seconds to retry while Retell finalises the transcript")
     t.set_defaults(fn=cmd_transcript)
 
-    c = sub.add_parser("call", help="the call as Retell's webhook sent it, pre-scrub")
+    c = sub.add_parser("call", description="the call as Retell's webhook sent it, pre-scrub")
     c.add_argument("call_id")
     c.add_argument("--raw", action="store_true")
     c.set_defaults(fn=cmd_call)
@@ -783,7 +791,7 @@ def main():
     j.set_defaults(fn=cmd_journal)
 
     sub.add_parser("health", help="check queue, token, agent and number").set_defaults(fn=cmd_health)
-    sub.add_parser("agent-pull", help="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)
+    sub.add_parser("agent-pull", description="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)
 
     args = ap.parse_args()
     args.fn(load_config(), args)

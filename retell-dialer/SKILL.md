@@ -6,7 +6,7 @@ description: "Place a real phone call on Louie's behalf and supervise it live �
 # retell-dialer
 
 A Retell voice agent holds the conversation at human tempo. It calls
-`consult_supervisor` when it needs something and your answer is what it speaks;
+`consult_supervisor` when it needs something and acts on your answer;
 you can also push context in unprompted.
 
 **The number that governs everything here:** a consult reaches you in
@@ -99,8 +99,8 @@ you are deciding alone and the band has to be wider.
 
 ### Where the facts come from
 
-`memory/profile.md` is the floor, not the job — then work out what *this* call
-will be asked and go find it. Ask Louie for whatever you cannot; he would rather
+`cfs read /memory/profile.md` (the durable-filesystem skill) is the floor, not
+the job — then work out what *this* call will be asked and go find it. Ask Louie for whatever you cannot; he would rather
 answer three questions now than listen to you stall on the phone. PII is fine to
 request and to put in the brief: it goes to the agent and into the transcript,
 both of which come back to him. Afterwards, offer to file anything durable the
@@ -113,19 +113,34 @@ dialer health
     Queue, token, agent, webhook, number. setup.sh already ran it; run it
     again only to diagnose a failure.
 
-dialer dispatch --to +1... --opening "…" --purpose "…" --brief-file FILE
-    --opening     First thing spoken: the announcement (wording fixed by the
-                  invariants) plus one line of purpose.
-    --purpose     Short phrase, for call screening.
-    Refuses while another call is live.
+dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file brief.md
+    --to          E.164.
+    --opening     Spoken verbatim the moment they pick up. Start with exactly
+                  "Hello, I'm an AI assistant for Louie Tan. This call is being
+                  transcribed and sent to him." then one sentence of purpose.
+    --purpose     A few words, given if a call-screening service asks what the
+                  call is about.
+    --brief-file  The brief as plain prose, in any file (or --brief "…"
+                  inline). Files last the whole conversation; shell
+                  variables do not.
+    Prints {"call_id": "call_…", "call_status": "registered"}; that call_id is
+    the CALL_ID below. Refuses while another call is live, naming that call's
+    id: watch it rather than dialling again.
 
-dialer watch --call-id ID [--interval 30] [--budget 200] [--since N]
-    Blocks, then returns on the first of:
-      consult       immediately, whatever the timers are set to
-      call_ended    with the full transcript
-      transcript    a finished turn, once --interval seconds have passed
-      idle          --budget ran out and nobody spoke
-    Act on what it returned, then watch again.
+dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
+    Defaults as shown. Blocks, then prints one JSON object whose "event" is
+    the first of:
+      consult       Immediately, whatever the timers say. "question" is what
+                    the agent asked; "transcript" is the call so far.
+      transcript    A finished turn, once --interval seconds have passed.
+                    "new" is the lines since --since.
+      idle          --budget ran out and nobody spoke. "monitor": "no frames"
+                    means the live transcript is not arriving; consults
+                    still will.
+      call_ended    With the full "transcript".
+      taken_over    Louie took the call over; see below.
+    consult, transcript and idle carry "hint", naming the --since to pass
+    next. Act on what came back, then watch again.
 
     --interval N  Batching floor, not a wait: it never returns on silence,
                   it just stops watch returning once per word. ~15 while
@@ -136,7 +151,9 @@ dialer watch --call-id ID [--interval 30] [--budget 200] [--since N]
                   200: the sandbox kills at 300s and discards all output.
     --since N     Where to resume; every return's hint carries the number.
                   "18 + 1 in progress" resumes at 18, so that turn comes back
-                  finished rather than cut off.
+                  finished rather than cut off. Lost it, or a watch was cut
+                  off by an interruption? Watch again without it and you get
+                  the whole call so far.
 
 dialer answer CALL_ID "text"  [watch flags]
 dialer steer  CALL_ID "text"  [--speak-now] [watch flags]
@@ -148,7 +165,49 @@ dialer transcript CALL_ID
     Post-call only; mid-call, use watch.
 
 dialer journal
-    What you actually sent, on disk. See the rule below.
+    Every dispatch, answer and steer, one JSON line each, written before the
+    request goes out: {"at", "command", "call_id", "text"}, followed by a
+    line with its "status" (for dispatch, also the new "call_id"). A line
+    with no status after it was cut off in flight and may still have landed;
+    resend an answer if unsure, since a duplicate fails and shows the text
+    that landed. See the rule below.
+```
+
+A call, start to finish (output trimmed):
+
+```text
+$ dialer dispatch --to +16695550142 --purpose "move a dental cleaning" \
+    --opening "Hello, I'm an AI assistant for Louie Tan. This call is being transcribed and sent to him. I'm calling to move his Friday cleaning." \
+    --brief-file brief.md
+{"call_id": "call_8f2e", "call_status": "registered", "call_type": "phone_call"}
+
+$ dialer watch call_8f2e
+{"event": "transcript", "turns": "3 + 1 in progress",
+ "new": ["agent: Hello, I'm an AI assistant for Louie Tan. ...",
+         "user: Sure, can you spell his last name?",
+         "agent: T-A-N.",
+         "user: Okay, I've got  [...utterance may still be in progress]"],
+ "hint": "continue with `--since 3` on watch, answer or steer"}
+
+$ dialer watch call_8f2e --since 3
+{"event": "consult", "question": "They offered Tuesday 2pm. Accept?",
+ "transcript": "...", "turns": "6 + 1 in progress",
+ "hint": "continue with `--since 6` on watch, answer or steer"}
+
+$ dialer answer call_8f2e "No afternoons. Any weekday before 11am next week." --since 6
+{"event": "transcript", "turns": "9 + 1 in progress", "new": [...],
+ "hint": "continue with `--since 9` on watch, answer or steer"}
+
+        Louie, in chat: "Wednesday afternoon works too"
+
+$ dialer journal
+{"at": "...", "command": "answer", "call_id": "call_8f2e", "text": "No afternoons. ..."}
+{"at": "...", "command": "answer", "call_id": "call_8f2e", "status": 200}
+
+$ dialer steer call_8f2e "Louie says Wednesday afternoon also works." --since 9
+{"event": "call_ended", "call_ended": true, "disconnection_reason": "agent_hangup",
+ "transcript": ["agent: Hello, I'm an AI assistant for Louie Tan. ...", "...",
+                "agent: Thanks so much, goodbye."]}
 ```
 
 ### After any interjection, read the journal first
@@ -168,10 +227,14 @@ This has already cost a real call: a dropped `answer` had told the office to
 keep the original appointment, the supervisor sent a contradicting one, and the
 receptionist asked "wait, do you want me to cancel it or not?"
 
-**When a consult comes back, answer it in your very next tool call.** Not after
-a sentence of explanation — every second you spend writing prose is silence on
-the line. `answer` resumes watching in the same process precisely so there is no
-gap to fill. This rule cost three live calls to learn.
+It still comes first with a consult waiting.
+
+**When a consult comes back, answer it straight away.** Run only what the
+answer depends on first — the journal, a calendar read — and write no prose:
+every second of it is silence on the line. `answer` resumes watching in the
+same process precisely so there is no gap to fill. This rule cost three live
+calls to learn. After 90 seconds unanswered the agent is told to promise a
+callback rather than guess, and a late answer fails.
 
 Answer with **authority, not instructions** — a band, same as the brief. On a
 live call one band answer carried four turns unaided: it declined the offered
@@ -186,14 +249,18 @@ booked.
 
 `steer` injects context without the agent asking, then watches what the agent
 does with it. Use it when Louie tells you something new, or when the agent is
-genuinely going wrong — not to narrate what it can already hear. A live view marks its last line
-`[...utterance may still be in progress]`: that sentence is still being spoken
-and may end differently, so never steer on it. Wait for the next `watch` — one
-steer "corrected" a keypress that had been right.
+genuinely going wrong — not to narrate what it can already hear. A live view
+marks its last line `[...utterance may still be in progress]`: that sentence is
+still being spoken and may end differently, so never steer on it — wait for
+the next `watch`. One steer "corrected" a keypress that had been right. Every
+line above it is final and safe to act on.
 
 **Avoid `--speak-now` unless it absolutely cannot wait.** It makes the agent
-talk over whoever is mid-sentence. Without it the context lands on the next
-natural turn, which is almost always soon enough.
+talk over whoever is mid-sentence. Without it the agent still reads the context
+before its next reply — including one that would confirm something.
+
+To end a call early, `steer` the agent to wrap up and hang up; it has an
+end-call tool. `End Call` on the dashboard (below) is the hard stop.
 
 When the call ends, `watch` returns the transcript with it. Tell Louie what was
 agreed.
@@ -214,14 +281,10 @@ ask you.
 
 - **An unset variable renders as a literal `{{brief}}`** — a live call with no
   instructions. `dispatch` refuses empty ones.
-- **`get-call`'s transcript is post-call only.** Mid-call, the consult payload
-  carries it automatically and `watch` streams it.
-- **A `4004` from the monitor socket means "not live yet", not "over"** — a
-  ringing call closes with it.
 - **An interrupted tool call vanishes from your transcript.** It still ran, so
   never conclude "I did not do X" from X being absent — see the journal rule
-  above. `answer` also returns the text already delivered, and `dispatch`
-  refuses while a call is live.
+  above. Answering a consult that was already answered fails and shows the
+  text that was sent; `dispatch` refuses while a call is live.
 - **Keypresses are inaudible, to everyone.** DTMF is out-of-band, so no one
   hears a tone; the digits appear only as `[TOOL press_digit]`. A far-end
   system wanting in-band tones drops them silently and the menu repeats — a
@@ -229,6 +292,3 @@ ask you.
 - **A take-over is not a hangup.** Retell ends the *agent's* leg while Louie
   stays on the phone, and transcription stops dead there. `watch` returns
   `event: taken_over`; ask him how it went rather than reporting the fragment.
-- **Never re-import the agent JSON in the dashboard** — it forks a new
-  `agent_id` and orphans the config. Use `/update-agent` and
-  `/update-retell-llm`, which mutate in place.

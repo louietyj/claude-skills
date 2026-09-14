@@ -203,8 +203,14 @@ if [ $CLOAK -eq 1 ]; then
   fi
   echo "cloak stage: $((SECONDS - t0))s elapsed"
   if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
+    # A fixed seed makes every sandbox the same device on a different IP. Random per
+    # sandbox, kept across re-runs so one conversation stays one device to a site.
+    SEED_FILE=/tmp/.headless-browser-seed
+    CLOAK_SEED=${CLOAK_SEED:-$(cat "$SEED_FILE" 2>/dev/null)}
+    CLOAK_SEED=${CLOAK_SEED:-$(( (RANDOM << 15 | RANDOM) % 90000 + 10000 ))}
+    printf '%s' "$CLOAK_SEED" > "$SEED_FILE"
     "$REAL" config set browser.binary "$CLOAK_BIN" >/dev/null
-    "$REAL" config set browser.cloak.fingerprintSeed "${CLOAK_SEED:-42069}" >/dev/null
+    "$REAL" config set browser.cloak.fingerprintSeed "$CLOAK_SEED" >/dev/null
     "$REAL" config set browser.cloak.platform "${CLOAK_PLATFORM:-windows}" >/dev/null
     "$REAL" config set browser.cloak.timezone "${CLOAK_TIMEZONE:-America/New_York}" >/dev/null
     "$REAL" config set browser.cloak.locale "${CLOAK_LOCALE:-en-US}" >/dev/null
@@ -212,7 +218,7 @@ if [ $CLOAK -eq 1 ]; then
     # browsers.default at a runtime that isn't there breaks every later nav.
     "$REAL" config set browsers.default cloak >/dev/null
     echo "cloak runtime: $CLOAK_BIN"
-    BROWSER_NOTE="OK -- cloakbrowser"
+    BROWSER_NOTE="OK -- cloakbrowser, seed $CLOAK_SEED"
   else
     echo "cloakbrowser install failed; falling back to ordinary Chrome" >&2
     CLOAK=0

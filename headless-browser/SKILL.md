@@ -65,8 +65,10 @@ the fingerprint it presents. `--no-cloak` forces plain Chrome.
 Nothing to call: `nav` solves a challenge on its own when it detects one, at
 ~$0.001 and 20-60s, and waits for it. It prints a HINT saying so, and says
 nothing on the ordinary pages that never trigger one. A solve that outlasts the
-call keeps running in the background and the HINT says that instead: wait a
-minute and re-read the page rather than acting on it.
+call keeps running in the background, and the HINT says so and gives the
+command to check on it. Run exactly that. Do not act on the page or navigate
+while it runs: a new navigation loads a fresh challenge over the one being
+solved.
 
 **Never click a captcha widget.** Solving injects a token and does not tick the
 box, so a solved page still shows an unchecked "I'm not a robot" and `snap`

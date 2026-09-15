@@ -21,7 +21,8 @@ to avoid.
 
 | | |
 |---|---|
-| `SKILL.md` | the skill body — how to run a call |
+| `SKILL.md` | thin skill body — just runs `setup.sh` |
+| `GUIDE.md` | how to run a call, printed in full by `setup.sh` so no reader truncates it |
 | `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript, journal, gregorian_calendar |
 | `bin/ws.py` | stdlib RFC 6455 client for Retell's live-transcript socket |
 | `test_dialer.py` | offline regression tests — `python test_dialer.py` |
@@ -89,7 +90,7 @@ entry. Resuming past it lost the agent's reply to every consult on a call.
 
 **The agent is Sonnet 5 with a phone line.** It does not need telling how to
 behave on a call; it needs Louie's facts, the authority to decide for him, and a
-supervisor willing to check its judgement. Most of SKILL.md follows from that,
+supervisor willing to check its judgement. Most of GUIDE.md follows from that,
 and so does most of what was deleted from it.
 
 **Weekdays are printed, never worked out.** Google Calendar returns bare

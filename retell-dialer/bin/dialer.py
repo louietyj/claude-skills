@@ -41,7 +41,7 @@ RETELL = "https://api.retellai.com"
 # Nests inside the claude.ai sandbox's 300s hard kill, which discards all output
 # when it fires -- an overrun loses the question, not just the tail of it.
 POLL_BUDGET = 200
-WATCH_INTERVAL = 15       # batching floor; SKILL.md says when to raise it
+WATCH_INTERVAL = 15       # batching floor; GUIDE.md says when to raise it
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
 DYNAMIC_VARS = ("opening", "brief", "call_purpose")
@@ -835,14 +835,14 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    # The caller works from SKILL.md, so the help lists only what it uses. The
+    # The caller works from GUIDE.md, so the help lists only what it uses. The
     # module docstring and the dev commands (added with `description=` rather
     # than `help=`, so they stay out of the listing) read as more manual to go
     # digging in.
     ap = argparse.ArgumentParser(
         prog="dialer",
         description="Place a supervised call: dispatch, then watch / answer / steer "
-                    "until it ends. SKILL.md is the full reference.")
+                    "until it ends. GUIDE.md is the full reference.")
     sub = ap.add_subparsers(
         dest="cmd", required=True,
         metavar="{dispatch,watch,answer,steer,transcript,journal,gregorian_calendar,health}")

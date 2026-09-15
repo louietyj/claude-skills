@@ -55,10 +55,13 @@ The prompt is deliberately almost empty — `{{brief}}` plus the invariants. Thr
 dynamic variables are supplied per call (`opening`, `brief`, `call_purpose`), so
 each call's instructions are written fresh rather than configured once.
 
-Retell surcharges prompts above ~3,500 tokens. At this volume that is a rounding
-error against the cost of a stalled call, so write the dense brief; if one
-genuinely runs long, move the stable half (standing identity and insurance
-details) into a knowledge base rather than trimming decision authority.
+Past 4,000 prompt tokens, Retell bills the whole call at tokens ÷ 4,000. The
+count is every turn's full context: general prompt, tool descriptions, handbook
+presets, transcript, tool results and any knowledge base retrievals, so a
+knowledge base is no escape. A long call passes 4,000 on transcript alone,
+which is why the invariants and tool descriptions are compressed and GUIDE.md
+gates every brief on a compression pass. The handbook presets stay on
+deliberately: Retell's tuned text, worth its tokens.
 
 ## A phone number
 

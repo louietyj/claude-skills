@@ -20,6 +20,7 @@ NAME = "retell-dialer"
 # checkout with wrangler, never from inside a conversation.
 MEMBERS = [
     "SKILL.md",
+    "GUIDE.md",
     "setup.sh",
     "bin/dialer.py",
     "bin/ws.py",

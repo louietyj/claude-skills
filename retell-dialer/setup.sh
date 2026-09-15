@@ -42,7 +42,7 @@ DIALER_PY=$(find_dialer_py) || {
 
 RULE_H='════════'
 RULE_S='────────'
-TOTAL=3
+TOTAL=4
 
 begin() {  # $1 = step number, $2 = what runs, as displayed
   printf '\n%s[%d/%d] %s\n' "$RULE_S" "$1" "$TOTAL" "$2"
@@ -102,22 +102,44 @@ cal_rc=0
 "$BIN_DIR/dialer" gregorian_calendar || cal_rc=$?
 end 3 $cal_rc
 
+# The guide rides in this output rather than in SKILL.md: a long SKILL.md read
+# with `view` came back middle-truncated, and the compression gate in the part
+# it dropped was skipped without a word. Printed on every run -- setup runs
+# once per conversation, and a skipped print costs more than a repeated one.
+GUIDE="$(dirname "$(dirname "$DIALER_PY")")/GUIDE.md"
+begin 4 "cat $GUIDE"
+guide_rc=0
+if [ $rc -ne 0 ]; then
+  printf 'SKIPPED -- dialer health failed, so no call can be placed.\n'
+elif cat "$GUIDE"; then
+  printf '%s END OF GUIDE %s\n' "$RULE_H" "$RULE_H"
+else
+  guide_rc=1
+fi
+end 4 $guide_rc
+
 status=READY; [ $rc -eq 0 ] || status=DOWN
 printf '\n%s RETELL DIALER %s %s\n' "$RULE_H" "$status" "$RULE_H"
-printf '  [1/3] dialer shim ..... OK -- installed\n'
+printf '  [1/4] dialer shim ..... OK -- installed\n'
 if [ $rc -ne 0 ]; then
-  printf '  [2/3] dialer health ... FAILED\n'
+  printf '  [2/4] dialer health ... FAILED\n'
   printf '\nDo NOT place a call: consult_supervisor would time out mid-conversation\n'
   printf 'with someone on the line. Tell Louie which check failed above.\n'
   exit 1
 fi
-printf '  [2/3] dialer health ... OK -- queue, token, agent, webhook, number\n'
+printf '  [2/4] dialer health ... OK -- queue, token, agent, webhook, number\n'
 if [ $cal_rc -eq 0 ]; then
-  printf '  [3/3] calendar ........ OK -- take every weekday from it\n'
+  printf '  [3/4] calendar ........ OK -- take every weekday from it\n'
 else
-  printf '  [3/3] calendar ........ FAILED -- run `dialer gregorian_calendar` before naming a weekday\n'
+  printf '  [3/4] calendar ........ FAILED -- run `dialer gregorian_calendar` before naming a weekday\n'
 fi
-printf '\nAll three steps are done for the rest of this conversation. This output is a\n'
+if [ $guide_rc -eq 0 ]; then
+  printf '  [4/4] guide ........... OK -- printed in full above; do not view or cat it again\n'
+else
+  printf '  [4/4] guide ........... FAILED -- cat %s in full before writing a brief\n' "$GUIDE"
+fi
+printf '\nAll four steps are done for the rest of this conversation. This output is a\n'
 printf 'transcript of work already done, not a plan: do not re-run this script or\n'
 printf '`dialer health`.\n'
-printf "\nNext: Louie's explicit go-ahead for this call, then \`dialer dispatch\`.\n"
+printf "\nNext: write the brief, pass it through the MANDATORY GATE, get Louie's\n"
+printf "explicit go-ahead for this call, then \`dialer dispatch\`.\n"

@@ -97,6 +97,20 @@ counter-offers fall inside it, and say what to do when they do not.
 One input you can only get up front: **will Louie be at the keyboard?** If not,
 you are deciding alone and the band has to be wider.
 
+### What's on the other end of `consult_supervisor`
+
+Tell the agent what a consult can reach, not just that the tool exists —
+otherwise a question outside the brief looks the same as a dead end, and it
+guesses at the band or defaults to a hard no instead of asking. It cannot be
+handed the whole universe (Louie's full calendar, every address he's ever
+lived at, the web), so name the parts of it plausibly relevant to this call —
+profile detail beyond the brief, calendar, driving times and addresses, web
+search, Louie himself in chat — and back each with a concrete sample rather
+than an abstract claim: a handful of real open slots, not "I can check the
+calendar"; the make and plate of the car, not "I have his vehicle details."
+A sample teaches the agent the category is worth consulting on; a bare claim
+teaches it nothing about when to bother.
+
 ### Where the facts come from
 
 `cfs read /memory/profile.md` (the durable-filesystem skill) is the floor, not

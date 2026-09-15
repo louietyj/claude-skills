@@ -166,11 +166,11 @@ def live_calls(cfg):
     Filtered here rather than by Retell: its status filter has no "registered",
     which is what a call not yet connected reports -- and a call still ringing
     is exactly what an interrupted dispatch leaves behind."""
-    status, body = retell(cfg, "/v2/list-calls", method="POST", timeout=15,
+    status, body = retell(cfg, "/v3/list-calls", method="POST", timeout=15,
                           body={"sort_order": "descending", "limit": 50})
-    if status != 200 or not isinstance(body, list):
+    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("items"), list):
         return None
-    return [c for c in body if c.get("call_status") in LIVE_STATUSES]
+    return [c for c in body["items"] if c.get("call_status") in LIVE_STATUSES]
 
 
 def find_ongoing_call(cfg):
@@ -216,7 +216,7 @@ def read_variables(args):
 def create_call(cfg, variables, *, web, to=None):
     check_vars(variables)
     if web:
-        path, body = "/v2/create-web-call", {"agent_id": cfg["agent_id"]}
+        path, body = "/v3/create-web-call", {"agent_id": cfg["agent_id"]}
     else:
         path = "/v2/create-phone-call"
         body = {"from_number": cfg["from_number"], "to_number": to,
@@ -313,7 +313,9 @@ def cmd_serve(cfg, args):
                                    "status": status, "body": resp}, 502)
             print(f"dispatched {resp.get('call_id')}", flush=True)
             self.reply({"call_id": resp.get("call_id"),
-                        "access_token": resp.get("access_token")})
+                        "access_token": resp.get("access_token"),
+                        "transport": resp.get("transport"),
+                        "ice_servers": resp.get("ice_servers")})
 
     class Server(http.server.ThreadingHTTPServer):
         # On Windows the inherited allow_reuse_address lets a second bind to a

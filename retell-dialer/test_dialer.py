@@ -156,7 +156,7 @@ class DispatchGuard(unittest.TestCase):
             setattr(dialer, name, fn)
 
     def live(self, *calls, status=200):
-        dialer.retell = lambda cfg, path, **kw: (status, list(calls))
+        dialer.retell = lambda cfg, path, **kw: (status, {"items": list(calls)})
 
     def dispatch(self, force=False):
         args = Args(to="+15550100", force=force, opening="hi", purpose="p",

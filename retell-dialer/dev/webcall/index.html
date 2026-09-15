@@ -92,7 +92,14 @@ not cover and watch the consult fire.</p>
       if (!r.ok) throw new Error(body.error || ("dispatch failed: " + r.status));
       setStatus("connecting… " + body.call_id);
       if (!client) { client = new Retell.RetellWebClient(); wire(client); }
-      await client.startCall({ accessToken: body.access_token });
+      // v3/create-web-call returns connection details, not the full call
+      // object; startCall's field names differ from the API response's.
+      await client.startCall({
+        callId: body.call_id,
+        accessToken: body.access_token,
+        transport: body.transport,
+        iceServers: body.ice_servers,
+      });
       // Autoplay policy blocks the agent's audio unless playback resumes from
       // inside a user gesture, which this click still is.
       await client.startAudioPlayback?.();

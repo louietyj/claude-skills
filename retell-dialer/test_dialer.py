@@ -316,6 +316,55 @@ class CheckVars(unittest.TestCase):
         dialer.check_vars({"opening": "hi", "brief": "b", "call_purpose": "p"})
 
 
+class GregorianCalendar(unittest.TestCase):
+    """A weekday worked out in the head went to a real rep wrong."""
+
+    def test_weekdays_match_the_real_calendar(self):
+        lines = dialer.gregorian_calendar(start=(2026, 9), months=2).splitlines()
+        self.assertTrue(lines[-2].startswith("Sep 2026: 1T 2W 3R 4F 5S 6U 7M "))
+        self.assertTrue(lines[-2].endswith(" 30W"))
+        self.assertTrue(lines[-1].startswith("Oct 2026: 1R 2F 3S 4U 5M 6T 7W "))
+        self.assertTrue(lines[-1].endswith(" 31S"))
+
+    def test_rolls_over_the_year(self):
+        lines = dialer.gregorian_calendar(start=(2026, 12), months=2).splitlines()
+        self.assertTrue(lines[-1].startswith("Jan 2027: 1F "))
+
+    def test_every_call_carries_it_in_the_brief(self):
+        sent = {}
+        saved = dialer.retell
+        dialer.retell = lambda cfg, path, **kw: (sent.update(kw["body"]), (201, {}))[1]
+        variables = {"opening": "hi", "brief": "the brief", "call_purpose": "p"}
+        try:
+            dialer.create_call({"from_number": "+1", "agent_id": "a"}, variables, web=False, to="+2")
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                dialer.create_call({"agent_id": "a"}, {**variables, "brief": ""}, web=True)
+        finally:
+            dialer.retell = saved
+        brief = sent["retell_llm_dynamic_variables"]["brief"]
+        self.assertTrue(brief.startswith("the brief\n\n## Gregorian calendar"))
+        self.assertIn(dialer.gregorian_calendar(), brief)
+
+    def test_a_lookup_mid_call_sends_the_agent_a_copy(self):
+        sent = []
+        saved = dialer.retell, dialer.journal
+        dialer.retell = lambda cfg, path, **kw: (sent.append((path, kw["body"])), (200, {}))[1]
+        dialer.journal = lambda *a, **kw: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                dialer.cmd_gregorian_calendar({}, Args(start="2027-01", months=1, call_id=None))
+                self.assertEqual(sent, [])
+                dialer.cmd_gregorian_calendar({}, Args(start="2027-01", months=1, call_id="call_1"))
+        finally:
+            dialer.retell, dialer.journal = saved
+        path, body = sent[0]
+        self.assertEqual(path, "/v2/update-live-call/call_1")
+        self.assertFalse(body["call_control"]["trigger_response"])
+        self.assertIn(dialer.gregorian_calendar((2027, 1), 1),
+                      body["call_control"]["additional_context"])
+        self.assertIn("do not pass it on", out.getvalue())
+
+
 class QueueUrl(unittest.TestCase):
     """A hand-built query string once produced `/poll&wait=20?token=...`."""
 

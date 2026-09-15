@@ -21,6 +21,8 @@ live calls when it was left to the caller:
 """
 
 import argparse
+import calendar
+import datetime
 import json
 import os
 import sys
@@ -43,6 +45,8 @@ WATCH_INTERVAL = 15       # batching floor; SKILL.md says when to raise it
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
 DYNAMIC_VARS = ("opening", "brief", "call_purpose")
+TIMEZONE = "America/Los_Angeles"   # Louie's, and the agent's (agent.json)
+DAY_LETTERS = "MTWRFSU"            # indexed by calendar.weekday()
 
 
 def die(msg, code=1):
@@ -212,8 +216,57 @@ def read_variables(args):
     return {"opening": args.opening, "brief": brief, "call_purpose": args.purpose}
 
 
+def local_today():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo(TIMEZONE)).date()
+    except (ImportError, KeyError):
+        return datetime.date.today()
+
+
+def gregorian_calendar(start=None, months=3):
+    """Every date with its weekday -- plain dates, nothing from Google Calendar,
+    whose bare timestamps once got a weekday worked out wrong on a live call."""
+    today = local_today()
+    year, month = start or (today.year, today.month)
+    lines = [f"Today is {today:%A} {today.isoformat()} ({TIMEZONE}).",
+             "Day letters: M=Mon T=Tue W=Wed R=Thu F=Fri S=Sat U=Sun"]
+    for _ in range(months):
+        days = calendar.monthrange(year, month)[1]
+        cells = " ".join(f"{d}{DAY_LETTERS[calendar.weekday(year, month, d)]}"
+                         for d in range(1, days + 1))
+        lines.append(f"{calendar.month_abbr[month]} {year}: {cells}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return "\n".join(lines)
+
+
+def cmd_gregorian_calendar(cfg, args):
+    start = None
+    if args.start:
+        try:
+            year, month = map(int, args.start.split("-"))
+            datetime.date(year, month, 1)
+        except ValueError:
+            die("--from takes YYYY-MM, e.g. 2027-01")
+        start = (year, month)
+    text = gregorian_calendar(start, args.months)
+    print(text)
+    if not args.call_id:
+        return
+    status, resp = send_steer(
+        cfg, args.call_id, f"You may find this helpful, continue with what you were doing:\n{text}")
+    if status not in (200, 204):
+        die(f"the agent on {args.call_id} did not get a copy ({status}): {json.dumps(resp)[:300]}")
+    print(f"\nThe agent on {args.call_id} was sent the same calendar -- do not pass it on.")
+
+
 def create_call(cfg, variables, *, web, to=None):
     check_vars(variables)
+    # After the check, so an empty brief is still refused; and at dial time, so
+    # a staged brief carries the date of the call rather than of the staging.
+    variables = {**variables, "brief": (f"{variables['brief']}\n\n"
+                                        "## Gregorian calendar -- take weekdays from this, never work one out\n"
+                                        f"{gregorian_calendar()}")}
     if web:
         path, body = "/v3/create-web-call", {"agent_id": cfg["agent_id"]}
     else:
@@ -576,6 +629,14 @@ def cmd_answer(cfg, args):
     emit(watch_loop(cfg, call_id, args.budget, args.interval, args.since))
 
 
+def send_steer(cfg, call_id, text, speak_now=False):
+    body = {"call_control": {"additional_context": text, "trigger_response": speak_now}}
+    journal("steer", call_id=call_id, text=text, speak_now=speak_now)
+    status, resp = retell(cfg, f"/v2/update-live-call/{call_id}", method="PATCH", body=body)
+    journal("steer", call_id=call_id, status=status)
+    return status, resp
+
+
 def cmd_steer(cfg, args):
     """Push-side: inject context without waiting to be asked. Lands in the
     transcript as role `injected` -- not spoken by either party.
@@ -584,12 +645,7 @@ def cmd_steer(cfg, args):
     injection is a bet on how the agent will use it, and the only way to know
     is to hear the next few turns."""
     text = read_text(args, args.call_id)
-    body = {"call_control": {"additional_context": text,
-                             "trigger_response": args.speak_now}}
-    journal("steer", call_id=args.call_id, text=text, speak_now=args.speak_now)
-    status, resp = retell(cfg, f"/v2/update-live-call/{args.call_id}",
-                          method="PATCH", body=body)
-    journal("steer", call_id=args.call_id, status=status)
+    status, resp = send_steer(cfg, args.call_id, text, args.speak_now)
     sent = {"steer_status": status, "steer_result": resp}
     if status not in (200, 204):
         emit({**sent, "hint": "the context did not land -- the call may have ended"})
@@ -789,7 +845,7 @@ def main():
                     "until it ends. SKILL.md is the full reference.")
     sub = ap.add_subparsers(
         dest="cmd", required=True,
-        metavar="{dispatch,watch,answer,steer,transcript,journal,health}")
+        metavar="{dispatch,watch,answer,steer,transcript,journal,gregorian_calendar,health}")
 
     def brief_args(parser):
         parser.add_argument("--opening", required=True,
@@ -869,6 +925,15 @@ def main():
     j = sub.add_parser("journal", help="what this conversation actually did")
     j.add_argument("--limit", type=int, default=30)
     j.set_defaults(fn=cmd_journal)
+
+    g = sub.add_parser("gregorian_calendar",
+                       help="every date with its weekday, this month and the next two")
+    g.add_argument("call_id", nargs="?",
+                   help="a live call whose agent should get a copy too, without speaking")
+    g.add_argument("--from", dest="start", metavar="YYYY-MM",
+                   help="first month to print (default: this month)")
+    g.add_argument("--months", type=int, default=3)
+    g.set_defaults(fn=cmd_gregorian_calendar)
 
     sub.add_parser("health", help="check queue, token, agent and number").set_defaults(fn=cmd_health)
     sub.add_parser("agent-pull", description="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)

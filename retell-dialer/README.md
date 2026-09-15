@@ -22,7 +22,7 @@ to avoid.
 | | |
 |---|---|
 | `SKILL.md` | the skill body — how to run a call |
-| `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript, journal |
+| `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript, journal, gregorian_calendar |
 | `bin/ws.py` | stdlib RFC 6455 client for Retell's live-transcript socket |
 | `test_dialer.py` | offline regression tests — `python test_dialer.py` |
 | `worker/` | the Durable Object queue (`wrangler deploy`) |
@@ -91,3 +91,9 @@ entry. Resuming past it lost the agent's reply to every consult on a call.
 behave on a call; it needs Louie's facts, the authority to decide for him, and a
 supervisor willing to check its judgement. Most of SKILL.md follows from that,
 and so does most of what was deleted from it.
+
+**Weekdays are printed, never worked out.** Google Calendar returns bare
+timestamps, and a supervisor under call pressure offered "Thursday the 18th"
+for a Friday. `setup.sh` prints `dialer gregorian_calendar`, `dispatch` appends
+it to every brief, and a lookup mid-call steers a copy to the agent, so neither
+side has a weekday left to derive.

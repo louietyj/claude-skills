@@ -41,13 +41,26 @@ The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
 `/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
 one breaks on the other.
 
-Puts `dialer` on PATH and runs `dialer health`. Its output is a transcript of
-work already done: nothing in it needs running again this conversation. If it
-**fails, stop and tell Louie** — do not place a call. Without the queue,
-`consult_supervisor` times out with a stranger holding the line.
+Puts `dialer` on PATH, runs `dialer health`, and prints a Gregorian calendar:
+every date of this month and the next two, with its weekday. Its output is a
+transcript of work already done: nothing in it needs running again this
+conversation. If it **fails, stop and tell Louie** — do not place a call.
+Without the queue, `consult_supervisor` times out with a stranger holding the
+line.
 
 **Never re-derive the path or set a shell variable for it.** Shell state dies
 with the bash call that set it. Just call `dialer`.
+
+## Weekdays come from the Gregorian calendar, never from your head
+
+Google Calendar gives bare timestamps like `2026-09-15T00:00:00-07:00`, with
+no day of the week, so it is tempting to work the weekday out. Under call
+pressure that goes wrong: "Thursday, September 18th" went to a real rep in a
+month where the 18th was a Friday. Take every weekday from the calendar setup
+printed. For a month past it, run `dialer gregorian_calendar --from 2027-01`
+first, every time, however sure you are. Mid-call, add the call id
+(`dialer gregorian_calendar CALL_ID --from 2027-01`) and the agent is sent the
+same calendar, so leave it out of your answer.
 
 ## Get permission. Every call.
 
@@ -62,6 +75,9 @@ The brief is the agent's entire prompt. It opens with **who is being called and
 what done looks like** — enough to recognise success and stop pushing, failure
 and stop trying — then carries the three things above and nothing else: no
 coaching on tone or telephone manner.
+
+`dispatch` appends the same Gregorian calendar to every brief, so the agent has
+it too. Leave it out of what you write.
 
 **Take stock before you write.** Every fact about Louie that could come up,
 every decision the call could force, every tool you hold. Then sort each into
@@ -216,6 +232,14 @@ dialer journal
     with no status after it was cut off in flight and may still have landed;
     resend an answer if unsure, since a duplicate fails and shows the text
     that landed. See the rule below.
+
+dialer gregorian_calendar [CALL_ID] [--from YYYY-MM] [--months 3]
+    Every date with its weekday, one month per line:
+      Sep 2026: 1T 2W 3R 4F 5S 6U 7M ...
+    M T W R F S U are Monday to Sunday. Plain dates only: it knows nothing
+    of Louie's Google Calendar.
+    With a CALL_ID it also steers the same calendar to that call's agent,
+    silently and without watching. Do not repeat it in an answer.
 ```
 
 A call, start to finish (output trimmed):

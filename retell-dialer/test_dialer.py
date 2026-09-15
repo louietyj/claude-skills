@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -28,6 +29,24 @@ spec.loader.exec_module(dialer)
 class Args:
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+@contextlib.contextmanager
+def watch_stubs(queue, monitor):
+    """watch_loop with the queue, the monitor socket and call status stubbed."""
+    fake_ws = types.ModuleType("ws")
+    fake_ws.monitor = monitor
+    saved = sys.modules.get("ws"), dialer.queue, dialer.call_status
+    sys.modules["ws"], dialer.queue = fake_ws, queue
+    dialer.call_status = lambda cfg, cid: "ongoing"
+    try:
+        yield
+    finally:
+        if saved[0] is None:
+            sys.modules.pop("ws", None)
+        else:
+            sys.modules["ws"] = saved[0]
+        dialer.queue, dialer.call_status = saved[1], saved[2]
 
 
 class MonitorFrames(unittest.TestCase):
@@ -139,6 +158,60 @@ class LiveView(unittest.TestCase):
         self.assertIn("--since 2", view["hint"])
 
 
+class ReplyAfterAConsult(unittest.TestCase):
+    """Every consult lost the agent's reply. The holding phrase and what it says
+    once the answer lands share one turn id, so the reply grew in place behind
+    the tool entries, where a cursor already past them never looked."""
+
+    TOOL = [{"role": "tool_call_invocation", "name": "consult_supervisor", "arguments": "{}"},
+            {"role": "tool_call_result", "content": "Decline the 24 months."}]
+
+    def turns(self, reply, *after):
+        return [{"role": "user", "content": "$50 on 24 months?"},
+                {"role": "agent", "content": reply}, *self.TOOL, *after]
+
+    def test_cursor_waits_at_the_holding_phrase(self):
+        view = dialer.live_view(self.turns("Let me check on that"), since=0)
+        self.assertIn("--since 1", view["hint"])
+        self.assertTrue(view["new"][1].endswith(dialer.IN_PROGRESS))
+        self.assertNotIn(dialer.IN_PROGRESS, view["new"][-1])
+
+    def test_resuming_shows_the_reply(self):
+        reply = "Let me check on that one. 24 months is a no-go."
+        later = dialer.live_view(self.turns(reply, {"role": "user", "content": "Well"}), since=1)
+        self.assertEqual(later["new"][0], f"agent: {reply}")
+
+    def watch(self, turns):
+        frame = json.dumps({"type": "transcript_snapshot",
+                            "transcripts": [{"id": str(i), **t} for i, t in enumerate(turns)]})
+
+        class Socket:
+            close_code = None
+            frames = [frame]
+
+            def recv(self, timeout):
+                if self.frames:
+                    return self.frames.pop()
+                time.sleep(0.05)
+                return None
+
+            def close(self):
+                pass
+
+        queue = lambda cfg, path, **kw: (200, {"pending": None})
+        with watch_stubs(queue, lambda *a, **kw: Socket()):
+            return dialer.watch_loop({"retell_api_key": "k"}, "call_a",
+                                     budget=1, interval=0, since=1)
+
+    def test_watch_does_not_return_mid_reply(self):
+        self.assertEqual(self.watch(self.turns("Let me check on that"))["event"], "idle")
+
+    def test_watch_returns_once_someone_speaks_after_it(self):
+        out = self.watch(self.turns("Let me check on that one.", {"role": "user", "content": "Ok"}))
+        self.assertEqual(out["event"], "transcript")
+        self.assertEqual(out["new"][0], "agent: Let me check on that one.")
+
+
 class DispatchGuard(unittest.TestCase):
     """dispatch refuses while any call is live, because an interrupted turn can
     hide a dispatch that happened. But the live call may be another
@@ -223,19 +296,8 @@ class WatchIsolation(unittest.TestCase):
         def no_socket(*a, **kw):
             raise OSError("no monitor socket in tests")
 
-        fake_ws = types.ModuleType("ws")
-        fake_ws.monitor = no_socket
-        saved = sys.modules.get("ws"), dialer.queue, dialer.call_status
-        sys.modules["ws"], dialer.queue = fake_ws, queue
-        dialer.call_status = lambda cfg, cid: "ongoing"
-        try:
+        with watch_stubs(queue, no_socket):
             out = dialer.watch_loop({"retell_api_key": "k"}, "call_a", budget=1, interval=30)
-        finally:
-            if saved[0] is None:
-                sys.modules.pop("ws", None)
-            else:
-                sys.modules["ws"] = saved[0]
-            dialer.queue, dialer.call_status = saved[1], saved[2]
         self.assertEqual(out["event"], "idle")
         self.assertTrue(params_seen)
         self.assertTrue(all(p.get("call_id") == "call_a" for p in params_seen), params_seen)

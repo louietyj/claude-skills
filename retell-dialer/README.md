@@ -81,7 +81,11 @@ talking" from "hung up twenty seconds ago".
 **The live transcript is lossy and lagging.** The monitor streams an utterance
 as it is spoken, so `watch` labels its last line
 `[...utterance may still be in progress]` — a steer written against a
-half-received sentence once "corrected" a keypress that had been right.
+half-received sentence once "corrected" a keypress that had been right. Nor
+does a tool call end the utterance around it: the agent's "let me check" and
+its reply once the consult returns share one turn, which grows *behind* the
+tool entries, so `watch` resumes at the last spoken turn rather than the last
+entry. Resuming past it lost the agent's reply to every consult on a call.
 
 **The agent is Sonnet 5 with a phone line.** It does not need telling how to
 behave on a call; it needs Louie's facts, the authority to decide for him, and a

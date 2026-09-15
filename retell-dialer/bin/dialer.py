@@ -463,9 +463,9 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
             return {"event": "call_ended",
                     **ended_result(cfg, call_id, state["ended"])}
         # The turn at `seen` is the one left in progress last time; it only
-        # counts as news once a turn after it exists, which also means it is
-        # finished. Otherwise the same half-sentence is reported again.
-        finished = len(state["turns"]) > seen + 1
+        # counts as news once a spoken turn after it exists, which also means
+        # it is finished. Otherwise the same half-sentence is reported again.
+        finished = open_from(state["turns"]) > seen
         if finished and time.monotonic() - last_report >= interval:
             stop.set()
             return {"event": "transcript", "call_id": call_id,
@@ -600,14 +600,25 @@ def cmd_steer(cfg, args):
 
 
 IN_PROGRESS = "  [...utterance may still be in progress]"
+SPOKEN = ("agent", "user")
+
+
+def open_from(turns):
+    """Index of the last spoken turn: the first that may still change. Tool
+    calls do not end it -- the agent's holding phrase and its reply once the
+    consult returns share one turn id, so the reply grows behind the tool entries."""
+    for i in range(len(turns) - 1, -1, -1):
+        if turns[i].get("role") in SPOKEN:
+            return i
+    return len(turns)
 
 
 def render_turns(turns, live=False):
     """Flatten to readable lines, dropping the per-word timings each turn
     carries -- they outweigh the text about ten to one.
 
-    `live` marks the last line, because the monitor streams an utterance as it
-    is spoken: the final turn is routinely a sentence cut mid-word, and a steer
+    `live` marks the last spoken line, because the monitor streams an utterance
+    as it is spoken: that turn is routinely a sentence cut mid-word, and a steer
     written against it can contradict what was actually said."""
     lines = []
     for t in turns:
@@ -618,23 +629,24 @@ def render_turns(turns, live=False):
             lines.append(f"  [RESULT] {t.get('content', '')}")
         else:
             lines.append(f"{role}: {(t.get('content') or '').strip()}")
-    if live and lines:
-        lines[-1] += IN_PROGRESS
+    open_at = open_from(turns)
+    if live and open_at < len(lines):
+        lines[open_at] += IN_PROGRESS
     return lines
 
 
 def resume_point(turns, since):
-    """The last turn may still be being spoken, so it is never counted as seen:
-    the next watch starts *at* it and shows the finished sentence, rather than
-    after it with the rest of the sentence lost."""
-    return len(turns) - 1 if len(turns) > since else since
+    """The last spoken turn may still be in progress, so it is never counted as
+    seen: the next watch starts *at* it and shows the finished sentence, rather
+    than after it with the rest of the sentence lost."""
+    return max(since, open_from(turns)) if len(turns) > since else since
 
 
 def live_view(turns, since):
     """What a live watch reports past `since`, and where to resume."""
-    in_progress = len(turns) > since
     done = resume_point(turns, since)
-    return {"turns": f"{done} + 1 in progress" if in_progress else str(done),
+    in_progress = len(turns) - done
+    return {"turns": f"{done} + {in_progress} in progress" if in_progress else str(done),
             "new": render_turns(turns[since:], live=True),
             "hint": f"continue with `--since {done}` on watch, answer or steer"}
 

@@ -101,15 +101,18 @@ you are deciding alone and the band has to be wider.
 
 Tell the agent what a consult can reach, not just that the tool exists —
 otherwise a question outside the brief looks the same as a dead end, and it
-guesses at the band or defaults to a hard no instead of asking. It cannot be
-handed the whole universe (Louie's full calendar, every address he's ever
-lived at, the web), so name the parts of it plausibly relevant to this call —
-profile detail beyond the brief, calendar, driving times and addresses, web
-search, Louie himself in chat — and back each with a concrete sample rather
-than an abstract claim: a handful of real open slots, not "I can check the
-calendar"; the make and plate of the car, not "I have his vehicle details."
-A sample teaches the agent the category is worth consulting on; a bare claim
-teaches it nothing about when to bother.
+guesses at the band or defaults to a hard no instead of asking. Naming the
+*topic* you can reach (the calendar, the web) doesn't transfer: a sample of
+open slots only teaches it that scheduling questions are worth a consult, and
+the question that actually needs one is by definition the one nobody
+sampled. Name the *shape* instead, since the off-script moment is always one
+of three: a **lookup** you haven't done yet (another day's slots, an
+address, a policy document); a **computation** neither of you has run (which
+plan is actually cheaper given this usage); or **Louie's call alone** (a
+settlement number, swapping providers, sitting on a wait list). One instance
+of each is enough to anchor it — the agent should leave the brief asking
+itself "lookup, computation, or Louie's call," not scanning a list of facts
+for one that happens to match.
 
 ### Where the facts come from
 

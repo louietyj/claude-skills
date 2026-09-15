@@ -58,67 +58,73 @@ not approval for the next.
 
 ## Writing the brief
 
-The brief is the agent's entire prompt. It carries the three things above and
-nothing else — no coaching on tone or telephone manner.
+The brief is the agent's entire prompt. It opens with **who is being called and
+what done looks like** — enough to recognise success and stop pushing, failure
+and stop trying — then carries the three things above and nothing else: no
+coaching on tone or telephone manner.
 
-**Be thorough past the point of feeling excessive**, on facts specifically —
-this is where your instinct to be concise is wrong. A fact you preloaded and
-never needed cost nothing; one you left out costs six to thirteen seconds of
-dead air and burns a consult. Put in the tangential stuff: the spelling of the
-name, the old address as well as the current one, the insurance group number as
-well as the member ID, the reference number from the letter.
+**Take stock before you write.** Every fact about Louie that could come up,
+every decision the call could force, every tool you hold. Then sort each into
+the buckets below: what differs between them is whether it goes into the brief,
+and how specifically.
 
-The test is whether it was knowable before you dialled. Everything enumerable
-goes in; what the consult is for is the answer that depends on what they say —
-whether the slot just offered clears the calendar once driving time is counted.
+### Facts: by how much of it fits in the brief
 
-What it has to carry:
+1. **Likely useful, enumerable — spell it out.** Be thorough past the point of
+   feeling excessive; this is where your instinct to be concise is wrong. A fact
+   you preloaded and never needed cost nothing; one you left out costs six to
+   thirteen seconds of dead air and burns a consult. Put in the tangential
+   stuff: the spelling of the name, the old address as well as the current one,
+   the insurance group number as well as the member ID, the reference number
+   from the letter, every slot that suits Louie in the next two weeks. Say which
+   are free to volunteer and which only on request.
+2. **Likely useful, impractical to enumerate — name it, with a trigger.** The
+   rest of the calendar, every past claim, drive times from anywhere. Say where
+   the written-down part ends and that a consult reaches past it: "Anything
+   outside these slots, consult me and I'll check his calendar." The trigger is
+   what makes the agent ask instead of declining.
+3. **Unlikely to matter, but might — broad strokes.** A sentence or two on what
+   a consult can resolve — something to look up, something to work out,
+   something to put to Louie — and what you hold: his full profile, email and
+   documents, maps, the web, Louie himself in chat. Categories, not contents.
+   Without this, a question outside the brief looks like a dead end, and the
+   agent guesses or refuses instead of asking.
 
-- **Who is being called, and what done looks like** — enough to recognise
-  success and stop pushing, failure and stop trying.
-- **Every fact the other side might ask for**, and which are free to volunteer
-  versus only on request.
-- **The band of acceptable outcomes**, the hard nos, and whether it may commit
-  to something irreversible.
-- **The categories that should escalate** — a cost, a policy, a form, a
-  referral. Naming categories is what makes the tool fire on the question you
-  did *not* anticipate.
+### Decisions: by who may make them
 
-### The band is the whole trick
+1. **The agent may commit on the spot.**
+2. **You may commit on the spot** — latitude Louie gave you that takes judgement
+   or research the agent cannot do mid-call. "Accept if it's under $100 and
+   better than anything else we could get" delegates a comparison to you.
+3. **Only Louie may commit.**
+4. **Pre-rejected** — the hard nos.
 
-Facts are cheap. *Decisions* stall calls, so the brief carries decision
-authority, not just data.
+**The brief carries 1 and 4.** Anything between them is a consult, and you hold
+the line between 2 and 3 — so the agent needs the categories that escalate (a
+cost, a policy, a form, a referral), not which of the two each one lands in.
+Naming categories is what makes the tool fire on the question you did *not*
+anticipate. If the lines between the four are unclear, settle them with Louie
+before dialling, not on the call.
 
-"Any weekday morning before 11am in the next three weeks, any doctor" absorbs
-three counter-offers without a consult. "Tuesday 9am with Dr. Okafor" turns the
-first one into a consult. Write the band wide enough that the likely
-counter-offers fall inside it, and say what to do when they do not.
+**The agent's latitude is the whole trick.** Facts are cheap; *decisions* stall calls. "Any
+weekday morning before 11am in the next three weeks, any doctor" absorbs three
+counter-offers without a consult. "Tuesday 9am with Dr. Okafor" turns the first
+one into a consult. Write it wide enough that the likely counter-offers fall
+inside, and say whether the agent may commit to anything irreversible.
 
-One input you can only get up front: **will Louie be at the keyboard?** If not,
-you are deciding alone and the band has to be wider.
+Do bucket 2's research before dialling where you can — your answer is dead air
+on the line. And ask up front: **will Louie be at the keyboard?** If not, bucket
+3 cannot be answered live. Move what you can into 2 with him now; the rest ends
+in a callback.
 
-### What's on the other end of `consult_supervisor`
+### Tools: by whether they could matter
 
-Tell the agent what a consult can reach, not just that the tool exists —
-otherwise a question outside the brief looks the same as a dead end, and it
-guesses at the band or defaults to a hard no instead of asking. Naming the
-*topic* you can reach (the calendar, the web) doesn't transfer: a sample of
-open slots only teaches it that scheduling questions are worth a consult, and
-the question that actually needs one is by definition the one nobody
-sampled. Name the *shape* instead, since the off-script moment is always one
-of three: a **lookup** you haven't done yet (another day's slots, an
-address, a policy document); a **computation** neither of you has run (which
-plan is actually cheaper given this usage); or **Louie's call alone** (a
-settlement number, swapping providers, sitting on a wait list). One instance
-of each is enough to anchor it — the agent should leave the brief asking
-itself "lookup, computation, or Louie's call," not scanning a list of facts
-for one that happens to match. The same test as the facts above tells a real
-lookup example from a fact that should just be in the brief: was it knowable
-before you dialled? If yes, it belongs up there, not here. The Louie's-call
-example is the odd one out — any instance concrete enough to write down is
-one you already anticipated, so it can't itself be the question that comes
-up. Its job is narrower: teach the agent to recognise *a preference only
-Louie holds*, not to expect this exact one.
+1. **Might be useful** — goes in with facts bucket 3, in broad strokes.
+2. **No way it's relevant** — leave it out. If something genuinely tricky comes
+   up the agent will consult you, and you are reading the transcript live a few
+   seconds behind anyway. When you can resolve something it did not ask about —
+   a clash with the calendar it had no way to see — make whatever tool calls it
+   takes and `steer` it with the answer.
 
 ### Where the facts come from
 

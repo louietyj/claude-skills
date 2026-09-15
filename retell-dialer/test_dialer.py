@@ -381,8 +381,7 @@ class Journal(unittest.TestCase):
 
 class ResumeAfterActing(unittest.TestCase):
     """Acting on a call is a bet on how the agent will use what you sent, so
-    both commands resume watching -- at a tighter interval than an idle watch,
-    because this is the stretch you most need to see."""
+    both commands resume watching."""
 
     def setUp(self):
         self.saved = {n: getattr(dialer, n)
@@ -414,7 +413,7 @@ class ResumeAfterActing(unittest.TestCase):
     def test_answer_resumes_watching(self):
         self.run_cli("answer", "call_1:qab12")
         self.assertEqual(self.seen["call_id"], "call_1")
-        self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
+        self.assertEqual(self.seen["interval"], dialer.WATCH_INTERVAL)
 
     def test_answer_sends_the_consult_id(self):
         # The agent can ask a second question while the first is waiting; an
@@ -439,7 +438,7 @@ class ResumeAfterActing(unittest.TestCase):
     def test_steer_resumes_watching_too(self):
         self.run_cli("steer", "call_1")
         self.assertEqual(self.seen["call_id"], "call_1")
-        self.assertEqual(self.seen["interval"], dialer.FOLLOW_INTERVAL)
+        self.assertEqual(self.seen["interval"], dialer.WATCH_INTERVAL)
 
     def test_both_accept_the_same_overrides(self):
         for cmd, target in (("answer", "call_1:qab12"), ("steer", "call_1")):
@@ -454,9 +453,6 @@ class ResumeAfterActing(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_cli("steer", "call_1")
         self.assertEqual(self.seen, {})
-
-    def test_an_idle_watch_stays_slower(self):
-        self.assertGreater(dialer.WATCH_INTERVAL, dialer.FOLLOW_INTERVAL)
 
     def test_text_arrives_verbatim_from_stdin(self):
         # A "$50" passed as a double-quoted argument reached the queue as "0".

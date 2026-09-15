@@ -160,7 +160,7 @@ dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file b
     it. None of them? It is another conversation's: leave it alone and
     dispatch again with --force.
 
-dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
+dialer watch CALL_ID [--interval 15] [--budget 200] [--since N]
     Defaults as shown. Blocks, then prints one JSON object whose "event" is
     the first of:
       consult       Immediately, whatever the timers say. "question" is what
@@ -178,8 +178,13 @@ dialer watch CALL_ID [--interval 30] [--budget 200] [--since N]
     back, then watch again.
 
     --interval N  Batching floor, not a wait: it never returns on silence,
-                  it just stops watch returning once per word. ~15 while
-                  negotiating, 30 in ordinary talk, ~60 through a phone menu.
+                  it just stops watch returning once per word. Set it for
+                  what the call is doing right now, and judge it afresh on
+                  every watch, answer and steer:
+                    15  negotiating, scheduling, anything you must follow
+                        closely and react to fast.
+                    30  the agent is working through its brief, a phone
+                        menu, hold: slow going that needs little attention.
                   Every return spends one of your finite tool calls.
     --budget N    The cap for silence -- hold music, a long menu, "let me
                   check" -- where --interval never fires. Keep it at or under
@@ -195,9 +200,8 @@ dialer steer  CALL_ID [--speak-now] [watch flags] <<'EOF'
     The text goes on stdin through a quoted heredoc, closed by EOF alone on
     its own line. Never as an argument: the shell rewrites it first, and
     "$50" arrives as "0".
-    Send, then keep watching in the same process: same returns, same flags,
-    but --interval defaults to 15. The next turn or two is what shows
-    whether you were understood; raise it again once that is clear.
+    Send, then keep watching in the same process: same returns, same flags.
+    The next turn or two is what shows whether you were understood.
     If the agent asks something new before you answer, it queues: answering
     one consult returns the next straight away.
 

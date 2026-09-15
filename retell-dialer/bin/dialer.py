@@ -39,8 +39,7 @@ RETELL = "https://api.retellai.com"
 # Nests inside the claude.ai sandbox's 300s hard kill, which discards all output
 # when it fires -- an overrun loses the question, not just the tail of it.
 POLL_BUDGET = 200
-WATCH_INTERVAL = 30       # batching floor for an ordinary watch
-FOLLOW_INTERVAL = 15      # tighter, for the watch that resumes after you act
+WATCH_INTERVAL = 15       # batching floor; SKILL.md says when to raise it
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
 DYNAMIC_VARS = ("opening", "brief", "call_purpose")
@@ -804,20 +803,20 @@ def main():
     sv.add_argument("--port", type=int, default=8765)
     sv.set_defaults(fn=cmd_serve)
 
-    def watch_args(parser, interval):
+    def watch_args(parser):
         parser.add_argument("--budget", type=int, default=POLL_BUDGET)
-        parser.add_argument("--interval", type=int, default=interval,
+        parser.add_argument("--interval", type=int, default=WATCH_INTERVAL,
                             help="seconds of new dialogue to accumulate before "
-                                 "returning; raise it while navigating an IVR or on "
-                                 "hold, lower it at a decision point. A consult "
-                                 f"returns immediately either way (default {interval})")
+                                 "returning: 15 for anything you must react to fast, "
+                                 "30 while the call is slow or scripted. A consult "
+                                 f"returns immediately either way (default {WATCH_INTERVAL})")
         parser.add_argument("--since", type=int, default=0,
                             help="turns already seen; report only what is new")
 
     w = sub.add_parser("watch", help="block until a consult, new dialogue, or the call ends")
     # Required: guessing "the ongoing call" picks another conversation's.
     w.add_argument("call_id", help="as dispatch printed it")
-    watch_args(w, WATCH_INTERVAL)
+    watch_args(w)
     w.set_defaults(fn=cmd_watch)
 
     p = sub.add_parser("poll", description="block until the agent consults, or the call ends")
@@ -829,7 +828,7 @@ def main():
     a.add_argument("consult_id", help="from the consult, e.g. call_8f2e:q7c1")
     # Accepted only to be refused with the heredoc form; see read_text.
     a.add_argument("text", nargs="?", help=argparse.SUPPRESS)
-    watch_args(a, FOLLOW_INTERVAL)
+    watch_args(a)
     a.set_defaults(fn=cmd_answer)
 
     s = sub.add_parser("steer", help="inject context mid-call, then resume watching")
@@ -837,7 +836,7 @@ def main():
     s.add_argument("text", nargs="?", help=argparse.SUPPRESS)
     s.add_argument("--speak-now", action="store_true",
                    help="speak immediately instead of waiting for their turn")
-    watch_args(s, FOLLOW_INTERVAL)
+    watch_args(s)
     s.set_defaults(fn=cmd_steer)
 
     sub.add_parser("pending", description="non-blocking peek at the queue").set_defaults(fn=cmd_pending)

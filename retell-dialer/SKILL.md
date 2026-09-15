@@ -112,7 +112,13 @@ plan is actually cheaper given this usage); or **Louie's call alone** (a
 settlement number, swapping providers, sitting on a wait list). One instance
 of each is enough to anchor it — the agent should leave the brief asking
 itself "lookup, computation, or Louie's call," not scanning a list of facts
-for one that happens to match.
+for one that happens to match. The same test as the facts above tells a real
+lookup example from a fact that should just be in the brief: was it knowable
+before you dialled? If yes, it belongs up there, not here. The Louie's-call
+example is the odd one out — any instance concrete enough to write down is
+one you already anticipated, so it can't itself be the question that comes
+up. Its job is narrower: teach the agent to recognise *a preference only
+Louie holds*, not to expect this exact one.
 
 ### Where the facts come from
 

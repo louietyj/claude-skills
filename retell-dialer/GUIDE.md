@@ -185,8 +185,9 @@ dialer health
 dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file brief.md
     --to          E.164.
     --opening     Spoken verbatim the moment they pick up. Start with exactly
-                  "Hello, I'm an AI assistant for Louie Tan. This call is being
-                  transcribed and sent to him." then one sentence of purpose.
+                  "Hello, I'm an AI assistant for Louie Tan. This call is recorded
+                  and a transcription will be sent to him." then one sentence of
+                  purpose.
     --purpose     A few words, given if a call-screening service asks what the
                   call is about.
     --brief-file  The brief as plain prose, in any file (or --brief "…"
@@ -270,7 +271,7 @@ A call, start to finish (output trimmed):
 
 ```text
 $ dialer dispatch --to +16695550142 --purpose "move a dental cleaning" \
-    --opening "Hello, I'm an AI assistant for Louie Tan. This call is being transcribed and sent to him. I'm calling to move his Friday cleaning." \
+    --opening "Hello, I'm an AI assistant for Louie Tan. This call is recorded and a transcription will be sent to him. I'm calling to move his Friday cleaning." \
     --brief-file brief.md
 {"call_id": "call_8f2e", "call_status": "registered", "call_type": "phone_call"}
 

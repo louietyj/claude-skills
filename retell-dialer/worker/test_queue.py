@@ -2,11 +2,13 @@
 one call, retries, stale answers, hangups, and two calls supervised at once
 by separate conversations.
 
-    (cd worker && npx wrangler dev --port 8799 --var CONSULT_TOKEN:testtoken)
+    (cd worker && npx wrangler dev --port 8799 --var CONSULT_TOKEN:testtoken --var RETELL_API_KEY:testkey)
     python worker/test_queue.py
 
 Not covered: the 90s timeout, which is too slow to run every time. It
 settles through the same path as a hangup, with outcome `timed_out`."""
+import hashlib
+import hmac
 import json
 import sys
 import threading
@@ -16,15 +18,27 @@ import urllib.request
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8799"
 TOKEN = "testtoken"
+RETELL_KEY = "testkey"
 failed = False
 
 
-def req(path, method="GET", body=None, auth=True, timeout=120):
+def signature(data, key=RETELL_KEY, at=None):
+    """Retell's X-Retell-Signature over the exact bytes sent."""
+    ts = str(at if at is not None else int(time.time() * 1000))
+    return f"v={ts},d={hmac.new(key.encode(), data + ts.encode(), hashlib.sha256).hexdigest()}"
+
+
+def req(path, method="GET", body=None, auth=True, timeout=120, sign=None):
+    """auth=False is Retell calling: signed, unless `sign` overrides the header."""
     sep = "&" if "?" in path else "?"
     url = BASE + path + (f"{sep}token={TOKEN}" if auth else "")
     data = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(url, data=data, method=method,
-                               headers={"content-type": "application/json"})
+    headers = {"content-type": "application/json"}
+    if not auth:
+        header = sign if sign is not None else signature(data or b"")
+        if header:
+            headers["x-retell-signature"] = header
+    r = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(r, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read())
@@ -47,6 +61,17 @@ def check(name, cond, detail=""):
     print(("ok   " if cond else "FAIL ") + name + ("" if cond else f"\n     {detail}"))
     failed |= not cond
 
+
+# Retell's routes accept only a fresh signature made with the API key.
+probe = {"event": "call_ended", "call": {"call_id": "call_sig"}}
+raw = json.dumps(probe).encode()
+for name, header in (("unsigned", ""),
+                     ("wrong key", signature(raw, key="otherkey")),
+                     ("older than 5 minutes", signature(raw, at=int(time.time() * 1000) - 6 * 60_000))):
+    s, _ = req("/event", "POST", probe, auth=False, sign=header)
+    check(f"{name} callback is refused", s == 401, s)
+s, _ = req("/event", "POST", probe, auth=False)
+check("signed callback is accepted", s == 200, s)
 
 # Two different questions on one call queue up, oldest first, each answered by id.
 t1, o1 = held("call_a", "Tuesday 2pm?")

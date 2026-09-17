@@ -14,6 +14,7 @@ request to one instance, which is the whole point.
 cd worker
 npx wrangler deploy
 npx wrangler secret put CONSULT_TOKEN     # any long alphanumeric string
+npx wrangler secret put RETELL_API_KEY    # the one with a webhook badge in the dashboard
 ```
 
 Keep the token alphanumeric. An earlier one containing `%`, `|`, `\` and `]`
@@ -27,17 +28,18 @@ secret exists.
 
 | route | caller | auth |
 |---|---|---|
-| `POST /consult` | Retell | none — the tool config cannot send query params |
-| `POST /event` | Retell webhooks | none, same reason |
+| `POST /consult` | Retell | `X-Retell-Signature` |
+| `POST /event` | Retell webhooks | `X-Retell-Signature` |
 | `GET /poll` | Claude | `?token=` |
 | `POST /answer` | Claude | `?token=` |
 | `GET /pending` | Claude | `?token=` |
 | `GET /call` | Claude | `?token=` |
 | `GET /health` | anyone | none |
 
-`/consult` being unauthenticated means **the worker URL is itself a secret** —
-anyone who knows it can inject consults. It lives in `config.json`, which is
-gitignored, and is templated out of `agent/agent.json`.
+Retell signs both callbacks with an HMAC of the body keyed by the API key, so
+the Worker needs its own copy of that key. Retell also documents a single
+source IP, `100.20.5.228`, but promises nothing about it staying put; an
+allowlist on it would fail every consult the day it moves.
 
 ## The agent
 
@@ -50,6 +52,12 @@ because the agent references it by id.
 always mints a *new* `agent_id`, which orphans `config.json` and leaves the
 phone number pointing at the old one. Every change should go through
 `PATCH /update-agent` and `PATCH /update-retell-llm`, which mutate in place.
+
+The agent has never been published: its only version is the v0 draft, which
+those PATCHes edit and every call runs. Publishing it (a dashboard button)
+freezes v0 and sends future edits to a new draft, and which of the two calls
+would then run is undocumented. Don't publish without checking a call's
+`agent_version` afterwards.
 
 The prompt is deliberately almost empty — `{{brief}}` plus the invariants. Three
 dynamic variables are supplied per call (`opening`, `brief`, `call_purpose`), so

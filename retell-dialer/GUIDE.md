@@ -249,12 +249,16 @@ dialer steer  CALL_ID [--speak-now] [watch flags] <<'EOF'
     If the agent asks something new before you answer, it queues: answering
     one consult returns the next straight away.
 
+dialer hangup CALL_ID
+    Drops the call at once and prints what `watch` prints when a call ends.
+    Dire straits only; see below.
+
 dialer transcript CALL_ID
     Post-call only; mid-call, use watch.
 
 dialer journal
-    Every dispatch, answer and steer, one JSON line each, written before the
-    request goes out: {"at", "command", "call_id", "text"} (answer adds
+    Every dispatch, answer, steer and hangup, one JSON line each, written
+    before the request goes out: {"at", "command", "call_id", "text"} (answer adds
     "consult_id"), followed by a line with its "status" (for dispatch, also
     the new "call_id"). A line
     with no status after it was cut off in flight and may still have landed;
@@ -361,16 +365,16 @@ still being spoken and may end differently, so never steer on it — wait for
 the next `watch`. One steer "corrected" a keypress that had been right. Every
 line above it is final and safe to act on.
 
-**Avoid `--speak-now` unless it absolutely cannot wait.** It cuts the agent off
-mid-sentence to reply afresh, though never the other side. Without it the agent
-still reads the context before its next reply — including one that would
-confirm something — but stays silent until someone speaks, so on hold only
-`--speak-now` gets it acted on.
+**Never use `--speak-now` unless you are in dire straits.** It cuts the agent
+off mid-sentence to reply afresh. Without it the agent still reads the context
+before its next reply — including one that would confirm something.
 
 A steer only reaches a call in progress: not one still ringing, nor one over.
 
-To end a call early, `steer` the agent to wrap up and hang up; it has an
-end-call tool. `End Call` on the dashboard (below) is the hard stop.
+To end a call early, `steer` the agent to wrap up and hang up as soon as it
+can; it has an end-call tool. **`dialer hangup` is for dire straits only** —
+an agent hallucinating or ignoring steers. It drops the line mid-word, with no
+goodbye, on someone who was talking to Louie's representative.
 
 When the call ends, `watch` returns the transcript with it. Tell Louie what was
 agreed.

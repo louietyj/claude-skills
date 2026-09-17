@@ -169,18 +169,45 @@ ENDED_STATUSES = ("ended", "error", "not_connected")
 NO_SUCH_CALL = "Retell has no call with this id -- check it against what dispatch printed"
 
 
+def recent_dispatches(within_s=600):
+    """Call ids the journal says were dispatched in the last `within_s`."""
+    try:
+        with open(JOURNAL, encoding="utf-8") as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+    except (OSError, ValueError):
+        return []
+    cutoff = time.time() - within_s
+    ids = []
+    for r in rows:
+        try:
+            recent = time.mktime(time.strptime(r.get("at", ""), "%Y-%m-%dT%H:%M:%S")) >= cutoff
+        except ValueError:
+            continue
+        if r.get("command") == "dispatch" and r.get("call_id") and recent:
+            ids.append(r["call_id"])
+    return ids[::-1]
+
+
 def live_calls(cfg):
     """Every call on the account not yet over, newest first; None if Retell
     could not be asked.
 
-    Filtered here rather than by Retell: its status filter has no "registered",
-    which is what a call not yet connected reports -- and a call still ringing
-    is exactly what an interrupted dispatch leaves behind."""
+    list-calls leaves out a call that is still ringing -- exactly what an
+    interrupted dispatch leaves behind -- so this sandbox's own recent
+    dispatches are asked after one by one."""
     status, body = retell(cfg, "/v3/list-calls", method="POST", timeout=15,
                           body={"sort_order": "descending", "limit": 50})
     if status != 200 or not isinstance(body, dict) or not isinstance(body.get("items"), list):
         return None
-    return [c for c in body["items"] if c.get("call_status") in LIVE_STATUSES]
+    listed = {c.get("call_id") for c in body["items"]}
+    ringing = []
+    for call_id in recent_dispatches():
+        if call_id in listed:
+            continue
+        status, call = retell(cfg, f"/v2/get-call/{call_id}", timeout=15)
+        if status == 200 and isinstance(call, dict) and call.get("call_status") in LIVE_STATUSES:
+            ringing.append(call)
+    return ringing + [c for c in body["items"] if c.get("call_status") in LIVE_STATUSES]
 
 
 def find_ongoing_call(cfg):
@@ -686,6 +713,22 @@ def cmd_steer(cfg, args):
     emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
 
 
+def cmd_hangup(cfg, args):
+    """The hard stop: the line drops mid-word, with no goodbye."""
+    journal("hangup", call_id=args.call_id)
+    status, resp = retell(cfg, f"/v2/stop-call/{args.call_id}", method="POST")
+    journal("hangup", call_id=args.call_id, status=status)
+    if status not in (200, 204):
+        die(f"hangup failed ({status}): {json.dumps(resp)[:300]} -- a call still ringing "
+            "cannot be stopped; it ends on its own when the ring times out")
+    deadline = time.monotonic() + 10
+    while (state := call_status(cfg, args.call_id)) not in ENDED_STATUSES:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+    emit({"event": "call_ended", **ended_result(cfg, args.call_id, state)})
+
+
 IN_PROGRESS = "  [...utterance may still be in progress]"
 SPOKEN = ("agent", "user")
 
@@ -878,7 +921,7 @@ def main():
                     "until it ends. GUIDE.md is the full reference.")
     sub = ap.add_subparsers(
         dest="cmd", required=True,
-        metavar="{dispatch,watch,answer,steer,transcript,journal,gregorian_calendar,health}")
+        metavar="{dispatch,watch,answer,steer,hangup,transcript,journal,gregorian_calendar,health}")
 
     def brief_args(parser):
         parser.add_argument("--opening", required=True,
@@ -939,6 +982,10 @@ def main():
                    help="speak immediately instead of waiting for their turn")
     watch_args(s)
     s.set_defaults(fn=cmd_steer)
+
+    h = sub.add_parser("hangup", help="hard stop, dire straits only: drops the line mid-word")
+    h.add_argument("call_id")
+    h.set_defaults(fn=cmd_hangup)
 
     sub.add_parser("pending", description="non-blocking peek at the queue").set_defaults(fn=cmd_pending)
 

@@ -200,15 +200,33 @@ export class ConsultQueue {
   }
 }
 
+// Retell signs its callbacks as `v=<ms>,d=<hex HMAC-SHA256(body + ms)>`, keyed
+// with the account's API key. Without this check, anyone holding the worker URL
+// could inject a consult or fake a hangup.
+async function signedByRetell(req, apiKey) {
+  const m = /^v=(\d+),d=([0-9a-fA-F]+)$/.exec(req.headers.get("x-retell-signature") ?? "");
+  if (!m || !apiKey || m[2].length % 2) return false;
+  if (Math.abs(Date.now() - Number(m[1])) > 5 * 60_000) return false;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(apiKey), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  const digest = Uint8Array.from(m[2].match(/../g), h => parseInt(h, 16));
+  const raw = await req.clone().text();
+  return crypto.subtle.verify("HMAC", key, digest, enc.encode(raw + m[1]));
+}
+
 export default {
   async fetch(req, env) {
     const { pathname, searchParams } = new URL(req.url);
     if (pathname === "/health") return json({ ok: true });
 
-    // Retell's own callbacks cannot carry a query param, so they are the only
-    // unauthenticated routes; everything Claude uses needs the shared secret.
+    // Retell's callbacks cannot carry a query param, so they prove themselves
+    // by signature instead; everything Claude uses needs the shared token.
     const fromRetell = pathname === "/consult" || pathname === "/event";
-    if (!fromRetell && searchParams.get("token") !== env.CONSULT_TOKEN) {
+    const allowed = fromRetell
+      ? await signedByRetell(req, env.RETELL_API_KEY)
+      : searchParams.get("token") === env.CONSULT_TOKEN;
+    if (!allowed) {
       return json({ error: "unauthorized" }, 401);
     }
     // Single named instance — all traffic lands on the same object.

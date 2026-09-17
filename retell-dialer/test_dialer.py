@@ -224,8 +224,9 @@ class DispatchGuard(unittest.TestCase):
     conversation's, so the refusal must show enough to tell them apart."""
 
     def setUp(self):
-        self.saved = {n: getattr(dialer, n) for n in ("retell", "journal", "create_call")}
+        self.saved = {n: getattr(dialer, n) for n in ("retell", "journal", "create_call", "JOURNAL")}
         dialer.journal = lambda *a, **kw: None
+        dialer.JOURNAL = os.path.join(tempfile.mkdtemp(), "journal.jsonl")
         self.created = []
         dialer.create_call = lambda cfg, variables, **kw: (
             self.created.append(kw), (201, {"call_id": "call_new", "call_status": "registered"}))[1]
@@ -234,8 +235,12 @@ class DispatchGuard(unittest.TestCase):
         for name, fn in self.saved.items():
             setattr(dialer, name, fn)
 
-    def live(self, *calls, status=200):
-        dialer.retell = lambda cfg, path, **kw: (status, {"items": list(calls)})
+    def live(self, *calls, status=200, ringing=None):
+        def retell(cfg, path, **kw):
+            if path.startswith("/v2/get-call/"):
+                return (200, ringing) if ringing else (404, {})
+            return status, {"items": list(calls)}
+        dialer.retell = retell
 
     def dispatch(self, force=False):
         args = Args(to="+15550100", force=force, opening="hi", purpose="p",
@@ -268,6 +273,16 @@ class DispatchGuard(unittest.TestCase):
         self.assertEqual([c["call_id"] for c in shown], ["call_a", "call_b"])
         self.assertEqual(shown[0]["brief"], "dentist brief")
         self.assertEqual(shown[0]["to"], "+15550142")
+
+    def test_refusal_sees_a_ringing_call_list_calls_leaves_out(self):
+        with open(dialer.JOURNAL, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "command": "dispatch",
+                                 "status": 201, "call_id": "call_ringing"}) + "\n")
+        self.live(self.call("call_c", "ended", "old brief"),
+                  ringing=self.call("call_ringing", "registered", "this brief"))
+        code, out = self.dispatch()
+        self.assertNotEqual(code, 0)
+        self.assertEqual([c["call_id"] for c in json.loads(out)["live_calls"]], ["call_ringing"])
 
     def test_nothing_live_dials(self):
         self.live(self.call("call_c", "ended", "old brief"))

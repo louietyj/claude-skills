@@ -394,6 +394,27 @@ class WatchNotConnected(unittest.TestCase):
         self.assertEqual(out["disconnection_reason"], "dial_no_answer")
 
 
+class WatchUnknownCall(unittest.TestCase):
+    """Retell 404s an id it has never seen, which read as "status unknown" and
+    left a mistyped call id blocking for the whole budget."""
+
+    def test_watch_returns_on_a_mistyped_id(self):
+        def no_socket(*a, **kw):
+            raise OSError("no monitor socket in tests")
+
+        real_status, orig_retell = dialer.call_status, dialer.retell
+        dialer.retell = lambda cfg, path, **kw: (404, {"status": "error", "message": "Not Found"})
+        try:
+            with watch_stubs(lambda cfg, path, **kw: (200, {"pending": None}), no_socket):
+                dialer.call_status = real_status
+                start = time.monotonic()
+                out = dialer.watch_loop({"retell_api_key": "k"}, "call_typo", budget=30, interval=15)
+        finally:
+            dialer.retell = orig_retell
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(out["event"], "error")
+
+
 class CheckVars(unittest.TestCase):
     """An unset variable renders as a literal `{{brief}}` -- a live call with
     no instructions at all."""

@@ -216,6 +216,7 @@ dialer watch CALL_ID [--interval 15] [--budget 200] [--since N]
                     "call_status": "not_connected", a null transcript and a
                     "disconnection_reason" such as dial_no_answer.
       taken_over    Louie took the call over; see below.
+      error         Retell has no call with that id: a mistyped CALL_ID.
     consult, transcript and idle carry "hint", naming the --since to pass
     next; a consult's hint is the whole answer command. Act on what came
     back, then watch again.
@@ -360,9 +361,13 @@ still being spoken and may end differently, so never steer on it — wait for
 the next `watch`. One steer "corrected" a keypress that had been right. Every
 line above it is final and safe to act on.
 
-**Avoid `--speak-now` unless it absolutely cannot wait.** It makes the agent
-talk over whoever is mid-sentence. Without it the agent still reads the context
-before its next reply — including one that would confirm something.
+**Avoid `--speak-now` unless it absolutely cannot wait.** It cuts the agent off
+mid-sentence to reply afresh, though never the other side. Without it the agent
+still reads the context before its next reply — including one that would
+confirm something — but stays silent until someone speaks, so on hold only
+`--speak-now` gets it acted on.
+
+A steer only reaches a call in progress: not one still ringing, nor one over.
 
 To end a call early, `steer` the agent to wrap up and hang up; it has an
 end-call tool. `End Call` on the dashboard (below) is the hard stop.

@@ -152,10 +152,13 @@ def merge_turns(by_id, msg):
 # --- call status -------------------------------------------------------------
 
 def call_status(cfg, call_id):
-    """'ongoing' | 'ended' | 'error' | 'registered' | None if unknown."""
+    """Retell's call_status, 'not_found' for an id it has never seen, or None if
+    it could not be asked."""
     if not call_id:
         return None
     status, body = retell(cfg, f"/v2/get-call/{call_id}", timeout=15)
+    if status == 404:
+        return "not_found"
     return body.get("call_status") if status == 200 and isinstance(body, dict) else None
 
 
@@ -163,6 +166,7 @@ LIVE_STATUSES = ("registered", "ongoing")
 # A call that never connects (no answer, busy, invalid number) ends as
 # "not_connected", not "ended".
 ENDED_STATUSES = ("ended", "error", "not_connected")
+NO_SUCH_CALL = "Retell has no call with this id -- check it against what dispatch printed"
 
 
 def live_calls(cfg):
@@ -416,6 +420,8 @@ def poll_loop(cfg, call_id, budget):
             return {"error": f"queue returned {status}", "body": body}
 
         state = call_status(cfg, call_id)
+        if state == "not_found":
+            return {"error": NO_SUCH_CALL, "call_id": call_id}
         if state in ENDED_STATUSES:
             return ended_result(cfg, call_id, state)
         if call_id is None:
@@ -512,6 +518,9 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
         if time.monotonic() >= next_status:
             next_status = time.monotonic() + 15
             live = call_status(cfg, call_id)
+            if live == "not_found":
+                stop.set()
+                return {"event": "error", "call_id": call_id, "error": NO_SUCH_CALL}
             if live in ENDED_STATUSES and not state["consult"]:
                 stop.set()
                 return {"event": "call_ended", **ended_result(cfg, call_id, live)}
@@ -669,7 +678,8 @@ def cmd_steer(cfg, args):
     status, resp = send_steer(cfg, args.call_id, text, args.speak_now)
     sent = {"steer_status": status, "steer_result": resp}
     if status not in (200, 204):
-        emit({**sent, "hint": "the context did not land -- the call may have ended"})
+        emit({**sent, "hint": "the context did not land -- a steer only reaches a call "
+                              "in progress, not one still ringing or already over"})
         sys.exit(1)
 
     print(json.dumps(sent, ensure_ascii=False), file=sys.stderr)

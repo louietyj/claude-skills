@@ -70,6 +70,11 @@ rather than pre-synthesised, 2–4s after their greeting. `reminder_max_count: 0
 because Retell's default nudge after 10s of silence had the agent disclose into
 hold music, then skip the disclosure for the human who came back.
 
+The voice is `retell-Rita`: brisk, with a little line noise that reads as a real
+caller. The slower, warmer voices suit an agent answering a helpline, not a
+customer calling one. Platform voices also cost less than the same persona on
+ElevenLabs.
+
 Past 4,000 prompt tokens, Retell bills the whole call at tokens ÷ 4,000. The
 count is every turn's full context: general prompt, tool descriptions, handbook
 presets, transcript, tool results and any knowledge base retrievals, so a

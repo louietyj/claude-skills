@@ -36,6 +36,7 @@ def watch_stubs(queue, monitor):
     """watch_loop with the queue, the monitor socket and call status stubbed."""
     fake_ws = types.ModuleType("ws")
     fake_ws.monitor = monitor
+    fake_ws.WSError = type("WSError", (Exception,), {})
     saved = sys.modules.get("ws"), dialer.queue, dialer.call_status
     sys.modules["ws"], dialer.queue = fake_ws, queue
     dialer.call_status = lambda cfg, cid: "ongoing"
@@ -126,6 +127,11 @@ class RenderTurns(unittest.TestCase):
             {"role": "tool_call_result", "content": "ok"}])
         self.assertIn("press_digit", lines[0])
         self.assertIn("ok", lines[1])
+
+    def test_keypad_press_shows_its_digit(self):
+        # A dtmf item carries `digit`, not `content`.
+        self.assertEqual(dialer.render_turns([{"role": "dtmf", "digit": "3"}]),
+                         ["  [KEYPAD] 3"])
 
     def test_word_timings_are_dropped(self):
         lines = dialer.render_turns(
@@ -301,6 +307,91 @@ class WatchIsolation(unittest.TestCase):
         self.assertEqual(out["event"], "idle")
         self.assertTrue(params_seen)
         self.assertTrue(all(p.get("call_id") == "call_a" for p in params_seen), params_seen)
+
+
+class MonitorCloseCodes(unittest.TestCase):
+    """Only 1000 means the call ended. Any other close used to be reported as a
+    hangup, so a dashboard tab too many (4008) or a Retell hiccup (1011) ended
+    supervision of a call still in progress."""
+
+    def sockets(self, *connections):
+        """One fake connection per argument: a close code, or a list of frames."""
+        pending = list(connections)
+
+        class Socket:
+            def __init__(self, spec):
+                self.frames = [] if isinstance(spec, int) else list(spec)
+                self.code = spec if isinstance(spec, int) else None
+                self.close_code = None
+
+            def recv(self, timeout):
+                if self.frames:
+                    return self.frames.pop(0)
+                if self.code is not None:
+                    self.close_code = self.code
+                    return None
+                time.sleep(0.05)
+                return None
+
+            def close(self):
+                pass
+
+        return lambda *a, **kw: Socket(pending.pop(0) if pending else [])
+
+    def watch(self, monitor):
+        queue = lambda cfg, path, **kw: (200, {"pending": None})
+        with watch_stubs(queue, monitor):
+            return dialer.watch_loop({"retell_api_key": "k"}, "call_a", budget=3, interval=0)
+
+    def test_too_many_watchers_is_not_a_hangup(self):
+        out = self.watch(self.sockets(4008))
+        self.assertEqual(out["event"], "idle")
+        self.assertIn("4008", out["monitor"])
+
+    def test_internal_error_reconnects(self):
+        snapshot = json.dumps({"type": "transcript_snapshot", "transcripts": [
+            {"id": "agent_0", "role": "agent", "content": "Hello."},
+            {"id": "user_0", "role": "user", "content": "Hi"}]})
+        out = self.watch(self.sockets(1011, [snapshot]))
+        self.assertEqual(out["event"], "transcript")
+        self.assertEqual(out["new"][0], "agent: Hello.")
+
+
+class WatchNotConnected(unittest.TestCase):
+    """A call nobody answers ends as "not_connected", and watch used to block
+    for its whole budget on one."""
+
+    def setUp(self):
+        self.orig = dialer.retell
+        dialer.retell = lambda cfg, path, **kw: (
+            200, {"call_status": "not_connected", "disconnection_reason": "dial_no_answer"})
+
+    def tearDown(self):
+        dialer.retell = self.orig
+
+    def test_watch_returns_on_no_answer(self):
+        def no_socket(*a, **kw):
+            raise OSError("no monitor socket in tests")
+
+        with watch_stubs(lambda cfg, path, **kw: (200, {"pending": None}), no_socket):
+            dialer.call_status = lambda cfg, cid: "not_connected"
+            start = time.monotonic()
+            out = dialer.watch_loop({"retell_api_key": "k"}, "call_a", budget=30, interval=15)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(out["event"], "call_ended")
+        self.assertEqual(out["disconnection_reason"], "dial_no_answer")
+        self.assertIsNone(out["transcript"])
+
+    def test_poll_returns_on_no_answer(self):
+        saved = dialer.queue, dialer.call_status
+        dialer.queue = lambda cfg, path, **kw: (200, {"pending": None})
+        dialer.call_status = lambda cfg, cid: "not_connected"
+        try:
+            out = dialer.poll_loop({}, "call_a", budget=30)
+        finally:
+            dialer.queue, dialer.call_status = saved
+        self.assertTrue(out["call_ended"])
+        self.assertEqual(out["disconnection_reason"], "dial_no_answer")
 
 
 class CheckVars(unittest.TestCase):

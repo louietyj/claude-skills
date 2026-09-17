@@ -160,6 +160,9 @@ def call_status(cfg, call_id):
 
 
 LIVE_STATUSES = ("registered", "ongoing")
+# A call that never connects (no answer, busy, invalid number) ends as
+# "not_connected", not "ended".
+ENDED_STATUSES = ("ended", "error", "not_connected")
 
 
 def live_calls(cfg):
@@ -413,10 +416,16 @@ def poll_loop(cfg, call_id, budget):
             return {"error": f"queue returned {status}", "body": body}
 
         state = call_status(cfg, call_id)
-        if state in ("ended", "error"):
+        if state in ENDED_STATUSES:
             return ended_result(cfg, call_id, state)
         if call_id is None:
             call_id = find_ongoing_call(cfg)
+
+
+# Monitor close codes a reconnect cannot fix. The call may well still be live.
+MONITOR_FATAL = {4000: "malformed request",
+                 4001: "API key missing or invalid",
+                 4008: "5 watchers already on this call, dashboard tabs included"}
 
 
 def watch_loop(cfg, call_id, budget, interval, since=0):
@@ -437,9 +446,8 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
     stop = threading.Event()
 
     def run_monitor():
-        # 4004 is "call not live yet", not "call over": a call that is still
-        # ringing closes with it, and the stream only exists once the callee
-        # picks up. Treating it as the end reports a hangup during the ring.
+        # Only 1000 means the call is over. 4004 is "not ongoing", which a call
+        # gets for as long as it rings, so it is retried rather than a hangup.
         attempts = 0
         while not stop.is_set():
             try:
@@ -448,10 +456,15 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
                 state["error"] = f"monitor: {type(e).__name__}: {e}"
                 return
             code = pump(sock)
-            if code != 4004 or attempts >= 8 or stop.is_set():
-                if code is not None and code != 4004:
-                    state["ended"] = state["ended"] or f"ws {code}"
+            if stop.is_set():
                 return
+            if code == 1000:
+                state["ended"] = state["ended"] or "call_ended"
+                return
+            if code in MONITOR_FATAL:
+                state["error"] = f"monitor: ws {code}, {MONITOR_FATAL[code]}"
+                return
+            # 4004, 1011 or a dropped socket: the reconnect's snapshot fills the gap.
             attempts += 1
             time.sleep(min(4.0, 0.5 * 2 ** attempts))
 
@@ -459,7 +472,10 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
         """Drain one connection. Returns its close code, or None if we stopped."""
         try:
             while not stop.is_set():
-                raw = sock.recv(timeout=2)
+                try:
+                    raw = sock.recv(timeout=2)
+                except (ws.WSError, OSError):
+                    return 1006
                 if raw is None:
                     if sock.close_code is not None:
                         return sock.close_code
@@ -472,7 +488,7 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
                 state["types"].add(kind)
                 if kind == "call_ended":
                     state["ended"] = "call_ended"
-                    return
+                    return 1000
                 if merge_turns(state["by_id"], msg):
                     state["turns"] = list(state["by_id"].values())
         finally:
@@ -496,7 +512,7 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
         if time.monotonic() >= next_status:
             next_status = time.monotonic() + 15
             live = call_status(cfg, call_id)
-            if live in ("ended", "error") and not state["consult"]:
+            if live in ENDED_STATUSES and not state["consult"]:
                 stop.set()
                 return {"event": "call_ended", **ended_result(cfg, call_id, live)}
         if state["consult"]:
@@ -541,6 +557,11 @@ def ended_result(cfg, call_id, why):
     wants the transcript every time a call ends, so charging them a round trip
     for it buys nothing."""
     out = {"call_ended": True, "call_id": call_id, "call_status": why}
+    if why == "not_connected":
+        # Nobody picked up, so there is no transcript worth settling for.
+        _, body = retell(cfg, f"/v2/get-call/{call_id}", timeout=15)
+        reason = body.get("disconnection_reason") if isinstance(body, dict) else None
+        return {**out, "disconnection_reason": reason, "transcript": None}
     rec = call_record(cfg, call_id, settle=10)
     if not rec:
         return {**out, "transcript": None, "note": "nothing retained yet"}
@@ -683,6 +704,8 @@ def render_turns(turns, live=False):
             lines.append(f"  [TOOL {t.get('name')}] {t.get('arguments', '')}")
         elif role == "tool_call_result":
             lines.append(f"  [RESULT] {t.get('content', '')}")
+        elif role == "dtmf":
+            lines.append(f"  [KEYPAD] {t.get('digit', '')}")
         else:
             lines.append(f"{role}: {(t.get('content') or '').strip()}")
     open_at = open_from(turns)

@@ -212,7 +212,9 @@ dialer watch CALL_ID [--interval 15] [--budget 200] [--since N]
       idle          --budget ran out and nobody spoke. "monitor": "no frames"
                     means the live transcript is not arriving; consults
                     still will.
-      call_ended    With the full "transcript".
+      call_ended    With the full "transcript". A call nobody picked up has
+                    "call_status": "not_connected", a null transcript and a
+                    "disconnection_reason" such as dial_no_answer.
       taken_over    Louie took the call over; see below.
     consult, transcript and idle carry "hint", naming the --since to pass
     next; a consult's hint is the whole answer command. Act on what came

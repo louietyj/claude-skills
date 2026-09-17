@@ -36,6 +36,7 @@
   "volume": 1,
   "enable_expressive_mode": false,
   "enable_backchannel": false,
+  "reminder_max_count": 0,
   "max_call_duration_ms": 1800000,
   "interruption_sensitivity": 0.3,
   "boosted_keywords": [
@@ -62,7 +63,7 @@
     "model_temperature": 0,
     "model_high_priority": false,
     "tool_call_strict_mode": true,
-    "general_prompt": "{{brief}}\n\n## Invariants (override anything above)\n- To the first human, never a recording: once, verbatim, as a statement: \"Hello, I'm an AI assistant for Louie Tan. This call is recorded and a transcription will be sent to him.\" No paraphrase, additions or asking permission; then straight into the task.\n- Phone menus: everything you say is heard as input, so speak only to answer a prompt: no narration or thinking aloud, including on hold. Press only digits already offered; never 0 or \"operator\" as a shortcut. Prefer options that settle the task over reaching a human.\n- Never guess a fact not in the brief; consult_supervisor liberally for anything unclear.\n- While checking, say only that you are checking: no answer, guess or hedge (\"I don't think so, but let me check\"). They act on what you say first.\n- Before ending, read back and confirm anything agreed.",
+    "general_prompt": "{{brief}}\n\n## Invariants (override anything above)\n- Your first words to each human (never a recording), verbatim: \"Hi, this is Louie Tan's AI assistant. This call is recorded.\" No additions or asking permission. Then lead with the suggested opener, adapted if what they said makes it not fit: {{opening}}. The disclosure is what they consent to by staying on, so if a new human comes on, or you're not sure it was heard, say it and the opener again. Told to hold before that: \"Sure\" at most, then wait silently.\n- Phone menus: everything you say is heard as input, so speak only to answer a prompt: no narration or thinking aloud, including on hold. Press only digits already offered; never 0 or \"operator\" as a shortcut. Prefer options that settle the task over reaching a human.\n- Never guess a fact not in the brief; consult_supervisor liberally for anything unclear.\n- While checking, say only that you are checking: no answer, guess or hedge (\"I don't think so, but let me check\"). They act on what you say first.\n- Before ending, read back and confirm anything agreed.",
     "general_tools": [
       {
         "max_retry": 3,
@@ -103,8 +104,9 @@
         "speak_after_execution": true
       }
     ],
-    "start_speaker": "agent",
-    "begin_message": "{{opening}}",
+    "start_speaker": "user",
+    "begin_after_user_silence_ms": 3000,
+    "begin_message": null,
     "knowledge_base_ids": [],
     "kb_config": {
       "filter_score": 0.6,

@@ -925,7 +925,7 @@ def main():
 
     def brief_args(parser):
         parser.add_argument("--opening", required=True,
-                            help="first line; carries the AI announcement")
+                            help="the one question to lead with, after the disclosure")
         parser.add_argument("--purpose", required=True,
                             help="one phrase, for call screening")
         parser.add_argument("--brief", help="the brief, inline")

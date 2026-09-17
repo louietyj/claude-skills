@@ -44,6 +44,26 @@ ringing in someone's office. **Ask Louie and get an explicit yes before every
 call**, saying who you are about to ring and what for. Approval for one call is
 not approval for the next.
 
+## The sentence after the disclosure decides the call
+
+Once they have greeted it, the agent always says first: "Hi, this is Louie
+Tan's AI assistant. This call is recorded." That is non-negotiable, and it is
+also exactly what a spam robocall sounds like, so people's reflex is to hang up.
+The next sentence, `--opening`, is all you get to prove otherwise. Make it count:
+
+- **One question: the one that makes the call worth it** if they hang up right
+  after answering. "Are you still doing all-you-can-eat?", not "a couple of
+  quick questions about your format, pricing and availability tonight" — an
+  agenda gives them nothing to answer, and a list sounds like a survey. A host
+  hung up on exactly that one, 24 seconds in.
+- **Worded the way a customer would ask it**, not like an email subject. Any
+  context comes after the question, never before it.
+- The rest of the questions come one at a time, once they are talking; say so
+  in the brief.
+
+The agent adapts the opener to whatever they said first, so write the question,
+not a script.
+
 ## Writing the brief
 
 The brief is the agent's entire prompt. It opens with **who is being called and
@@ -184,10 +204,9 @@ dialer health
 
 dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file brief.md
     --to          E.164.
-    --opening     Spoken verbatim the moment they pick up. Start with exactly
-                  "Hello, I'm an AI assistant for Louie Tan. This call is recorded
-                  and a transcription will be sent to him." then one sentence of
-                  purpose.
+    --opening     The one question to lead with, right after the disclosure,
+                  which the agent adds itself. See "The sentence after the
+                  disclosure decides the call".
     --purpose     A few words, given if a call-screening service asks what the
                   call is about.
     --brief-file  The brief as plain prose, in any file (or --brief "…"
@@ -278,15 +297,15 @@ A call, start to finish (output trimmed):
 
 ```text
 $ dialer dispatch --to +16695550142 --purpose "move a dental cleaning" \
-    --opening "Hello, I'm an AI assistant for Louie Tan. This call is recorded and a transcription will be sent to him. I'm calling to move his Friday cleaning." \
+    --opening "Could Louie's Friday cleaning move to next week?" \
     --brief-file brief.md
 {"call_id": "call_8f2e", "call_status": "registered", "call_type": "phone_call"}
 
 $ dialer watch call_8f2e
 {"event": "transcript", "turns": "3 + 1 in progress",
- "new": ["agent: Hello, I'm an AI assistant for Louie Tan. ...",
+ "new": ["user: Bright Smiles Dental, how can I help?",
+         "agent: Hi, this is Louie Tan's AI assistant. This call is recorded. Could Louie's Friday cleaning move to next week?",
          "user: Sure, can you spell his last name?",
-         "agent: T-A-N.",
          "user: Okay, I've got  [...utterance may still be in progress]"],
  "hint": "continue with `--since 3` on watch, answer or steer"}
 
@@ -312,7 +331,7 @@ $ dialer steer call_8f2e --since 9 <<'EOF'
 Louie says Wednesday afternoon also works.
 EOF
 {"event": "call_ended", "call_ended": true, "disconnection_reason": "agent_hangup",
- "transcript": ["agent: Hello, I'm an AI assistant for Louie Tan. ...", "...",
+ "transcript": ["user: Bright Smiles Dental, how can I help?", "...",
                 "agent: Thanks so much, goodbye."]}
 ```
 

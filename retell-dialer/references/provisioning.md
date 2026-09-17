@@ -63,6 +63,13 @@ The prompt is deliberately almost empty — `{{brief}}` plus the invariants. Thr
 dynamic variables are supplied per call (`opening`, `brief`, `call_purpose`), so
 each call's instructions are written fresh rather than configured once.
 
+The agent lets the other side speak first (`start_speaker: user`, speaking
+itself after 3s of silence). On a fixed timer it talked over "Wooga Korean
+Barbecue" and the host hung up. The price is that the first reply is generated
+rather than pre-synthesised, 2–4s after their greeting. `reminder_max_count: 0`
+because Retell's default nudge after 10s of silence had the agent disclose into
+hold music, then skip the disclosure for the human who came back.
+
 Past 4,000 prompt tokens, Retell bills the whole call at tokens ÷ 4,000. The
 count is every turn's full context: general prompt, tool descriptions, handbook
 presets, transcript, tool results and any knowledge base retrievals, so a

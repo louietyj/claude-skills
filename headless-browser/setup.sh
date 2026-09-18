@@ -380,12 +380,16 @@ for a in "$@"; do
   [ "$prev" = --tab ] && tab=$a
   prev=$a
 done
-# Not /tmp: claude.ai won't show the user a file from there.
-D=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-shots}
+# claude.ai shows the user what is under /mnt/user-data/outputs, flattened: the
+# pinchtab- prefix keeps the shots together there. The counter lives outside it.
+D=$HOME/pinchtab-shots
+[ -d /mnt/user-data/outputs ] && D=/mnt/user-data/outputs/pinchtab-shots
+D=${PINCHTAB_SHOT_DIR:-$D}
 mkdir -p "$D"
-n=$(( $(cat "$D/.n" 2>/dev/null || echo 0) + 1 ))
-echo $n > "$D/.n"
-shot=$D/$(printf %04d $n)-$1.jpg
+N=/tmp/pinchtab-shot-count
+n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
+echo $n > "$N"
+shot=$D/pinchtab-$(printf %04d $n)-$1.jpg
 if "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1; then
   dims=$(node -e '
     const b = require("fs").readFileSync(process.argv[1]);

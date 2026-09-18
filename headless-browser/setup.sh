@@ -352,22 +352,27 @@ case "${PINCHTAB_SESSION:-}" in
     ;;
 esac
 
+# After anything that can change the page, save a screenshot and name it, so a
+# confusing snapshot is one image view away instead of a screenshot call first.
+# The command's output is held back until the path is printed: callers pipe
+# through `| head`, which would otherwise cut the path off.
+O=
+case "${1:-}" in
+  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload)
+    [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] && O=$(mktemp) ;;
+esac
+if [ -n "$O" ]; then exec 3>"$O"; else exec 3>&1; fi
 E=$(mktemp)
-"$REAL" "$@" 2>"$E"; rc=$?
+trap '[ -n "$O" ] && cat "$O" && rm -f "$O"; cat "$E" >&2; rm -f "$E"' EXIT
+
+"$REAL" "$@" >&3 2>"$E"; rc=$?
 # pinchtab exits 0 on a bad session, so the retry must never be gated on $rc
 if grep -q 'bad_session' "$E"; then
   rm -f "$F"; resolve
-  "$REAL" "$@" 2>"$E"; rc=$?
+  "$REAL" "$@" >&3 2>"$E"; rc=$?
 fi
-cat "$E" >&2; rm -f "$E"
 
-# After anything that can change the page, save a screenshot and name it, so a
-# confusing snapshot is one image view away instead of a screenshot call first.
-case "${1:-}" in
-  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload) ;;
-  *) exit $rc ;;
-esac
-[ $rc -eq 0 ] && [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] || exit $rc
+[ -n "$O" ] && [ $rc -eq 0 ] || exit $rc
 tab=
 prev=
 for a in "$@"; do

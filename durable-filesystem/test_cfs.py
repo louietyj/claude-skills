@@ -211,69 +211,94 @@ class TestReadPayload(unittest.TestCase):
             cfs.read_payload(("content",), "example")
 
 
+def pairs(blocks):
+    return [(b.old, b.new) for b in blocks]
+
+
+def block(old, new):
+    return f"<<<<<<< SEARCH\n{old}\n=======\n{new}\n>>>>>>> REPLACE\n"
+
+
 class TestSearchReplace(unittest.TestCase):
     def parse(self, text, tag=None):
         return cfs.parse_search_replace(text, tag)
 
+    def only_error(self, raw):
+        (parsed,) = self.parse(raw)
+        self.assertIsNotNone(parsed.error)
+        return parsed.error
+
     def test_single_block(self):
-        raw = "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n"
-        self.assertEqual(self.parse(raw), [("old", "new")])
+        self.assertEqual(pairs(self.parse(block("old", "new"))), [("old", "new")])
 
     def test_multiline_sides(self):
         raw = "<<<<<<< SEARCH\na\nb\n=======\nA\nB\n>>>>>>> REPLACE\n"
-        self.assertEqual(self.parse(raw), [("a\nb", "A\nB")])
+        self.assertEqual(pairs(self.parse(raw)), [("a\nb", "A\nB")])
 
-    def test_parser_reports_every_block_so_edit_can_refuse_a_batch(self):
-        # The parser sees them all; edit rejects more than one, because block
-        # syntax is the most error-prone part and batching compounds it.
-        raw = (
-            "<<<<<<< SEARCH\na\n=======\nA\n>>>>>>> REPLACE\n"
-            "<<<<<<< SEARCH\nb\n=======\nB\n>>>>>>> REPLACE\n"
-        )
-        self.assertEqual(self.parse(raw), [("a", "A"), ("b", "B")])
+    def test_several_blocks_parse_in_order(self):
+        raw = block("a", "A") + block("b", "B")
+        self.assertEqual(pairs(self.parse(raw)), [("a", "A"), ("b", "B")])
 
     def test_empty_replace_is_a_deletion(self):
         raw = "<<<<<<< SEARCH\ngone\n=======\n>>>>>>> REPLACE\n"
-        self.assertEqual(self.parse(raw), [("gone", "")])
+        self.assertEqual(pairs(self.parse(raw)), [("gone", "")])
 
     def test_content_with_shell_and_json_hostile_chars(self):
-        raw = '<<<<<<< SEARCH\nsay "hi" $HOME `x` \\ done\n=======\nnew\n>>>>>>> REPLACE\n'
-        self.assertEqual(self.parse(raw)[0][0], 'say "hi" $HOME `x` \\ done')
+        raw = block('say "hi" $HOME `x` \\ done', "new")
+        self.assertEqual(self.parse(raw)[0].old, 'say "hi" $HOME `x` \\ done')
 
     def test_setext_heading_underline_is_not_a_divider(self):
         # Markdown H1 underlines are '=' runs; only exactly seven counts.
         raw = "<<<<<<< SEARCH\nTitle\n=====\n=========\n=======\nnew\n>>>>>>> REPLACE\n"
-        old, new = self.parse(raw)[0]
-        self.assertEqual(old, "Title\n=====\n=========")
-        self.assertEqual(new, "new")
+        self.assertEqual(pairs(self.parse(raw)), [("Title\n=====\n=========", "new")])
 
     def test_repeated_divider_as_a_closer_is_rejected(self):
         # The exact mistake seen in the wild: closing the block by repeating
         # the separator instead of using the REPLACE marker.
         raw = "<<<<<<< SEARCH\nold\n=======\nnew\n=======\n>>>>>>> REPLACE\n"
-        with self.assertRaises(cfs.CfsError) as ctx:
-            self.parse(raw)
-        message = str(ctx.exception)
-        self.assertIn("second", message)
-        self.assertIn("do not repeat the divider", message)
+        error = self.only_error(raw)
+        self.assertIn("second", error)
+        self.assertIn("do not repeat the divider", error)
 
     def test_missing_divider_is_rejected(self):
-        raw = "<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n"
-        with self.assertRaises(cfs.CfsError) as ctx:
-            self.parse(raw)
-        self.assertIn("without a", str(ctx.exception))
+        self.assertIn("without a", self.only_error("<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n"))
 
     def test_unclosed_block_is_rejected(self):
-        raw = "<<<<<<< SEARCH\nold\n=======\nnew\n"
-        with self.assertRaises(cfs.CfsError) as ctx:
-            self.parse(raw)
-        self.assertIn("never closed", str(ctx.exception))
+        self.assertIn("never closed", self.only_error("<<<<<<< SEARCH\nold\n=======\nnew\n"))
 
     def test_nested_start_is_rejected(self):
         raw = "<<<<<<< SEARCH\na\n=======\nA\n<<<<<<< SEARCH\n"
-        with self.assertRaises(cfs.CfsError) as ctx:
-            self.parse(raw)
-        self.assertIn("never closed", str(ctx.exception))
+        first = self.parse(raw)[0]
+        self.assertIn("never closed", first.error)
+
+    def test_a_bad_block_does_not_hide_the_ones_after_it(self):
+        # Resynchronising on the next opening marker is what lets one report
+        # cover every block, so the retry fixes them all at once.
+        raw = (
+            block("a", "A")
+            + "<<<<<<< SEARCH\nb\n=======\nB\n=======\n"
+            + block("c", "C")
+        )
+        parsed = self.parse(raw)
+        self.assertEqual(len(parsed), 3)
+        self.assertIsNone(parsed[0].error)
+        self.assertIn("line 10", parsed[1].error)
+        self.assertEqual((parsed[2].old, parsed[2].new, parsed[2].error), ("c", "C", None))
+
+    def test_divider_closers_on_every_block_are_each_reported(self):
+        raw = (
+            "<<<<<<< SEARCH\na\n=======\nA\n=======\n"
+            "<<<<<<< SEARCH\nb\n=======\nB\n=======\n"
+        )
+        parsed = self.parse(raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertTrue(all("do not repeat the divider" in b.error for b in parsed))
+
+    def test_a_missing_divider_does_not_swallow_the_next_block(self):
+        raw = "<<<<<<< SEARCH\na\n" + block("b", "B")
+        parsed = self.parse(raw)
+        self.assertIn("opens another block", parsed[0].error)
+        self.assertEqual(pairs(parsed[1:]), [("b", "B")])
 
     def test_no_block_at_all_is_rejected(self):
         with self.assertRaises(cfs.CfsError) as ctx:
@@ -289,7 +314,7 @@ class TestSearchReplaceTag(unittest.TestCase):
             f"<<<<<<< SEARCH {self.TAG}\nold\n======= {self.TAG}\nnew\n"
             f">>>>>>> REPLACE {self.TAG}\n"
         )
-        self.assertEqual(cfs.parse_search_replace(raw, self.TAG), [("old", "new")])
+        self.assertEqual(pairs(cfs.parse_search_replace(raw, self.TAG)), [("old", "new")])
 
     def test_untagged_markers_inside_content_are_literal(self):
         # The whole point: a file containing real conflict markers can still be
@@ -299,7 +324,8 @@ class TestSearchReplaceTag(unittest.TestCase):
             "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> branch\n"
             f"======= {self.TAG}\nresolved\n>>>>>>> REPLACE {self.TAG}\n"
         )
-        old, new = cfs.parse_search_replace(raw, self.TAG)[0]
+        (parsed,) = cfs.parse_search_replace(raw, self.TAG)
+        old, new = parsed.old, parsed.new
         self.assertEqual(old, "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> branch")
         self.assertEqual(new, "resolved")
 
@@ -307,6 +333,75 @@ class TestSearchReplaceTag(unittest.TestCase):
         raw = "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n"
         with self.assertRaises(cfs.CfsError):
             cfs.parse_search_replace(raw, self.TAG)
+
+
+class TestApplyEdits(unittest.TestCase):
+    TEXT = "alpha\nbeta\ngamma\n"
+
+    def apply(self, edits, text=TEXT, **kwargs):
+        return cfs.apply_edits(text, [cfs.EditBlock(o, n) for o, n in edits], "/f", **kwargs)
+
+    def refusal(self, edits, **kwargs):
+        with self.assertRaises(cfs.CfsError) as ctx:
+            self.apply(edits, **kwargs)
+        return str(ctx.exception)
+
+    def test_every_block_applies(self):
+        self.assertEqual(
+            self.apply([("alpha", "ONE"), ("gamma", "THREE")]), "ONE\nbeta\nTHREE\n"
+        )
+
+    def test_a_later_block_matches_what_an_earlier_one_wrote(self):
+        self.assertEqual(self.apply([("beta", "BETA"), ("BETA", "B2")]), "alpha\nB2\ngamma\n")
+
+    def test_one_miss_refuses_the_whole_batch_and_reports_every_block(self):
+        message = self.refusal([("alpha", "ONE"), ("zeta", "Z"), ("gamma", "THREE")])
+        self.assertIn("1 of 3 blocks failed", message)
+        self.assertIn("block 1: OK, matched line 1", message)
+        self.assertIn("block 2: FAILED. No replacement performed", message)
+        self.assertIn("block 3: OK, matched line 3", message)
+        self.assertIn("resend all 3", message)
+
+    def test_text_removed_by_an_earlier_block_says_so(self):
+        message = self.refusal([("alpha\nbeta", "AB"), ("beta", "B")])
+        self.assertIn("an earlier block in this call changed or removed it", message)
+
+    def test_diagnostics_are_indented_under_their_block_without_trailing_spaces(self):
+        message = self.refusal([("alpha", "ONE"), ("beta ", "B")])
+        self.assertIn("block 2: FAILED.", message)
+        self.assertIn("\n      The text matches once trailing whitespace", message)
+        self.assertFalse(any(line != line.rstrip() for line in message.split("\n")))
+
+    def test_ambiguity_is_judged_against_the_text_at_that_point(self):
+        message = self.refusal([("alpha", "gamma"), ("gamma", "G")])
+        self.assertIn("appears 2 times", message)
+
+    def test_replace_all_applies_to_every_block(self):
+        text = "x\ny\nx\ny\n"
+        self.assertEqual(
+            self.apply([("x", "X"), ("y", "Y")], text=text, replace_all=True), "X\nY\nX\nY\n"
+        )
+
+    def test_a_single_edit_keeps_the_plain_error(self):
+        message = self.refusal([("zeta", "Z")])
+        self.assertTrue(message.startswith("No replacement performed"))
+        self.assertNotIn("block 1", message)
+
+    def test_identical_old_and_new_is_a_failed_block(self):
+        self.assertIn("identical", self.refusal([("alpha", "ONE"), ("beta", "beta")]))
+
+    def test_blocks_that_cancel_out_write_nothing(self):
+        self.assertIn("no change", self.refusal([("alpha", "A"), ("A", "alpha")]))
+
+    def test_syntax_errors_join_the_report_and_bring_the_example_once(self):
+        raw = block("alpha", "ONE") + "<<<<<<< SEARCH\nbeta\n=======\nB\n=======\n"
+        edits = cfs.parse_search_replace(raw)
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.apply_edits(self.TEXT, edits, "/f", syntax_help=cfs.SR_EXAMPLE)
+        message = str(ctx.exception)
+        self.assertIn("block 1: OK", message)
+        self.assertIn("block 2: FAILED. The block starting on line 6", message)
+        self.assertEqual(message.count(cfs.SR_EXAMPLE), 1)
 
 
 class TestMarkerDetection(unittest.TestCase):
@@ -644,6 +739,46 @@ class TestEditTolerance(unittest.TestCase):
         result = cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1", "--delim", "@@"]))
         self.assertEqual(result, "Edited /f.\nnew rev: r3")
         self.assertEqual(modes_tried, [{".tag": "update", "update": "r2"}])
+
+    def _fake_file(self, text, uploads):
+        def fake_download(payload):
+            return text.encode(), {"path_display": "/f", "rev": "r1"}
+
+        def fake_upload(payload, data):
+            uploads.append(data.decode())
+            return {"rev": "r2"}
+
+        self._patch(fake_download, fake_upload)
+
+    def test_several_blocks_land_in_one_upload(self):
+        uploads = []
+        self._fake_file("alpha\nbeta\ngamma\n", uploads)
+        self._stdin(block("alpha", "ONE") + block("gamma", "THREE"))
+        result = cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1"]))
+        self.assertEqual(result, "Edited /f (2 blocks).\nnew rev: r2")
+        self.assertEqual(uploads, ["ONE\nbeta\nTHREE\n"])
+
+    def test_a_failed_block_uploads_nothing(self):
+        uploads = []
+        self._fake_file("alpha\nbeta\n", uploads)
+        self._stdin(block("alpha", "ONE") + block("zeta", "Z"))
+        with self.assertRaises(cfs.CfsError):
+            cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1"]))
+        self.assertEqual(uploads, [])
+
+    def test_a_json_array_is_a_batch(self):
+        uploads = []
+        self._fake_file("alpha\nbeta\n", uploads)
+        self._stdin('[{"old_str": "alpha", "new_str": "A"}, {"old_str": "beta", "new_str": "B"}]')
+        cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1"]))
+        self.assertEqual(uploads, ["A\nB\n"])
+
+    def test_a_malformed_json_array_item_is_named(self):
+        self._fake_file("alpha\n", [])
+        self._stdin('[{"old_str": "alpha", "new_str": "A"}, {"old_str": "beta"}]')
+        with self.assertRaises(cfs.CfsError) as ctx:
+            cfs.cmd_edit(self._args(["edit", "/f", "--rev", "r1"]))
+        self.assertIn("Edit 2 of the JSON array", str(ctx.exception))
 
     def test_genuinely_changed_content_still_raises_before_touching_the_edit(self):
         def fake_download(payload):

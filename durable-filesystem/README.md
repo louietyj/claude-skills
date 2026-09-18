@@ -52,13 +52,13 @@ The surface is curated, and that is the enforcement mechanism. There is no raw A
 
 So: thin where there is no invariant (`copy`, `search`, `history`, `download`), deliberately thick where there is (`write`, `edit`, `delete`, `upload`). The thickness is the product. Don't "simplify" it away.
 
-`write` takes raw content on stdin via a quoted heredoc. `edit` takes a SEARCH/REPLACE block in git-conflict-marker shape, with an optional `--tag` suffix for files that contain such markers themselves. A single-marker `--delim` split and a JSON object are still accepted for programmatic callers.
+`write` takes raw content on stdin via a quoted heredoc. `edit` takes SEARCH/REPLACE blocks in git-conflict-marker shape, with an optional `--tag` suffix for files that contain such markers themselves. A call's blocks apply in order and all-or-nothing, and a refusal reports every block. `edit` once took a single block, so one typo couldn't lose a whole batch. Agents scripted rev-chaining loops around that limit instead, and a typo mid-chain then left the file half-edited. A single-marker `--delim` split and a JSON object (or array of them) are still accepted for programmatic callers.
 
 Raw is the default because the alternative nests two encodings that contradict each other. JSON escaping is not itself the asymmetry with native tools: Messages API tool inputs *are* JSON, emitted by the model as `input_json_delta` text. The asymmetry is the wrapper. Natively the JSON is the outermost thing emitted; here it sat inside a heredoc whose whole affordance is "type literal text, newlines included" — exactly what the inner JSON rejects. A quoted heredoc on its own transforms nothing, so raw stdin means one transparent layer rather than two contradictory ones.
 
 There is intentionally no way to read `old_str` from a *file*. File input would let the bytes be lifted mechanically (`sed`, `grep`) so that an edit never demonstrates knowledge of what it changes — the only reason matching on `old_str` exists. Raw stdin on `write` weakens this at the margin, since content can reach a file without passing through the model's context; accepted because `write` could always clobber a whole file anyway, and the rev requirement is unchanged.
 
-Both read stdin raw *by default*, and the symmetry is load-bearing: a caller who has just made several `edit` calls reaches for `write` with the same heredoc habit. The flags differ precisely so the defaults do not. `edit` finds JSON by sniffing a leading `{`, safe only because its raw form always opens with `<<<<<<< SEARCH`; `write`'s raw form is arbitrary file content, which legitimately starts with `{`, so the same sniff would corrupt real JSON files — hence an explicit `--json` there. A lone `{"content": ...}` object on `write`'s stdin is then the one confusable case, and is stored verbatim with a warning naming `--json`.
+Both read stdin raw *by default*, and the symmetry is load-bearing: a caller who has just made several `edit` calls reaches for `write` with the same heredoc habit. The flags differ precisely so the defaults do not. `edit` finds JSON by sniffing a leading `{` or `[`, safe only because its raw form always opens with `<<<<<<< SEARCH`; `write`'s raw form is arbitrary file content, which legitimately starts with `{`, so the same sniff would corrupt real JSON files — hence an explicit `--json` there. A lone `{"content": ...}` object on `write`'s stdin is then the one confusable case, and is stored verbatim with a warning naming `--json`.
 
 `grep` fetches files and matches locally rather than using Dropbox's search index, because that index is asynchronous and cannot find a file written moments ago — precisely when a mid-conversation search is most likely.
 
@@ -75,8 +75,8 @@ The app is scoped to a single Dropbox app folder; nothing outside it is reachabl
 ## Testing
 
 ```
-python test_cfs.py         # 70 offline tests, no network
-bash integration_test.sh   # 164 live tests against the app folder
+python test_cfs.py         # 153 offline tests, no network
+bash integration_test.sh   # 213 live tests against the app folder
 ```
 
 The offline suite covers path traversal, edit ambiguity, SEARCH/REPLACE parsing including tagged markers and marker detection, JSON and delimiter payloads, the write-mode rules, the retry policy, stale-rev tolerance for identical content, and root protection. The integration suite covers every command against the real API, including the guardrails only the server can enforce:
@@ -86,7 +86,7 @@ The offline suite covers path traversal, edit ambiguity, SEARCH/REPLACE parsing 
 - shell metacharacters survive verbatim, through raw stdin and through JSON
 - a multi-paragraph heredoc round-trips with no escaping
 - a file containing real git conflict markers is edited via `--tag`
-- a batch of SEARCH/REPLACE blocks is refused, and sequential edits chain via the returned rev
+- a batch of SEARCH/REPLACE blocks with a bad block writes nothing and reports every block; the corrected batch then lands with the same rev
 - binaries round-trip byte-identical
 - a file is deliberately corrupted, then recovered with `restore`
 

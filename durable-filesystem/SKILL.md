@@ -30,7 +30,7 @@ cfs list [path] [--depth N]              # names and sizes (no revs — read for
 cfs read <path> [--lines 1-40] [--full]  # content AND the rev you need to write
 cfs read <path> --rev R                  # an old version; can NOT license a write
 cfs write <path> (--new | --rev R)       # raw content on stdin
-cfs edit <path> --rev R [--tag T] [--all]   # ONE SEARCH/REPLACE block on stdin
+cfs edit <path> --rev R [--tag T] [--all]   # SEARCH/REPLACE blocks on stdin; all or none
 cfs diff <path> --since R [--until B]    # ALWAYS use this to refresh a rev you
                                          #   already hold. NEVER history+read for that.
 cfs history <path>                       # old revs for restore. NOT a currency check.
@@ -82,7 +82,9 @@ EOF
 
 Three markers, each used **once**: open, divide, close. Do not repeat `=======` to close the block — `>>>>>>> REPLACE` closes it. That is the most common mistake with this format.
 
-**One block per call**; more is refused. Block syntax is the easiest part to get wrong, so batching compounds it — one typo would discard every block. For several edits, run `edit` once each, passing the rev each call returns to the next.
+**Several edits to one file go in one call**: stack the blocks, one after another. They apply in order, each to the text the previous ones left, and the file is uploaded once. If any block fails, **nothing is written**. The report shows every block as OK or FAILED with its reason, and your rev is still current. Fix the failed blocks and resend them all with the same rev. Don't loop over `edit` in a script, passing revs along: a typo halfway through leaves the file half-edited.
+
+`--all` applies to every block in the call.
 
 When the file **contains conflict markers of its own**, `edit` refuses and tells you to add `--tag`, which suffixes all three markers so only your lines are structural:
 

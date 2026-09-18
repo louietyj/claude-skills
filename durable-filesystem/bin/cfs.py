@@ -29,6 +29,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import urllib.error
 import urllib.parse
@@ -500,7 +501,16 @@ def file_has_marker_lines(text: str) -> bool:
     return any(looks_like_marker(line, None) for line in text.split("\n"))
 
 
-def parse_search_replace(raw: str, tag: str | None = None) -> list[tuple[str, str]]:
+class EditBlock:
+    """One old -> new replacement, or the syntax error that stopped it parsing."""
+
+    def __init__(self, old: str = "", new: str = "", error: str | None = None):
+        self.old = old
+        self.new = new
+        self.error = error
+
+
+def parse_search_replace(raw: str, tag: str | None = None) -> list[EditBlock]:
     """Parse one or more SEARCH/REPLACE blocks from raw stdin.
 
     Three distinct markers rather than one repeated separator, because a single
@@ -508,62 +518,79 @@ def parse_search_replace(raw: str, tag: str | None = None) -> list[tuple[str, st
     token is either self-closing or a bracket, so agents reliably emit the
     separator a second time to "close" the block. Here the closing instinct is
     satisfied by a marker that is not the divider, so it cannot be misspent.
+
+    A malformed block records its error and parsing resumes at the next opening
+    marker, so one report covers every block.
     """
     lines = raw.split("\n")
     start_m, divider_m, end_m = markers_for(tag)
-    example = SR_EXAMPLE if not tag else tagged_example(tag)
-    blocks: list[tuple[str, str]] = []
+
+    def kind(j: int) -> str | None:
+        return looks_like_marker(lines[j], tag)
+
+    blocks: list[EditBlock] = []
     i = 0
     while i < len(lines):
-        if looks_like_marker(lines[i], tag) != "start":
+        if kind(i) != "start":
             i += 1
             continue
 
-        start_line = i + 1
+        block = EditBlock()
+        blocks.append(block)
+        where = f"The block starting on line {i + 1}"
         i += 1
         old: list[str] = []
-        while i < len(lines) and looks_like_marker(lines[i], tag) != "divider":
-            if looks_like_marker(lines[i], tag) == "end":
-                raise CfsError(
-                    f"The block starting on line {start_line} reached {end_m!r} "
-                    f"without a {divider_m!r} line separating the old text from "
-                    f"the new one.\n\n{example}"
-                )
+        while i < len(lines) and kind(i) is None:
             old.append(lines[i])
             i += 1
         if i >= len(lines):
-            raise CfsError(
-                f"The block starting on line {start_line} has no {divider_m!r} "
-                f"line, so there is nothing separating old from new.\n\n{example}"
+            block.error = (
+                f"{where} has no {divider_m!r} line, so there is nothing "
+                "separating old from new."
             )
+            break
+        if kind(i) == "end":
+            block.error = (
+                f"{where} reached {end_m!r} without a {divider_m!r} line "
+                "separating the old text from the new one."
+            )
+            i += 1
+            continue
+        if kind(i) == "start":
+            block.error = (
+                f"{where} has no {divider_m!r} line before line {i + 1} opens "
+                "another block."
+            )
+            continue
 
         i += 1
         new: list[str] = []
-        while i < len(lines) and looks_like_marker(lines[i], tag) != "end":
-            if looks_like_marker(lines[i], tag) == "divider":
-                raise CfsError(
-                    f"The block starting on line {start_line} has a second "
-                    f"{divider_m!r} line at line {i + 1}. Each block takes exactly "
-                    f"one divider, then closes with {end_m!r} -- do not repeat the "
-                    f"divider to close it.\n\n{example}"
-                )
-            if looks_like_marker(lines[i], tag) == "start":
-                raise CfsError(
-                    f"The block starting on line {start_line} was never closed: "
-                    f"line {i + 1} opens another one. Close each block with "
-                    f"{end_m!r}.\n\n{example}"
-                )
+        while i < len(lines) and kind(i) is None:
             new.append(lines[i])
             i += 1
         if i >= len(lines):
-            raise CfsError(
-                f"The block starting on line {start_line} was never closed. End it "
-                f"with a {end_m!r} line.\n\n{example}"
+            block.error = f"{where} was never closed. End it with a {end_m!r} line."
+            break
+        if kind(i) == "divider":
+            block.error = (
+                f"{where} has a second {divider_m!r} line at line {i + 1}. Each "
+                f"block takes exactly one divider, then closes with {end_m!r} -- "
+                "do not repeat the divider to close it."
             )
+            while i < len(lines) and kind(i) != "start":
+                i += 1
+            continue
+        if kind(i) == "start":
+            block.error = (
+                f"{where} was never closed: line {i + 1} opens another one. "
+                f"Close each block with {end_m!r}."
+            )
+            continue
         i += 1
-        blocks.append(("\n".join(old), "\n".join(new)))
+        block.old, block.new = "\n".join(old), "\n".join(new)
 
     if not blocks:
+        example = SR_EXAMPLE if not tag else tagged_example(tag)
         raise CfsError(
             f"No SEARCH/REPLACE block found on stdin. Expected a line {start_m!r}. "
             f"Wrap the old and new text like this:\n\n{example}"
@@ -893,9 +920,10 @@ def cmd_edit(args) -> str:
         )
 
     warn_if_piped_from_file("edit")
+    syntax_help = ""
     if args.delim:
         raw = None
-        edits = [read_delimited(args.delim)]
+        edits = [EditBlock(*read_delimited(args.delim))]
     else:
         raw = read_stdin_raw("a SEARCH/REPLACE block")
         edits = None  # parsed below, once the file is in hand for the guard
@@ -905,9 +933,8 @@ def cmd_edit(args) -> str:
 
     if edits is None:
         assert raw is not None
-        if raw.lstrip().startswith("{"):
-            payload = parse_payload(raw, ("old_str", "new_str"), EDIT_EXAMPLE)
-            edits = [(payload["old_str"], payload["new_str"])]
+        if raw.lstrip().startswith(("{", "[")):
+            edits = parse_json_edits(raw)
         else:
             # The guard: refuse rather than risk splitting a block on the file's
             # own content. Exact, not heuristic -- the bytes are right here.
@@ -919,18 +946,7 @@ def cmd_edit(args) -> str:
                     f"--tag to make the markers unambiguous:\n\n{tagged_example('@@X@@')}"
                 )
             edits = parse_search_replace(raw, args.tag)
-            if len(edits) > 1:
-                # One edit per call, deliberately. Block syntax is where agents
-                # most often slip, and batching makes the failure probability
-                # compound: five blocks at 90% each succeed 59% of the time, and
-                # a single typo discards all five. Sequential edits keep each
-                # failure local, and edit returns a fresh rev so chaining them
-                # costs no extra reads.
-                raise CfsError(
-                    f"Found {len(edits)} SEARCH/REPLACE blocks, but edit applies one "
-                    "at a time. Nothing was written. Run it once per edit, passing "
-                    "the rev each call returns to the next."
-                )
+            syntax_help = SR_EXAMPLE if not args.tag else tagged_example(args.tag)
 
     rev = meta["rev"]
     if rev != args.rev:
@@ -941,13 +957,8 @@ def cmd_edit(args) -> str:
             raise stale_rev_error(path, args.rev, "edit")
         rev = upgraded
 
-    old, new = edits[0]
-    if old == new:
-        raise CfsError("The old and new text are identical; nothing to do.")
-    updated = apply_replacement(text, old, new, path, replace_all=args.all)
-
-    if updated == text:
-        raise CfsError("Replacement produced no change; nothing written.")
+    updated = apply_edits(text, edits, path, args.all, syntax_help)
+    summary = f"Edited {path}." if len(edits) == 1 else f"Edited {path} ({len(edits)} blocks)."
 
     payload_bytes = updated.encode("utf-8")
     for _ in range(MAX_STALE_REV_ATTEMPTS):
@@ -962,7 +973,7 @@ def cmd_edit(args) -> str:
                 },
                 payload_bytes,
             )
-            return f"Edited {path}.\nnew rev: {result['rev']}"
+            return f"{summary}\nnew rev: {result['rev']}"
         except CfsError as exc:
             # The check above races, so this can conflict too; same tolerance.
             if "conflict" not in str(exc):
@@ -975,6 +986,99 @@ def cmd_edit(args) -> str:
         f"Gave up editing {path}: it keeps being rewritten to identical "
         "content faster than the edit can land. Try again."
     )
+
+
+def parse_json_edits(raw: str) -> list[EditBlock]:
+    """One {old_str, new_str} object, or an array of them."""
+    if raw.lstrip().startswith("{"):
+        payload = parse_payload(raw, ("old_str", "new_str"), EDIT_EXAMPLE)
+        return [EditBlock(payload["old_str"], payload["new_str"])]
+    try:
+        items = json.loads(raw)
+    except ValueError as exc:
+        raise CfsError(
+            f"Could not parse stdin as JSON: {exc}. Newlines inside strings must be "
+            f"escaped as \\n.\n\n{EDIT_EXAMPLE}"
+        ) from exc
+    if not isinstance(items, list) or not items:
+        raise CfsError(f"Expected a non-empty JSON array of edits.\n\n{EDIT_EXAMPLE}")
+    edits = []
+    for n, item in enumerate(items, 1):
+        if not (
+            isinstance(item, dict)
+            and isinstance(item.get("old_str"), str)
+            and isinstance(item.get("new_str"), str)
+        ):
+            raise CfsError(
+                f"Edit {n} of the JSON array must be an object with string "
+                f"'old_str' and 'new_str'.\n\n{EDIT_EXAMPLE}"
+            )
+        edits.append(EditBlock(item["old_str"], item["new_str"]))
+    return edits
+
+
+def apply_edits(
+    text: str,
+    edits: list[EditBlock],
+    path: str,
+    replace_all: bool = False,
+    syntax_help: str = "",
+) -> str:
+    """Apply every edit in order, each to the previous one's output, or none.
+
+    All-or-nothing because edits in one call often depend on each other (a
+    rename plus its references). Every edit is still attempted after a failure,
+    so the refusal names every problem and one corrected retry fixes them all.
+    """
+    current = text
+    outcomes: list[str] = []
+    failures: list[str] = []
+
+    def fail(error: str) -> None:
+        failures.append(error)
+        outcomes.append(f"FAILED. {error}")
+
+    for edit in edits:
+        if edit.error:
+            fail(edit.error)
+            continue
+        if edit.old == edit.new:
+            fail("The old and new text are identical; nothing to do.")
+            continue
+        count = current.count(edit.old)
+        try:
+            updated = apply_replacement(current, edit.old, edit.new, path, replace_all)
+        except CfsError as exc:
+            error = str(exc)
+            if count == 0 and edit.old in text:
+                error += (
+                    "\n\nIt does appear in the file as read, so an earlier block in "
+                    "this call changed or removed it. Blocks apply in order: match "
+                    "against the text as the earlier blocks leave it."
+                )
+            fail(error)
+            continue
+        at = current.count("\n", 0, current.index(edit.old)) + 1
+        outcomes.append(f"OK, matched line {at}" if count == 1 else f"OK, {count} matches")
+        current = updated
+
+    help_suffix = f"\n\n{syntax_help}" if syntax_help and any(e.error for e in edits) else ""
+    if len(edits) == 1 and failures:
+        raise CfsError(failures[0] + help_suffix)
+    if failures:
+        report = "\n".join(
+            f"  block {n}: " + textwrap.indent(outcome, "      ").lstrip()
+            for n, outcome in enumerate(outcomes, 1)
+        )
+        raise CfsError(
+            f"{len(failures)} of {len(edits)} blocks failed. Nothing was written, "
+            f"and your --rev is still current.\n\n{report}\n\nFix the failed blocks "
+            f"and resend all {len(edits)} in one call, with the same --rev."
+            + help_suffix
+        )
+    if current == text:
+        raise CfsError("Replacement produced no change; nothing written.")
+    return current
 
 
 def _diagnose_no_match(text: str, old: str) -> str:
@@ -1741,7 +1845,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "edit",
-        help="replace text via a SEARCH/REPLACE block on stdin",
+        help="replace text via SEARCH/REPLACE blocks on stdin, all or none",
     )
     p.add_argument("path")
     p.add_argument("--rev", help="current rev, from read")

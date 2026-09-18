@@ -141,11 +141,38 @@ echo "$OUT" | grep -qi "do not repeat the divider" \
 body $ROOT/sr.md | grep -q "^alpha$" && ok "the failed edit wrote nothing" \
   || bad "the failed edit wrote nothing"
 
-echo "=== one edit per call ==="
-# Batching blocks compounds failure: block syntax is the most error-prone part,
-# so N blocks succeed at p^N and one typo discards all N. Sequential edits keep
-# each failure local, and edit returns a fresh rev so chaining costs no reads.
+echo "=== several blocks per call, all or nothing ==="
+# One bad block refuses the whole batch, and the report names every block, so
+# the retry is one corrected call rather than a round trip per mistake.
 SREV=$(revof $ROOT/sr.md)
+OUT=$($CFS edit $ROOT/sr.md --rev "$SREV" 2>&1 <<'RAWEOF'
+<<<<<<< SEARCH
+alpha
+=======
+ONE
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+no such line
+=======
+X
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+gamma
+=======
+THREE
+=======
+RAWEOF
+)
+echo "$OUT" | grep -q "2 of 3 blocks failed" && ok "a batch with bad blocks is refused" \
+  || bad "a batch with bad blocks is refused"
+echo "$OUT" | grep -q "block 1: OK" && echo "$OUT" | grep -q "block 2: FAILED" \
+  && echo "$OUT" | grep -q "block 3: FAILED" \
+  && ok "the refusal reports every block" || bad "the refusal reports every block"
+body $ROOT/sr.md | grep -q "^alpha$" && ok "the refused batch wrote nothing" \
+  || bad "the refused batch wrote nothing"
+
+# The same rev still works after a refusal, and a later block can match what an
+# earlier one wrote.
 OUT=$($CFS edit $ROOT/sr.md --rev "$SREV" 2>&1 <<'RAWEOF'
 <<<<<<< SEARCH
 alpha
@@ -157,26 +184,21 @@ gamma
 =======
 THREE
 >>>>>>> REPLACE
+<<<<<<< SEARCH
+THREE
+=======
+THREE (after ONE)
+>>>>>>> REPLACE
 RAWEOF
 )
-echo "$OUT" | grep -qi "2 SEARCH/REPLACE blocks" && ok "a batch of blocks is refused" \
-  || bad "a batch of blocks is refused"
-echo "$OUT" | grep -qi "one at a time" && ok "the refusal says one edit per call" \
-  || bad "the refusal says one edit per call"
-body $ROOT/sr.md | grep -q "^alpha$" && ok "the refused batch wrote nothing" \
-  || bad "the refused batch wrote nothing"
-
-# Chaining sequentially is the supported path: each call returns the next rev.
-NEXT=$(printf '<<<<<<< SEARCH\nalpha\n=======\nONE\n>>>>>>> REPLACE\n' \
-  | $CFS edit $ROOT/sr.md --rev "$SREV" | sed -n 's/^new rev: \([a-z0-9]*\).*/\1/p')
-[ -n "$NEXT" ] && ok "edit returns the rev for the next edit" \
-  || bad "edit returns the rev for the next edit"
-printf '<<<<<<< SEARCH\ngamma\n=======\nTHREE\n>>>>>>> REPLACE\n' \
-  | $CFS edit $ROOT/sr.md --rev "$NEXT" >/dev/null 2>&1 \
-  && ok "the returned rev chains straight into the next edit" \
-  || bad "the returned rev chains straight into the next edit"
-body $ROOT/sr.md | grep -q "ONE" && body $ROOT/sr.md | grep -q "THREE" \
-  && ok "both sequential edits landed" || bad "both sequential edits landed"
+echo "$OUT" | grep -q "(3 blocks)" && ok "a corrected batch applies with the same rev" \
+  || bad "a corrected batch applies with the same rev ($OUT)"
+body $ROOT/sr.md | grep -q "^ONE$" && body $ROOT/sr.md | grep -q "^THREE (after ONE)$" \
+  && ok "every block landed, in order" || bad "every block landed, in order"
+NEXT=$(echo "$OUT" | sed -n 's/^new rev: \([a-z0-9]*\).*/\1/p')
+[ -n "$NEXT" ] && [ "$NEXT" = "$(revof $ROOT/sr.md)" ] \
+  && ok "the batch returns the file's current rev" \
+  || bad "the batch returns the file's current rev"
 
 echo "=== files containing real conflict markers ==="
 $CFS write $ROOT/conflict.md --new --stdin <<'RAWEOF'

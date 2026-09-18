@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>Send text to Claude</title>
+<style>
+  :root {
+    --bg: #faf9f7; --fg: #1f1e1d; --muted: #6b6a68; --card: #ffffff;
+    --border: #dddbd6; --accent: #c96442; --accent-fg: #ffffff;
+    --ok: #2e7d4f; --err: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1f1e1d; --fg: #eeece8; --muted: #a3a19c; --card: #2a2927;
+      --border: #3d3c39; --accent: #d97757; --accent-fg: #1f1e1d;
+      --ok: #7cc79a; --err: #f2b8b5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 24px; }
+  label { display: block; font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }
+  .field { margin: 0 0 20px; }
+  .row { display: flex; gap: 8px; }
+  input, textarea {
+    width: 100%; padding: 12px; font-size: 16px; color: var(--fg);
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  }
+  textarea { min-height: 40vh; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    font: inherit; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--card); color: var(--fg); padding: 0 14px; cursor: pointer;
+  }
+  button.primary {
+    width: 100%; padding: 14px; background: var(--accent); color: var(--accent-fg);
+    border: none; font-weight: 600;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #status { margin-top: 16px; min-height: 1.5em; overflow-wrap: anywhere; }
+  #status.err { color: var(--err); }
+  .done { text-align: center; padding-top: 20vh; }
+  .done h1 { color: var(--ok); }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<script type="application/json" id="config">__CONFIG__</script>
+
+<!-- Kept free of DOM access: the CLI's self-test evaluates this exact block in
+     Node, so what the tests exercise is the code the page runs. -->
+<script id="seal">
+async function seal(subtle, serverKeyB64, id, fields) {
+  // Chunked: btoa over one spread argument list overflows the stack on large payloads.
+  const b64u = (buf) => {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  const unb64u = (s) => Uint8Array.from(
+    atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  const enc = new TextEncoder();
+  const ecdh = { name: "ECDH", namedCurve: "P-256" };
+
+  const serverKey = await subtle.importKey("raw", unb64u(serverKeyB64), ecdh, false, []);
+  const eph = await subtle.generateKey(ecdh, true, ["deriveBits"]);
+  const shared = await subtle.deriveBits({ name: "ECDH", public: serverKey }, eph.privateKey, 256);
+  const hkdf = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
+  const key = await subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: enc.encode(id), info: enc.encode("request-text v1") },
+    hkdf, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: enc.encode(id) }, key,
+    enc.encode(JSON.stringify(fields)));
+  return {
+    v: 1,
+    epk: b64u(await subtle.exportKey("raw", eph.publicKey)),
+    iv: b64u(iv),
+    ct: b64u(ct),
+  };
+}
+</script>
+
+<script>
+(() => {
+  const cfg = JSON.parse(document.getElementById("config").textContent);
+  const app = document.getElementById("app");
+  const el = (tag, props = {}, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props);
+    n.append(...kids);
+    return n;
+  };
+
+  const form = el("form", { autocomplete: "off" });
+  form.append(
+    el("h1", { textContent: cfg.title }),
+    el("p", { className: "sub", textContent:
+      "Encrypted in this page before it is sent. Only the Claude sandbox that " +
+      "made this link can read it, and this link works once." }));
+
+  const inputs = {};
+  cfg.fields.forEach((f, i) => {
+    const id = "f" + i;
+    const common = {
+      id, name: f.name, autocapitalize: "off", spellcheck: false,
+      autocomplete: f.kind === "secret" ? "new-password" : "off",
+    };
+    const box = el("div", { className: "field" }, el("label", { htmlFor: id, textContent: f.label }));
+    if (f.kind === "multiline") {
+      const t = el("textarea", common);
+      box.append(t);
+      inputs[f.name] = t;
+    } else {
+      const inp = el("input", { ...common, type: f.kind === "secret" ? "password" : "text" });
+      inputs[f.name] = inp;
+      if (f.kind === "secret") {
+        const toggle = el("button", { type: "button", textContent: "Show" });
+        toggle.onclick = () => {
+          const hidden = inp.type === "password";
+          inp.type = hidden ? "text" : "password";
+          toggle.textContent = hidden ? "Hide" : "Show";
+        };
+        box.append(el("div", { className: "row" }, inp, toggle));
+      } else {
+        box.append(inp);
+      }
+    }
+    form.append(box);
+  });
+
+  const submit = el("button", { type: "submit", className: "primary", textContent: "Send to Claude" });
+  const status = el("div", { id: "status", role: "status" });
+  form.append(submit, status);
+  app.append(form);
+  inputs[cfg.fields[0].name].focus();
+
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    submit.disabled = true;
+    status.className = "";
+    status.textContent = "Encrypting and sending…";
+    try {
+      const values = {};
+      for (const f of cfg.fields) values[f.name] = inputs[f.name].value;
+      const body = await seal(crypto.subtle, cfg.key, cfg.id, values);
+      const res = await fetch(location.pathname, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || ("HTTP " + res.status));
+      app.replaceChildren(el("div", { className: "done" },
+        el("h1", { textContent: "Sent" }),
+        el("p", { className: "sub", textContent: "Claude has it. You can close this tab and go back to the chat." })));
+    } catch (err) {
+      status.className = "err";
+      status.textContent = "Not sent: " + (err && err.message ? err.message : err);
+      submit.disabled = false;
+    }
+  };
+})();
+</script>
+</body>
+</html>

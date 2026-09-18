@@ -6,6 +6,7 @@ Skills for Claude, one subdirectory each.
 - [`durable-filesystem/`](durable-filesystem/) — persistent filesystem for Claude on claude.ai, backed by a scoped Dropbox app folder.
 - [`headless-browser/`](headless-browser/) — fetches a page when `web_fetch` didn't, via a headless browser (pinchtab).
 - [`local-mcps/`](local-mcps/) — runs MCP servers claude.ai's connectors can't reach: `npx`/`uvx` stdio servers, and HTTP servers whose auth header name isn't allowlisted.
+- [`request-text/`](request-text/) — asks the user for text through a one-shot link (a form, fine on a phone). The submission lands in the sandbox as JSON, end-to-end encrypted, so secrets stay out of the transcript and long pastes are never re-emitted.
 - [`retell-dialer/`](retell-dialer/) — places a real phone call and supervises it live: a voice agent runs the conversation and consults Claude mid-call, which answers within seconds and can steer unprompted.
 
 Each subdirectory is self-contained: its own `SKILL.md`, setup script, and README/docs where applicable. `session-init/` is the exception — it orchestrates the other two and expects them installed alongside it, reporting them as missing rather than failing if they aren't.

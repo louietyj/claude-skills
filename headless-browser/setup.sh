@@ -380,7 +380,8 @@ for a in "$@"; do
   [ "$prev" = --tab ] && tab=$a
   prev=$a
 done
-D=/tmp/pinchtab-shots
+# Not /tmp: claude.ai won't show the user a file from there.
+D=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-shots}
 mkdir -p "$D"
 n=$(( $(cat "$D/.n" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$D/.n"

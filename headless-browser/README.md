@@ -33,9 +33,15 @@ The install runs `npm ci` against the lockfile in `cloak/`, not `npm install` of
 
 Re-pin with `bash cloak/refresh.sh` (a few seconds; resolves without installing or downloading a browser). Monthly is plenty — a stale pin installs an older cloakbrowser and an older patched Chromium, which still works, and setup falls back to an unpinned install if the pin ever stops resolving. Drift costs time, never the feature.
 
-Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progress in the transcript; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the presented fingerprint. The seed defaults to a random one per sandbox, kept across re-runs in it: the old fixed `42069` — the example value in pinchtab's docs — made every sandbox the same device on a different IP.
+Both downloads are timed (`SETUP_TIMEOUT`, default 300s) and leave npm's progress in the transcript; a silent multi-minute step is indistinguishable from a wedged one, and falling back beats waiting forever. `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE`, `CLOAK_SEED` and `CLOAK_WINDOW` override the presented fingerprint. The seed defaults to a random one per sandbox, kept across re-runs in it: the old fixed `42069` — the example value in pinchtab's docs — made every sandbox the same device on a different IP.
 
 `browsers.default` is flipped to `cloak` only after the binary is confirmed on disk, so a failed install falls back to plain Chrome — reported in the summary — rather than leaving the config pointing at a runtime that isn't there. `--no-cloak` resets it for the same reason: a sandbox where cloak already succeeded must not silently keep using it.
+
+## Window size and screenshots
+
+Cloak draws a random window size per launch by default, up to 1920x1080. `setup.sh` pins it to 1440x900 instead (`browser.cloak.windowSize`, a fork-only key; `CLOAK_WINDOW` overrides), because the random pick broke coordinate clicks. claude.ai shrinks an image past ~1.15 megapixels before the model sees it, and the model then reads coordinates off the shrunken copy. In blind click trials on a 1920x1080 viewport, 7 of 13 clicks fell short, most at ~0.75x the target's true position on one or both axes: the shrink ratio for a 1.15MP cap. At 1366x768 all 7 trials were within 1.4px. 1440x900 gives a 1440x779 viewport (1.12MP) and is a common laptop size. Pinchtab itself is exact at every size: the screenshot matched the page to 0.5px.
+
+The shim screenshots after every page-changing command (`nav`, `click`, `fill`, ...) to `/tmp/pinchtab-shots/NNNN-<cmd>.jpg` and prints the path with its dimensions, saving the agent a separate screenshot call. It adds ~150ms per command; a bare pinchtab call is ~70ms. Changes a click makes synchronously, or within a couple of animation frames, are in the shot; content that waits on the network may not be yet. `PINCHTAB_AUTOSHOT=0` turns it off.
 
 ## Captcha solving
 

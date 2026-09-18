@@ -214,6 +214,9 @@ if [ $CLOAK -eq 1 ]; then
     "$REAL" config set browser.cloak.platform "${CLOAK_PLATFORM:-windows}" >/dev/null
     "$REAL" config set browser.cloak.timezone "${CLOAK_TIMEZONE:-America/New_York}" >/dev/null
     "$REAL" config set browser.cloak.locale "${CLOAK_LOCALE:-en-US}" >/dev/null
+    # Fixed, not random: past ~1.15MP claude.ai shrinks screenshots and clicks
+    # read off them land short (see README). Older builds lack the key.
+    "$REAL" config set browser.cloak.windowSize "${CLOAK_WINDOW:-1440x900}" >/dev/null 2>&1 || true
     # Flipped LAST, and only once the binary is confirmed on disk: pointing
     # browsers.default at a runtime that isn't there breaks every later nav.
     "$REAL" config set browsers.default cloak >/dev/null
@@ -357,6 +360,37 @@ if grep -q 'bad_session' "$E"; then
   "$REAL" "$@" 2>"$E"; rc=$?
 fi
 cat "$E" >&2; rm -f "$E"
+
+# After anything that can change the page, save a screenshot and name it, so a
+# confusing snapshot is one image view away instead of a screenshot call first.
+case "${1:-}" in
+  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload) ;;
+  *) exit $rc ;;
+esac
+[ $rc -eq 0 ] && [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] || exit $rc
+tab=
+prev=
+for a in "$@"; do
+  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; esac
+  [ "$prev" = --tab ] && tab=$a
+  prev=$a
+done
+D=/tmp/pinchtab-shots
+mkdir -p "$D"
+n=$(( $(cat "$D/.n" 2>/dev/null || echo 0) + 1 ))
+echo $n > "$D/.n"
+shot=$D/$(printf %04d $n)-$1.jpg
+if "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1; then
+  dims=$(node -e '
+    const b = require("fs").readFileSync(process.argv[1]);
+    for (let i = 2; i + 9 < b.length; i += 2 + b.readUInt16BE(i + 2))
+      if (b[i + 1] >= 0xc0 && b[i + 1] <= 0xc3) {
+        console.log(b.readUInt16BE(i + 7) + "x" + b.readUInt16BE(i + 5));
+        break;
+      }
+  ' "$shot" 2>/dev/null)
+  echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)"
+fi
 exit $rc
 SHIM_EOF
 chmod +x "$SHIM"

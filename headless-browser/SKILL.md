@@ -37,6 +37,12 @@ pinchtab nav <url> --block-images
 pinchtab text
 ```
 
+Every command that can change the page (`nav`, `click`, `fill`, `press`,
+`scroll`, ...) also saves a screenshot and prints its path. When the text or
+snapshot doesn't add up -- a canvas, a map, refs pointing at the wrong thing --
+view that image rather than untangling the snapshot, and click what you see
+with `click --x --y`: image pixels are click coordinates, no scaling.
+
 The session outlives the bash call, so multi-step flows work across calls --
 nav in one, click in the next, read state in a third. The tab, its DOM state
 and typed form values all persist; you never replay earlier steps. If the
@@ -59,6 +65,10 @@ site is unreadable.
 
 `CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override
 the fingerprint it presents. `--no-cloak` forces plain Chrome.
+
+The window is a fixed 1440x900 (a 1440x779 viewport). Do not enlarge it with
+`pinchtab set viewport`: past ~1.15 megapixels screenshots are shrunk before
+you see them, and coordinates read off them land short of the target.
 
 ## Captchas
 

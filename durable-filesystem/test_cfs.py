@@ -3,6 +3,7 @@
 
 import contextlib
 import io
+import itertools
 import os
 import shutil
 import sys
@@ -987,43 +988,115 @@ class TestGrepArgvSplit(unittest.TestCase):
         for argv in (["-rniI", "a"], ["--color=auto", "a"], ["--null-data", "a"]):
             self.assertEqual(self.split(argv).unknown, [], argv)
 
+    def test_directories_recurse_is_recursion(self):
+        for argv in (["-d", "recurse", "a"], ["-drecurse", "a"], ["--directories=recurse", "a"]):
+            self.assertTrue(self.split(argv).recursive, argv)
+        self.assertFalse(self.split(["-d", "skip", "a"]).recursive)
 
-class TestStoreScope(unittest.TestCase):
-    def test_no_paths_means_the_whole_store(self):
-        self.assertEqual(cfs.store_scope([]), "/")
+    def test_quiet(self):
+        for argv in (["-q", "a"], ["-rq", "a"], ["--silent", "a"], ["--quiet", "a"]):
+            self.assertTrue(self.split(argv).quiet, argv)
 
-    def test_common_ancestor_of_several_paths(self):
-        self.assertEqual(cfs.store_scope(["/memory/a.md", "/memory/b.md"]), "/memory")
+    def test_stdin_dash_is_an_operand(self):
+        # Also as the pattern: `grep - file` searches file for "-".
+        self.assertEqual(self.split(["-", "/m"]).path_indices(), [1])
+        self.assertEqual(self.split(["a", "-"]).path_indices(), [1])
 
-    def test_divergent_paths_fall_back_to_the_root(self):
-        self.assertEqual(cfs.store_scope(["/memory/a.md", "/notes/b.md"]), "/")
+    def test_only_glob_values_are_lowercased(self):
+        parsed = self.split(
+            ["--include=*.MD", "--exclude-dir", "Old", "-e", "PAT", "--label=X", "/M"]
+        )
+        parsed.lowercase_globs()
+        self.assertEqual(
+            parsed.argv, ["--include=*.md", "--exclude-dir", "old", "-e", "PAT", "--label=X", "/M"]
+        )
 
-    def test_single_path_is_its_own_scope(self):
-        # May name a file; list_tree retries at the parent if Dropbox says so.
-        self.assertEqual(cfs.store_scope(["/memory/a.md"]), "/memory/a.md")
+
+NOT_FOUND = 'Path does not exist.\nDropbox said: {".tag": "path", "path": {".tag": "not_found"}}'
 
 
-class TestGrepAgainstAMirror(unittest.TestCase):
-    """End to end against real GNU grep, with the mirror hand-built so no
-    Dropbox call is needed."""
+class FakeStore:
+    """Just enough Dropbox for the mirror -- get_metadata, recursive
+    list_folder, download -- over an in-memory tree. Every call is recorded, so
+    a test can assert on what was fetched as well as on what grep found."""
+
+    def __init__(self):
+        self.files = {}  # path_lower -> (bytes, rev)
+        self.calls = []  # (endpoint, path_lower)
+        self.broken = set()  # paths whose download fails
+        self._revs = itertools.count(1)
+
+    def put(self, path, content):
+        data = content.encode() if isinstance(content, str) else content
+        self.files[path.lower()] = (data, f"r{next(self._revs)}")
+
+    def delete(self, path):
+        del self.files[path.lower()]
+
+    def _dirs(self):
+        dirs = set()
+        for path in self.files:
+            parts = path.split("/")[1:-1]
+            for n in range(1, len(parts) + 1):
+                dirs.add("/" + "/".join(parts[:n]))
+        return dirs
+
+    def rpc(self, endpoint, payload):
+        path = payload["path"].lower()
+        self.calls.append((endpoint, path))
+        if endpoint == "/2/files/get_metadata":
+            if path in self.files:
+                return {".tag": "file", "path_lower": path, "rev": self.files[path][1]}
+            if path in self._dirs():
+                return {".tag": "folder", "path_lower": path}
+            raise cfs.CfsError(NOT_FOUND)
+        if endpoint == "/2/files/list_folder":
+            prefix = path + "/"
+            entries = [{".tag": "folder", "path_lower": d} for d in self._dirs() if d.startswith(prefix)]
+            entries += [
+                {".tag": "file", "path_lower": p, "rev": rev}
+                for p, (_, rev) in self.files.items() if p.startswith(prefix)
+            ]
+            return {"entries": entries, "has_more": False}
+        raise AssertionError(f"unexpected endpoint {endpoint}")
+
+    def download(self, payload):
+        path = payload["path"]
+        self.calls.append(("download", path))
+        if path in self.broken:
+            raise urllib.error.URLError("connection reset")
+        if path not in self.files:
+            raise cfs.CfsError(NOT_FOUND)
+        data, rev = self.files[path]
+        return data, {"rev": rev}
+
+    def downloads(self):
+        return sorted(p for e, p in self.calls if e == "download")
+
+    def listings(self):
+        return [p for e, p in self.calls if e == "/2/files/list_folder"]
+
+
+class TestGrep(unittest.TestCase):
+    """End to end against real GNU grep and a fake Dropbox: argv in, the
+    mirror synced for real, grep's output back."""
 
     def setUp(self):
         if not shutil.which("grep"):
             self.skipTest("GNU grep not installed")
-        self.root = tempfile.mkdtemp(prefix="cfs-mirror-test")
-        os.makedirs(os.path.join(self.root, "memory"))
-        self._write("memory/a.md", "alpha BETA\ngamma\n")
-        self._write("memory/b.md", "delta\nalpha again\n")
-        self._write("memory/notes.txt", "alpha in a txt file\n")
+        self.tmp = tempfile.mkdtemp(prefix="cfs-grep-test")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.root = os.path.join(self.tmp, "cfs-mirror")
+        self.store = FakeStore()
+        self.store.put("/memory/a.md", "alpha BETA\ngamma\n")
+        self.store.put("/memory/b.md", "delta\nalpha again\n")
+        self.store.put("/memory/notes.txt", "alpha in a txt file\n")
+        self.store.put("/records/big.md", "alpha record\n")
+        self.store.put("/records/scan.pdf", b"%PDF alpha \x00\x01")
         self._patch("mirror_root", lambda: self.root)
-        self._patch("mirror_sync", lambda scope: None)
-
-    def tearDown(self):
-        shutil.rmtree(self.root, ignore_errors=True)
-
-    def _write(self, rel, text):
-        with open(os.path.join(self.root, rel), "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
+        self._patch("rpc", self.store.rpc)
+        self._patch("content_download", self.store.download)
+        self._patch("access_token", lambda: "token")
 
     def _patch(self, name, replacement):
         original = getattr(cfs, name)
@@ -1032,16 +1105,18 @@ class TestGrepAgainstAMirror(unittest.TestCase):
 
     def run_grep(self, argv):
         """cmd_grep writes bytes to the underlying buffers, as grep does."""
+        self.store.calls.clear()
         out, err = _ByteStream(), _ByteStream()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cfs.cmd_grep(argv)
         return code, out.text(), err.text()
 
+    # grep's own behaviour, carried through
+
     def test_single_file_prints_content_without_a_path(self):
         # Real grep omits the filename here, so output rewriting must not
         # blindly prefix every line.
-        code, out, _ = self.run_grep(["alpha", "/memory/a.md"])
-        self.assertEqual((code, out), (0, "alpha BETA\n"))
+        self.assertEqual(self.run_grep(["alpha", "/memory/a.md"])[:2], (0, "alpha BETA\n"))
 
     def test_recursive_search_reports_store_paths(self):
         code, out, _ = self.run_grep(["-rn", "alpha", "/memory"])
@@ -1049,13 +1124,8 @@ class TestGrepAgainstAMirror(unittest.TestCase):
         self.assertIn("/memory/a.md:1:alpha BETA", out)
         self.assertNotIn(self.root, out)
 
-    def test_no_path_searches_the_whole_store_recursively(self):
-        code, out, _ = self.run_grep(["-n", "delta"])
-        self.assertEqual(code, 0)
-        self.assertIn("/memory/b.md:1:delta", out)
-
     def test_no_match_exits_one_and_prints_nothing(self):
-        self.assertEqual(self.run_grep(["nothingmatchesthis"]), (1, "", ""))
+        self.assertEqual(self.run_grep(["nothingmatchesthis", "/memory/a.md"]), (1, "", ""))
 
     def test_gnu_flags_reach_the_real_binary(self):
         self.assertIn("BETA", self.run_grep(["-i", "beta", "/memory/a.md"])[1])
@@ -1075,13 +1145,14 @@ class TestGrepAgainstAMirror(unittest.TestCase):
     def test_directory_without_dash_r_errors_as_grep_would(self):
         code, _, err = self.run_grep(["alpha", "/memory"])
         self.assertEqual(code, 2)
-        self.assertIn("Is a directory", err)
+        self.assertIn("/memory: Is a directory", err)
         self.assertNotIn(self.root, err)
 
     def test_missing_path_is_named(self):
         with self.assertRaises(cfs.CfsError) as ctx:
-            self.run_grep(["alpha", "/memory/nope.md"])
+            self.run_grep(["-r", "alpha", "/memory/nope.md", "/memory"])
         self.assertIn("/memory/nope.md", str(ctx.exception))
+        self.assertEqual(self.store.listings(), [])  # failed before fetching anything
 
     def test_misclassified_unknown_option_names_itself_as_the_suspect(self):
         # -Q is not a grep option; if it took a value, "alpha" would be it.
@@ -1093,6 +1164,114 @@ class TestGrepAgainstAMirror(unittest.TestCase):
         with self.assertRaises(cfs.CfsError) as ctx:
             self.run_grep([])
         self.assertIn("needs a pattern", str(ctx.exception))
+
+    # fetching only what grep will read
+
+    def test_named_files_fetch_only_themselves(self):
+        # The original bug: operands in two areas widened the scope to the
+        # whole store, and a named file pulled its whole directory.
+        code, out, _ = self.run_grep(["-iE", "beta|record", "/records/big.md", "/memory/a.md"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.store.downloads(), ["/memory/a.md", "/records/big.md"])
+        self.assertEqual(self.store.listings(), [])
+
+    def test_directory_without_dash_r_fetches_nothing(self):
+        self.run_grep(["alpha", "/memory"])
+        self.assertEqual((self.store.downloads(), self.store.listings()), ([], []))
+
+    def test_recursion_fetches_only_its_subtree(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.assertEqual(self.store.listings(), ["/memory"])
+        self.assertEqual(
+            self.store.downloads(), ["/memory/a.md", "/memory/b.md", "/memory/notes.txt"]
+        )
+
+    def test_directories_recurse_is_recursion(self):
+        code, out, _ = self.run_grep(["-d", "recurse", "-l", "gamma", "/memory"])
+        self.assertEqual((code, out), (0, "/memory/a.md\n"))
+
+    def test_no_path_searches_the_whole_store(self):
+        code, out, _ = self.run_grep(["-n", "record"])
+        self.assertEqual((code, out), (0, "/records/big.md:1:alpha record\n"))
+
+    def test_root_operand(self):
+        self.assertEqual(self.run_grep(["-rl", "record", "/"])[1], "/records/big.md\n")
+
+    # the rev cache
+
+    def test_a_second_run_downloads_nothing(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.assertEqual(self.store.downloads(), [])
+
+    def test_a_changed_file_is_refetched_alone(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.store.put("/memory/b.md", "epsilon\n")
+        code, out, _ = self.run_grep(["-r", "epsilon", "/memory"])
+        self.assertEqual((code, out), (0, "/memory/b.md:epsilon\n"))
+        self.assertEqual(self.store.downloads(), ["/memory/b.md"])
+
+    def test_a_corrupt_manifest_costs_only_a_refetch(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        with open(cfs.manifest_file(), "w") as fh:
+            fh.write("{not json")
+        self.store.put("/memory/a.md", "changed\n")
+        self.assertEqual(self.run_grep(["-r", "changed", "/memory"])[1], "/memory/a.md:changed\n")
+
+    # nothing stale is ever searched
+
+    def test_a_deleted_file_leaves_recursive_results(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.store.delete("/memory/b.md")
+        _, out, _ = self.run_grep(["-rl", "alpha", "/memory"])
+        self.assertNotIn("b.md", out)
+
+    def test_a_file_the_manifest_never_recorded_is_pruned(self):
+        # What a run killed between download and manifest save leaves behind.
+        os.makedirs(os.path.join(self.root, "memory"))
+        with open(os.path.join(self.root, "memory", "ghost.md"), "w") as fh:
+            fh.write("boo\n")
+        self.assertEqual(self.run_grep(["-r", "boo", "/memory"])[0], 1)
+
+    def test_a_failed_download_is_reported_and_its_stale_copy_not_searched(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.store.put("/memory/b.md", "rewritten\n")
+        self.store.broken.add("/memory/b.md")
+        code, out, err = self.run_grep(["-r", "alpha", "/memory"])
+        self.assertEqual(code, 2)  # grep's code for an unreadable file, match or not
+        self.assertNotIn("b.md", out)
+        self.assertIn("/memory/b.md: not searched", err)
+
+    def test_quiet_match_survives_a_failed_download(self):
+        self.store.broken.add("/memory/b.md")
+        self.assertEqual(self.run_grep(["-rq", "alpha", "/memory"])[0], 0)
+
+    def test_a_file_replaced_by_a_directory_and_back(self):
+        self.store.put("/x", "flat\n")
+        self.assertEqual(self.run_grep(["flat", "/x"])[0], 0)
+        self.store.delete("/x")
+        self.store.put("/x/y.md", "nested\n")
+        self.assertEqual(self.run_grep(["nested", "/x/y.md"])[0], 0)
+        self.store.delete("/x/y.md")
+        self.store.put("/x", "flat again\n")
+        self.assertEqual(self.run_grep(["again", "/x"])[0], 0)
+
+    # case and binaries
+
+    def test_operand_case_does_not_matter(self):
+        self.assertEqual(self.run_grep(["alpha", "/Memory/A.md"])[:2], (0, "alpha BETA\n"))
+        self.assertEqual(self.run_grep(["-rl", "gamma", "/MEMORY"])[1], "/memory/a.md\n")
+
+    def test_name_globs_match_case_insensitively(self):
+        _, out, _ = self.run_grep(["-rl", "--include=*.MD", "gamma", "/memory"])
+        self.assertEqual(out, "/memory/a.md\n")
+
+    def test_binaries_are_skipped_when_recursing_but_fetched_when_named(self):
+        self.run_grep(["-r", "alpha", "/records"])
+        self.assertNotIn("/records/scan.pdf", self.store.downloads())
+        code, out, _ = self.run_grep(["-c", "alpha", "/records/scan.pdf"])
+        self.assertEqual((code, out), (0, "1\n"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

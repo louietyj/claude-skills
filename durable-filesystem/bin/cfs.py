@@ -25,6 +25,7 @@ import json
 import os
 import random
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -34,6 +35,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
 
 API = "https://api.dropboxapi.com"
 CONTENT = "https://content.dropboxapi.com"
@@ -1258,6 +1265,11 @@ GREP_SHORT_PATTERN_OPTS = set("ef")
 GREP_LONG_PATTERN_OPTS = {"--regexp", "--file"}
 GREP_LONG_RECURSIVE = {"--recursive", "--dereference-recursive"}
 GREP_SHORT_RECURSIVE = set("rR")
+GREP_DIRECTORIES_OPTS = {"-d", "--directories"}
+GREP_SHORT_QUIET = set("q")
+GREP_LONG_QUIET = {"--quiet", "--silent"}
+# Their values match names in the mirror, which holds Dropbox's lowercased paths.
+GREP_GLOB_OPTS = {"--include", "--exclude", "--exclude-dir"}
 
 
 class GrepArgv:
@@ -1273,8 +1285,11 @@ class GrepArgv:
         self.argv = list(argv)
         self.operands: list[int] = []
         self.unknown: list[str] = []
+        # (option, argv index, offset of the value within that token)
+        self.values: list[tuple[str, int, int]] = []
         self.pattern_is_an_option = False
         self.recursive = False
+        self.quiet = False
         self._split()
 
     def _split(self) -> None:
@@ -1289,36 +1304,60 @@ class GrepArgv:
                 name = token.split("=", 1)[0]
                 self.pattern_is_an_option |= name in GREP_LONG_PATTERN_OPTS
                 self.recursive |= name in GREP_LONG_RECURSIVE
+                self.quiet |= name in GREP_LONG_QUIET
                 if name in GREP_LONG_WITH_ARG:
-                    if "=" not in token:
-                        i += 1  # the value is the next token
+                    if "=" in token:
+                        self._value(name, i, len(name) + 1)
+                    else:
+                        self._value(name, i + 1, 0)
+                        i += 1
                 elif name not in GREP_LONG_NO_ARG:
                     self.unknown.append(name)
             elif token.startswith("-") and len(token) > 1:
                 if not token[1:].isdigit():  # -NUM is self-contained: -5 is -C 5
-                    i += self._split_cluster(token)
-            elif token != "-":
-                self.operands.append(i)
+                    i += self._split_cluster(token, i)
+            else:
+                self.operands.append(i)  # including "-", which is stdin
             i += 1
 
-    def _split_cluster(self, token: str) -> int:
+    def _split_cluster(self, token: str, i: int) -> int:
         """Consume one bundle of short options; 1 if it also eats the next token."""
         for pos, char in enumerate(token[1:], 1):
             self.pattern_is_an_option |= char in GREP_SHORT_PATTERN_OPTS
             self.recursive |= char in GREP_SHORT_RECURSIVE
+            self.quiet |= char in GREP_SHORT_QUIET
             if char in GREP_SHORT_WITH_ARG:
                 # The rest of the cluster is the value, unless the cluster ends
                 # here, in which case the value is the next token.
-                return 1 if pos == len(token) - 1 else 0
+                if pos == len(token) - 1:
+                    self._value("-" + char, i + 1, 0)
+                    return 1
+                self._value("-" + char, i, pos + 1)
+                return 0
             if char not in GREP_SHORT_NO_ARG:
                 self.unknown.append("-" + char)
         return 0
+
+    def _value(self, option: str, index: int, offset: int) -> None:
+        if index >= len(self.argv):
+            return  # missing value; grep itself will say so
+        self.values.append((option, index, offset))
+        if option in GREP_DIRECTORIES_OPTS and self.argv[index][offset:] == "recurse":
+            self.recursive = True
 
     def path_indices(self) -> list[int]:
         """Operands that are paths: all of them, unless the first is the pattern."""
         if self.pattern_is_an_option:
             return self.operands
         return self.operands[1:]
+
+    def lowercase_globs(self) -> None:
+        """Match the mirror's lowercase layout; globs become case-insensitive,
+        as the store's names are."""
+        for option, index, offset in self.values:
+            if option in GREP_GLOB_OPTS:
+                token = self.argv[index]
+                self.argv[index] = token[:offset] + token[offset:].lower()
 
 
 def mirror_root() -> str:
@@ -1331,96 +1370,188 @@ def manifest_file() -> str:
     return mirror_root() + "-revs.json"
 
 
-def mirror_path(store_path: str) -> str:
-    """Store path -> its location in the mirror, joined with forward slashes so
-    grep echoes back a prefix that string replacement can strip on any platform."""
-    return mirror_root() + normalise(store_path)
+def mirror_path(lower: str) -> str:
+    """Dropbox's path_lower -> its location in the mirror.
 
-
-def store_scope(paths: list[str]) -> str:
-    """The shallowest store directory containing every path operand.
-
-    Only this subtree is mirrored, so grepping one area does not drag the whole
-    store across the network. A lone operand may name a file; list_tree retries
-    at the parent when Dropbox says so.
+    Lowercase because display casing is unreliable above the last component:
+    two files in one folder can report that folder in different cases, which
+    would split it in two locally. Forward slashes so grep echoes back a prefix
+    that string replacement can strip on any platform.
     """
-    if not paths:
-        return "/"
-    parts = [normalise(p).strip("/").split("/") for p in paths]
-    shared: list[str] = []
-    for group in zip(*parts):
-        if len(set(group)) != 1:
-            break
-        shared.append(group[0])
-    return "/" + "/".join(shared)
+    return mirror_root() + ("/" if lower == "/" else lower)
 
 
-def mirror_sync(scope: str) -> None:
-    """Materialise the store under `scope` into the mirror directory.
+MIRROR_WORKERS = 8
+MANIFEST_CHECKPOINT_SECONDS = 2.0
 
-    Keyed on Dropbox revs: one recursive list_folder says what changed, so
-    repeated greps within a conversation re-download nothing. Files that have
-    left the store are removed from the mirror, since a stale copy would
-    otherwise yield matches for content that no longer exists.
+
+class Mirror:
+    """The parts of the store a grep needs, on local disk.
+
+    Correctness never rests on local state: every operand is checked against
+    Dropbox on every run, and a recursive listing prunes whatever has left the
+    store. The rev manifest only saves downloads, so losing it costs bandwidth,
+    never a wrong answer. The lock is held through the grep itself, so a
+    concurrent grep cannot prune files from under it.
     """
-    os.makedirs(mirror_root(), exist_ok=True)
-    # Store content on disk is new with the mirror; hold it to the same
-    # owner-only footing as the token cache.
-    os.chmod(mirror_root(), 0o700)
-    manifest_path = manifest_file()
-    try:
-        with open(manifest_path, encoding="utf-8") as fh:
-            manifest = json.load(fh)
-    except (OSError, ValueError):
-        manifest = {}
 
-    live = {}
-    for entry in list_tree(scope):
-        if entry[".tag"] != "file":
-            continue
-        path = entry["path_display"]
-        if os.path.splitext(path)[1].lower() not in BINARY_SUFFIXES:
-            live[path] = entry["rev"]
+    def __init__(self) -> None:
+        self.revs: dict[str, str] = {}
+        self.wanted: dict[str, str] = {}  # path_lower -> rev
+        self.failed: list[tuple[str, str]] = []  # (path_lower, reason)
 
-    for path, rev in live.items():
-        local = mirror_path(path)
-        if manifest.get(path) == rev and os.path.exists(local):
-            continue
-        os.makedirs(os.path.dirname(local), exist_ok=True)
+    def __enter__(self) -> "Mirror":
+        os.makedirs(mirror_root(), exist_ok=True)
+        # Store content on disk is new with the mirror; hold it to the same
+        # owner-only footing as the token cache.
+        os.chmod(mirror_root(), 0o700)
+        self._lock = open(mirror_root() + ".lock", "w")
+        if fcntl:  # absent on Windows, where only the offline tests run
+            fcntl.flock(self._lock, fcntl.LOCK_EX)
         try:
-            data, _ = content_download({"path": api_path(path)})
-        except CfsError:
-            continue  # unreadable; skip it rather than abort the whole search
-        with open(local, "wb") as fh:
-            fh.write(data)
-
-    prefix = "/" if scope == "/" else scope + "/"
-    for path in [p for p in manifest if p.startswith(prefix) and p not in live]:
-        try:
-            os.remove(mirror_path(path))
-        except OSError:
+            with open(manifest_file(), encoding="utf-8") as fh:
+                revs = json.load(fh)
+            if isinstance(revs, dict):
+                self.revs = revs
+        except (OSError, ValueError):
             pass
-        manifest.pop(path)
-    manifest.update(live)
+        self._saved_at = time.monotonic()
+        return self
 
-    with open(manifest_path, "w", encoding="utf-8") as fh:
-        json.dump(manifest, fh)
+    def __exit__(self, *exc: object) -> None:
+        try:
+            self._save()
+        finally:
+            self._lock.close()
+
+    def _save(self) -> None:
+        partial = manifest_file() + ".partial"
+        with open(partial, "w", encoding="utf-8") as fh:
+            json.dump(self.revs, fh)
+        os.replace(partial, manifest_file())
+        self._saved_at = time.monotonic()
+
+    def add_tree(self, lower: str) -> None:
+        files, dirs = {}, {lower}
+        for entry in list_tree(lower):
+            if entry[".tag"] == "folder":
+                dirs.add(entry["path_lower"])
+            elif entry[".tag"] == "file":
+                if os.path.splitext(entry["path_lower"])[1] not in BINARY_SUFFIXES:
+                    files[entry["path_lower"]] = entry["rev"]
+        prune(lower, files, dirs)
+        for path, rev in files.items():
+            self._want(path, rev)
+
+    def add_file(self, meta: dict) -> None:
+        # Fetched even with a binary suffix: naming it asks for it.
+        self._want(meta["path_lower"], meta["rev"])
+
+    def add_dir(self, lower: str) -> None:
+        # Without -r grep only reports "Is a directory", so it need only exist.
+        make_room(mirror_path(lower), is_dir=True)
+
+    def _want(self, lower: str, rev: str) -> None:
+        if self.revs.get(lower) != rev or not os.path.isfile(mirror_path(lower)):
+            self.wanted[lower] = rev
+
+    def fetch(self) -> None:
+        """Download in parallel (Dropbox serialises writes, not reads), saving
+        the manifest as it goes so a sync cut off by a timeout still makes
+        progress for the next attempt."""
+        if not self.wanted:
+            return
+        access_token()  # mint once here, not in eight threads at once
+        with ThreadPoolExecutor(MIRROR_WORKERS) as pool:
+            futures = {
+                pool.submit(content_download, {"path": lower}): lower
+                for lower in self.wanted
+            }
+            for future in as_completed(futures):
+                lower = futures[future]
+                local = mirror_path(lower)
+                try:
+                    data, meta = future.result()
+                except (CfsError, OSError) as exc:
+                    # A stale copy must not be searched in place of the real one.
+                    self.revs.pop(lower, None)
+                    remove_local(local)
+                    if "not_found" not in str(exc):  # deleted since listing: gone is right
+                        self.failed.append((lower, str(exc).splitlines()[0]))
+                    continue
+                make_room(local, is_dir=False)
+                # Renamed into place, so a killed run never leaves a truncated
+                # file; a leftover .partial is pruned like anything else.
+                with open(local + ".partial", "wb") as fh:
+                    fh.write(data)
+                os.replace(local + ".partial", local)
+                # The downloaded rev: the file may have changed since listing.
+                self.revs[lower] = meta["rev"]
+                if time.monotonic() - self._saved_at > MANIFEST_CHECKPOINT_SECONDS:
+                    self._save()
+
+
+def resolve_operand(path: str) -> dict | None:
+    """Metadata for a path operand, or None when the store has nothing there."""
+    norm = normalise(path)
+    if norm == "/":
+        return {".tag": "folder", "path_lower": "/"}  # get_metadata refuses the root
+    try:
+        return rpc("/2/files/get_metadata", {"path": norm})
+    except CfsError as exc:
+        if "not_found" in str(exc):
+            return None
+        raise
 
 
 def list_tree(scope: str) -> list[dict]:
-    """Every entry under `scope`, retrying at the parent if it names a file."""
-    try:
-        result = rpc("/2/files/list_folder", {"path": api_path(scope), "recursive": True})
-    except CfsError:
-        parent = os.path.dirname(normalise(scope).rstrip("/")) or "/"
-        if parent == scope:
-            raise
-        return list_tree(parent)
+    """Every entry under the directory `scope`."""
+    result = rpc("/2/files/list_folder", {"path": api_path(scope), "recursive": True})
     entries = list(result["entries"])
     while result.get("has_more"):
         result = rpc("/2/files/list_folder/continue", {"cursor": result["cursor"]})
         entries.extend(result["entries"])
     return entries
+
+
+def prune(scope: str, files: dict, dirs: set) -> None:
+    """Delete what the mirror holds under `scope` and the store does not.
+    Walks the disk, not the manifest, to catch files a killed run never recorded."""
+    root_len = len(mirror_root())
+    for dirpath, dirnames, filenames in os.walk(mirror_path(scope)):
+        base = dirpath[root_len:].replace("\\", "/").rstrip("/")
+        for name in filenames:
+            if f"{base}/{name}" not in files:
+                os.remove(os.path.join(dirpath, name))
+        for name in list(dirnames):
+            if f"{base}/{name}" not in dirs:
+                shutil.rmtree(os.path.join(dirpath, name))
+                dirnames.remove(name)
+
+
+def make_room(local: str, *, is_dir: bool) -> None:
+    """Clear the way at `local`: the store may have swapped a file for a
+    directory of the same name, or the reverse."""
+    ancestor = os.path.dirname(local)
+    while len(ancestor) > len(mirror_root()):
+        if os.path.isfile(ancestor):
+            os.remove(ancestor)
+        ancestor = os.path.dirname(ancestor)
+    if is_dir:
+        if os.path.isfile(local):
+            os.remove(local)
+        os.makedirs(local, exist_ok=True)
+    else:
+        if os.path.isdir(local):
+            shutil.rmtree(local)
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+
+
+def remove_local(local: str) -> None:
+    if os.path.isdir(local):
+        shutil.rmtree(local)
+    elif os.path.exists(local):
+        os.remove(local)
 
 
 def rewrite_grep_output(data: bytes) -> bytes:
@@ -1438,36 +1569,62 @@ def cmd_grep(raw_argv: list[str]) -> int:
     """Run real GNU grep against a mirror of the store."""
     parsed = GrepArgv(raw_argv)
     argv = parsed.argv
-    path_idx = parsed.path_indices()
 
     if not parsed.operands and not parsed.pattern_is_an_option:
         raise CfsError("grep needs a pattern. Usage: grep [OPTION]... PATTERN [PATH]...")
 
-    mirror_sync(store_scope([argv[i] for i in path_idx]))
+    # Before any insertion below shifts the indices it holds.
+    parsed.lowercase_globs()
+    # "-" is grep's stdin, not a store path, but it still means a path was given.
+    path_idx = [i for i in parsed.path_indices() if argv[i] != "-"]
 
-    for i in path_idx:
-        local = mirror_path(argv[i])
-        if not os.path.exists(local):
-            hint = ""
-            if parsed.unknown:
-                hint = (
-                    f" -- cfs does not recognise {', '.join(sorted(set(parsed.unknown)))}, "
-                    "so if that option takes a value, cfs mistook the value for a path"
-                )
-            raise CfsError(f"No such path in the store: {argv[i]}{hint}")
-        argv[i] = local
+    with Mirror() as mirror:
+        if parsed.path_indices():
+            access_token()
+            with ThreadPoolExecutor(MIRROR_WORKERS) as pool:
+                metas = list(pool.map(resolve_operand, [argv[i] for i in path_idx]))
+            for i, meta in zip(path_idx, metas):
+                if meta is None:
+                    hint = ""
+                    if parsed.unknown:
+                        hint = (
+                            f" -- cfs does not recognise {', '.join(sorted(set(parsed.unknown)))}, "
+                            "so if that option takes a value, cfs mistook the value for a path"
+                        )
+                    raise CfsError(f"No such path in the store: {argv[i]}{hint}")
+            # Trees first: a tree's prune would otherwise delete a named file
+            # below it that was already in place, such as a binary.
+            for meta in metas:
+                if meta[".tag"] == "folder" and parsed.recursive:
+                    mirror.add_tree(meta["path_lower"])
+            for meta in metas:
+                if meta[".tag"] == "file":
+                    mirror.add_file(meta)
+                elif not parsed.recursive:
+                    mirror.add_dir(meta["path_lower"])
+            for i, meta in zip(path_idx, metas):
+                argv[i] = mirror_path(meta["path_lower"])
+        else:
+            # Real grep would read stdin here. There is no stdin worth reading,
+            # so the whole store is the corpus instead -- the one deliberate
+            # deviation.
+            mirror.add_tree("/")
+            if not parsed.recursive:
+                argv.insert(0, "-r")
+            argv.append(mirror_root())
+        mirror.fetch()
 
-    if not path_idx:
-        # Real grep would read stdin here. There is no stdin worth reading, so
-        # the whole store is the corpus instead -- the one deliberate deviation.
-        if not parsed.recursive:
-            argv.insert(0, "-r")
-        argv.append(mirror_root())
+        try:
+            proc = subprocess.run(["grep"] + argv, capture_output=True)
+        except FileNotFoundError:
+            raise CfsError("grep is not installed in this sandbox.") from None
 
-    try:
-        proc = subprocess.run(["grep"] + argv, capture_output=True)
-    except FileNotFoundError:
-        raise CfsError("grep is not installed in this sandbox.") from None
+    code = proc.returncode
+    if mirror.failed:
+        # grep's own rule for a file it could not read: exit 2, unless -q
+        # already found a match.
+        if not (parsed.quiet and code == 0):
+            code = 2
     try:
         sys.stdout.buffer.write(rewrite_grep_output(proc.stdout))
         sys.stdout.buffer.flush()
@@ -1475,9 +1632,11 @@ def cmd_grep(raw_argv: list[str]) -> int:
         # Piping into `head` closes the pipe early. Real grep dies quietly on
         # SIGPIPE; a traceback here would look like a failed search.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        return proc.returncode
+        return code
     sys.stderr.buffer.write(rewrite_grep_output(proc.stderr))
-    return proc.returncode
+    for lower, reason in mirror.failed:
+        sys.stderr.buffer.write(f"cfs grep: {lower}: not searched: {reason}\n".encode())
+    return code
 
 
 # With n=3 context a scattered diff runs to roughly 7x its changed-line count, so
@@ -1951,6 +2110,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def unreachable(exc: urllib.error.URLError) -> str:
+    return (
+        f"Error: could not reach Dropbox ({exc.reason}). If this is the claude.ai "
+        "sandbox, api.dropboxapi.com and content.dropboxapi.com must be allowed "
+        "by the code-execution network egress setting."
+    )
+
+
 def main() -> int:
     # grep bypasses argparse entirely: its flags are GNU grep's, and argparse
     # would reject or reinterpret them before the real binary ever ran.
@@ -1959,7 +2126,9 @@ def main() -> int:
             return cmd_grep(sys.argv[2:])
         except CfsError as exc:
             print(f"Error: {exc}", file=sys.stderr)
-            return 2  # grep's own code for "the search did not run"
+        except urllib.error.URLError as exc:
+            print(unreachable(exc), file=sys.stderr)
+        return 2  # grep's own code for "the search did not run"
 
     args = build_parser().parse_args()
     try:
@@ -1974,12 +2143,7 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except urllib.error.URLError as exc:
-        print(
-            f"Error: could not reach Dropbox ({exc.reason}). If this is the claude.ai "
-            "sandbox, api.dropboxapi.com and content.dropboxapi.com must be allowed "
-            "by the code-execution network egress setting.",
-            file=sys.stderr,
-        )
+        print(unreachable(exc), file=sys.stderr)
         return 1
     return 0
 

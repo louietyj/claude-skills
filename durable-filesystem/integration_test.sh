@@ -395,6 +395,12 @@ $CFS grep -rn "gamma" $ROOT | grep -q "^$ROOT/g1.md:2:" \
 # A lone file prints no filename, exactly as grep does.
 $CFS grep "gamma" $ROOT/g1.md | grep -qx "gamma" \
   && ok "single-file search omits the filename" || bad "single-file search omits the filename"
+# Dropbox names are case-insensitive, and so are operands; output is lowercased.
+$CFS grep "gamma" /_CFS_TEST/G1.md | grep -qx "gamma" \
+  && ok "a mixed-case operand finds the file" || bad "a mixed-case operand finds the file"
+$CFS grep -rl "gamma" /_CFS_Test | grep -qx "$ROOT/g1.md" \
+  && ok "a mixed-case directory reports lowercase store paths" \
+  || bad "a mixed-case directory reports lowercase store paths"
 
 # Exit codes are grep's own: 0 matched, 1 did not, 2 could not run.
 $CFS grep -r "nothingmatchesthis" $ROOT >/dev/null 2>&1

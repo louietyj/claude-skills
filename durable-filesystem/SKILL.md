@@ -124,7 +124,9 @@ cfs grep -c alpha /memory/hawaii-2026/bookings.md
 
 **The one deviation:** given no path, grep would read stdin, so instead the whole store is searched recursively.
 
-Files are fetched and matched locally, so a file written moments ago is found immediately. The first `grep` of a conversation pays for the fetch; later ones re-fetch only what changed.
+Files are fetched and matched locally, so a file written moments ago is found immediately. Only what grep will read is fetched: a named file is fetched alone, while `-r` on a directory fetches everything under it, and a grep with no path fetches the whole store. Name files or the narrowest directory. Later greps in the conversation re-fetch only what changed.
+
+Paths come back lowercased. They are still valid store paths, because the store is case-insensitive, and `--include`/`--exclude` globs match case-insensitively for the same reason.
 
 **Searching by name is a different command.** `--include` only filters which files grep opens, and it filters *after* the fetch, so narrowing by glob saves nothing. Ask the Dropbox index instead — no download at all:
 

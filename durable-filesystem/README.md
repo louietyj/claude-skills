@@ -62,6 +62,8 @@ Both read stdin raw *by default*, and the symmetry is load-bearing: a caller who
 
 `grep` fetches files and matches locally rather than using Dropbox's search index, because that index is asynchronous and cannot find a file written moments ago — precisely when a mid-conversation search is most likely.
 
+The local mirror follows the same rule as revs: correctness never rests on local state. Every operand is checked against Dropbox on every run. A named file is checked by its metadata. A recursive directory gets a fresh listing, which also prunes anything on disk that has left the store. The rev manifest only decides what need not be downloaded again. The mirror is laid out by `path_lower` because Dropbox's display casing can disagree between siblings above the last path component, which would split one folder in two locally. As a result, grep reports lowercased paths.
+
 ## Security posture
 
 The app is scoped to a single Dropbox app folder; nothing outside it is reachable. That scoping is the entire defence, because:
@@ -75,8 +77,8 @@ The app is scoped to a single Dropbox app folder; nothing outside it is reachabl
 ## Testing
 
 ```
-python test_cfs.py         # 153 offline tests, no network
-bash integration_test.sh   # 213 live tests against the app folder
+python test_cfs.py         # 169 offline tests, no network
+bash integration_test.sh   # 215 live tests against the app folder
 ```
 
 The offline suite covers path traversal, edit ambiguity, SEARCH/REPLACE parsing including tagged markers and marker detection, JSON and delimiter payloads, the write-mode rules, the retry policy, stale-rev tolerance for identical content, and root protection. The integration suite covers every command against the real API, including the guardrails only the server can enforce:

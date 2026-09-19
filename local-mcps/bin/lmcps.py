@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import urllib.error
@@ -670,9 +671,13 @@ def print_index(name, entry):
     for t in tools[:MAX_INDEXED_TOOLS]:
         name_, said = t.get("name", ""), blurb(t.get("description"))
         print(f"  {name_} -- {said}" if said else f"  {name_}")
-    if len(tools) > MAX_INDEXED_TOOLS:
-        print(f"  ... and {len(tools) - MAX_INDEXED_TOOLS} more "
-              f"(lmcps tools {name})")
+    rest = tools[MAX_INDEXED_TOOLS:]
+    if rest:
+        # Names cost a word each; dropping them would hide what exists.
+        names = ", ".join(t.get("name", "") for t in rest)
+        print(textwrap.fill(f"... and {len(rest)} more, undescribed: {names}",
+                            width=100, initial_indent="  ", subsequent_indent="    ",
+                            break_on_hyphens=False))
 
 
 def cmd_servers(args):

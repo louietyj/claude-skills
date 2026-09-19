@@ -810,7 +810,8 @@ class TestCatalogDisplay(Base):
         entry = {"builtAt": "2099-01-01T00:00:00Z", "error": None,
                  "tools": [{"name": f"t{i}", "description": "x " * 200} for i in range(45)]}
         r = self.run_with(catalog({"adder": entry}))
-        self.assertIn("... and 5 more", r.stdout)
+        self.assertIn("... and 5 more, undescribed: t40, t41, t42, t43, t44", r.stdout)
+        self.assertNotIn("t40 --", r.stdout)
         longest = max((l for l in r.stdout.splitlines() if l.startswith("  t")), key=len)
         self.assertLessEqual(len(longest.split(" -- ", 1)[1]), 80)
 

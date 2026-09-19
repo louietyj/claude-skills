@@ -149,6 +149,8 @@ class TestTools(Base):
         schema = json.loads(r.stdout)
         self.assertEqual(list(schema), ["description", "name", "parameters"])
         self.assertEqual(list(schema["parameters"]), sorted(schema["parameters"]))
+        # Objects are sorted, arrays are not -- as natively.
+        self.assertEqual(schema["parameters"]["required"], ["b", "a"])
         self.assertEqual(schema["name"], "add")
         self.assertIn("a", schema["parameters"]["properties"])
 

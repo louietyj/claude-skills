@@ -23,7 +23,8 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else "plain"
 TOOLS = [
     {"name": "add", "description": "Add two numbers.\nSecond line ignored by listings.",
      "inputSchema": {"type": "object", "properties": {"a": {"type": "number"},
-                                                      "b": {"type": "number"}}}},
+                                                      "b": {"type": "number"}},
+                     "required": ["b", "a"]}},
     {"name": "boom", "description": "Always fails.", "inputSchema": {"type": "object"}},
 ]
 

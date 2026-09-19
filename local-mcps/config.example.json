@@ -7,6 +7,16 @@
       "headers": { "tomtom-api-key": "YOUR_KEY_HERE" },
       "description": "geocoding, routing, live traffic, EV range, places search"
     },
+    "apify": {
+      "type": "http",
+      "url": "https://mcp.apify.com",
+      "headers": { "Authorization": "Bearer ${LMCPS_KEY}" },
+      "keys": [
+        { "label": "me@gmail.com", "LMCPS_KEY": "apify_api_..." },
+        { "label": "alt@gmail.com", "LMCPS_KEY": "apify_api_..." }
+      ],
+      "description": "web scraping and data extraction via Apify Actors"
+    },
     "time": {
       "command": "uvx",
       "args": ["mcp-server-time", "--local-timezone", "Europe/London"],

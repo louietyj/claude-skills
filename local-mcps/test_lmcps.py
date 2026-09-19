@@ -357,6 +357,100 @@ class TestVarExpansion(Base):
         self.assertIn("${NOPE}", r.stderr)
 
 
+class TestKeyRotation(Base):
+    KEYS = [{"label": "a@example.com", "LMCPS_KEY": "key-a"},
+            {"label": "b@example.com", "LMCPS_KEY": "key-b"},
+            {"label": "c@example.com", "LMCPS_KEY": "key-c"}]
+
+    def echo(self, keys):
+        self.write_config({"e": fake_server("echoenv", env={"FAKE_TOKEN": "${LMCPS_KEY}"},
+                                            keys=keys)})
+
+    def used(self):
+        r = self.run_lmcps("call", "e", "whatever", "{}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_the_chosen_key_is_kept_for_the_conversation(self):
+        self.echo(self.KEYS)
+        first = self.used()
+        self.assertIn(first, ("key-a", "key-b", "key-c"))
+        self.assertEqual([self.used() for _ in range(3)], [first] * 3)
+
+    def test_each_conversation_chooses_afresh(self):
+        self.echo(self.KEYS[:2])
+        seen = set()
+        for i in range(16):  # all 16 alike by chance: 1 in 32768
+            r = self.run_lmcps("servers", env={"LMCPS_HOME": str(self.tmp / f"h{i}")})
+            seen.add("a@example.com" in r.stdout)
+        self.assertEqual(seen, {True, False})
+
+    def test_rotate_advances_and_wraps(self):
+        self.echo(self.KEYS)
+        order = [self.used()]
+        for _ in range(3):
+            self.assertEqual(self.run_lmcps("rotate", "e").returncode, 0)
+            order.append(self.used())
+        self.assertEqual(len(set(order[:3])), 3)
+        self.assertEqual(order[3], order[0])
+
+    def test_rotate_to_a_label_or_a_number(self):
+        self.echo(self.KEYS)
+        r = self.run_lmcps("rotate", "e", "b@example.com")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("b@example.com (2 of 3)", r.stdout)
+        self.assertEqual(self.used(), "key-b")
+        self.run_lmcps("rotate", "e", "3")
+        self.assertEqual(self.used(), "key-c")
+
+    def test_rotate_to_an_unknown_key_lists_the_labels(self):
+        self.echo(self.KEYS)
+        r = self.run_lmcps("rotate", "e", "nobody")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("a@example.com, b@example.com, c@example.com", r.stderr)
+
+    def test_rotate_without_keys_is_an_error(self):
+        self.write_config({"e": fake_server()})
+        r = self.run_lmcps("rotate", "e")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no `keys`", r.stderr)
+
+    def test_an_entry_carries_several_variables_anywhere_in_the_block(self):
+        cfg = fake_server("echoenv", env={"FAKE_TOKEN": "${ID}:${SECRET}"},
+                          keys=[{"label": "only", "ID": "id1", "SECRET": "s1"}])
+        cfg["args"] = cfg["args"] + ["${ID}"]  # the fake ignores extra args
+        self.write_config({"e": cfg})
+        self.assertEqual(self.used(), "id1:s1")
+
+    def test_a_bare_string_is_lmcps_key_labelled_by_position(self):
+        self.echo(["only-key"])
+        self.assertEqual(self.used(), "only-key")
+        self.assertIn("[key: #1 (1 of 1)]", self.run_lmcps("servers").stdout)
+
+    def test_servers_and_tools_name_the_key_but_never_print_it(self):
+        self.echo(self.KEYS)
+        self.run_lmcps("rotate", "e", "a@example.com")
+        for verb in (("servers",), ("tools", "e")):
+            out = self.run_lmcps(*verb).stdout
+            self.assertIn("[key: a@example.com (1 of 3) -- `lmcps rotate e`", out)
+            self.assertNotIn("key-a", out)
+
+    def test_a_failed_call_says_which_key_it_used(self):
+        self.write_config({"e": fake_server(keys=self.KEYS)})
+        self.run_lmcps("rotate", "e", "c@example.com")
+        r = self.run_lmcps("call", "e", "boom", "{}")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("[key: c@example.com (3 of 3)", r.stderr)
+
+    def test_a_malformed_pool_does_not_break_servers(self):
+        self.write_config({"e": fake_server(keys="not-a-list", description="d"),
+                           "f": fake_server(description="still listed")})
+        r = self.run_lmcps("servers")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("keys misconfigured", r.stdout)
+        self.assertIn("still listed", r.stdout)
+
+
 class StubHandler(BaseHTTPRequestHandler):
     """A JSON-RPC endpoint that records the headers it was sent."""
     seen_headers = {}
@@ -551,6 +645,20 @@ class TestHttp(Base):
         self.assertEqual(StubHandler.methods.count("initialize"), 2)
         self.run_lmcps("call", "maps", "geocode", "{}", env={"K": "a"})
         self.assertEqual(StubHandler.methods.count("initialize"), 2)
+
+    def test_rotating_the_key_opens_a_session_under_the_new_one(self):
+        StubHandler.mode = "session"
+        self.write_config({"maps": {"type": "http", "url": self.url,
+                                    "headers": {"Authorization": "Bearer ${LMCPS_KEY}"},
+                                    "keys": ["a", "b"]}})
+        self.run_lmcps("rotate", "maps", "1")
+        self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(StubHandler.seen_headers["authorization"], "Bearer a")
+        self.run_lmcps("rotate", "maps")
+        r = self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(StubHandler.seen_headers["authorization"], "Bearer b")
+        self.assertEqual(StubHandler.seen_headers["mcp-session-id"], "sess-2")
 
     def test_a_stateless_server_is_initialized_once_per_conversation(self):
         self.write_config({"maps": {"type": "http", "url": self.url}})

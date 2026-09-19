@@ -148,6 +148,17 @@ Nothing is ever `DELETE`d. An abandoned session expires server-side on its own s
 
 `urllib`'s default `Python-urllib/3.x` User-Agent is replaced: Cloudflare rejects it with a 403 (error 1010) in front of Alpha Vantage's endpoint, where curl gets through.
 
+## Key rotation
+
+Free tiers are small, so the workaround had been one custom connector per key: `mcp-apify`, `mcp-apify-2`, and so on. Every copy puts its whole tool list into context again. A server's `keys` pool gives one entry instead.
+
+- **One key per conversation, chosen at random**, and kept in `$LMCPS_HOME/keys.json`. Random spreads the load across conversations. Keeping it matters more than spreading: an Apify run or a Firecrawl crawl belongs to the account that started it, so switching keys mid-task loses the task.
+- **No automatic rotation.** Quota failures are too varied to detect reliably. Alpha Vantage reports one as a successful result with `"type": "rate_limit"` in the body. Instead the key is visible: `servers` and `tools` print `[key: <label> (i of n) -- lmcps rotate <server> ...]`, a failed `call` prints it on stderr, and SKILL.md tells the model to run `lmcps rotate` when a quota runs out.
+- **An entry is a set of variables, not one key.** Each non-`label` field becomes a `${VAR}`, and expansion already covered `url`, `headers`, `env`, `args` and `command`. That handles key-in-URL (Alpha Vantage, Firecrawl), key-in-header (Apify) and multi-part credentials with no extra code.
+- **Labels are printed, values never are.** The label is meant to say which account a key belongs to, since that is what you need to know when a quota runs out.
+
+A rotation changes the expanded headers or URL, so it opens a new HTTP session rather than reusing one opened under the previous account.
+
 ## Security posture
 
 The config sits in plaintext in a private Dropbox app folder, and holds API keys. `${VAR}` and `${VAR:-default}` expansion works in `command`, `args`, `env`, `url` and `headers`, so a key can be pasted per conversation instead — but the default is plaintext at rest, chosen deliberately over a manual step every conversation.
@@ -159,12 +170,12 @@ The share link is unlisted rather than secret — anyone with the URL can fetch 
 ## Testing
 
 ```
-python test_lmcps.py       # 79 offline tests, no network and no npx
+python test_lmcps.py       # 91 offline tests, no network and no npx
 bash integration_test.sh   # 18 live tests against real npx and uvx servers
 TOMTOM_KEY=... bash integration_test.sh   # +2, against the real TomTom server
 ```
 
-The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, HTTP session reuse and expiry, and that no `Authorization` header is ever invented.
+The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, HTTP session reuse and expiry, key choice and rotation, and that no `Authorization` header is ever invented.
 
 The catalog gets its own group, and it is mostly failure cases, because `servers` runs at the top of every conversation and every one of them has to degrade rather than break: a missing index, a corrupt one, a server the index has never seen, a server that left the config, a per-server build error, and a build older than a day. `$LMCPS_CATALOG` points the tests at a fixture so none of it touches the network. The build side is pinned separately — that a broken server cannot fail the build, that it keeps its last-good entry when `--previous` has one, and that no `inputSchema` ever reaches the catalog.
 

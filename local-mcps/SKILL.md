@@ -43,6 +43,7 @@ lmcps tools <server>                   # the server's own instructions, then its
 lmcps tools <server> --schema <tool>   # one tool's full input schema
 lmcps call <server> <tool> '{"a": 1}'  # invoke it
 lmcps describe <server>                # what a server says about itself, to write its `description`
+lmcps rotate <server> [LABEL]          # switch to the server's next API key, or a named one
 lmcps refresh                          # re-fetch config after editing it
 ```
 
@@ -63,6 +64,18 @@ freely. `call` always spawns a stdio server — ~10–25s the first time npx or 
 fetches a package, ~1–2s after — so batch your work into as few calls as the
 task allows rather than probing incrementally. HTTP servers spawn nothing and
 answer in about a second, `tools` included.
+
+## Servers with several API keys
+
+A server that shows `[key: <label> (1 of 3) ...]` has a pool of free-tier keys.
+One was picked at random for this conversation, and every call uses it until you
+run `lmcps rotate <server>`. Do that, then retry, when a call reports its quota
+or rate limit spent — which often arrives as ordinary output, not an error:
+Alpha Vantage returns `"type": "rate_limit"` in a successful result.
+
+Work started under one key stays with it: an Apify run or Firecrawl crawl
+started before a rotation will not be found after it.
+`lmcps rotate <server> <label>` switches back.
 
 ## Where the config comes from
 

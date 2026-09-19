@@ -36,6 +36,32 @@ description, and its full `instructions`. Write the line from that and paste it
 into the server's block. `describe` offers no generated line: reducing that
 material to one useful sentence is the judgement, and it is yours to make.
 
+## Several keys for one server
+
+For services whose free tier is too small to use alone, give the server a pool
+of keys and write `${LMCPS_KEY}` wherever the key goes:
+
+```json
+"alphavantage": {
+  "type": "http",
+  "url": "https://mcp.alphavantage.co/mcp?apikey=${LMCPS_KEY}",
+  "keys": [
+    { "label": "me@gmail.com",  "LMCPS_KEY": "..." },
+    { "label": "alt@gmail.com", "LMCPS_KEY": "..." }
+  ]
+}
+```
+
+One key is picked at random per conversation and kept until `lmcps rotate`.
+`label` is what gets printed, so make it something that tells you which account
+it is, such as the login email. Every other field in an entry becomes a `${VAR}`
+usable anywhere in the block (`url`, `headers`, `env`, `args`, `command`), so a
+credential that comes in parts is one entry with several fields. A bare string
+entry is shorthand for `{"LMCPS_KEY": "..."}`, labelled `#1`, `#2`, and so on.
+
+`keys` is another non-standard key. Claude Code ignores it, but it leaves
+`${LMCPS_KEY}` unset there.
+
 ## Servers that want a token file
 
 Some OAuth servers read credentials from a *file* their auth flow writes rather

@@ -8,6 +8,7 @@ code-execution sandbox.
     lmcps tools <server> [--schema TOOL]   # live tools/list
     lmcps call <server> <tool> '{"a": 1}'  # the thing that matters
     lmcps describe <server>                # material for a server's `description`
+    lmcps rotate <server> [LABEL]          # next key in the server's `keys` pool
     lmcps index                            # build the tool index; see routine/
     lmcps refresh                          # re-fetch the config, drop caches
 
@@ -19,6 +20,7 @@ import hashlib
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -280,6 +282,85 @@ def pick(servers, name):
     return servers[name]
 
 
+# --- key rotation -----------------------------------------------------------
+#
+# One key per conversation, chosen at random and kept: an Apify run or Firecrawl
+# crawl is only visible to the account that started it. Rotation is manual
+# because quota errors are too varied to detect -- Alpha Vantage's is a 200.
+
+KEY_CHOICES = LMCPS_HOME / "keys.json"
+
+
+def key_pool(name, cfg):
+    """[(label, vars)]. Raises rather than dying, so `servers` can degrade."""
+    pool = cfg.get("keys") or []
+    if not isinstance(pool, list):
+        raise ValueError(f"'{name}': `keys` must be a list")
+    out = []
+    for i, k in enumerate(pool, 1):
+        if isinstance(k, str):
+            out.append((f"#{i}", {"LMCPS_KEY": k}))
+        elif isinstance(k, dict):
+            out.append((str(k.get("label") or f"#{i}"),
+                        {v: str(s) for v, s in k.items() if v != "label"}))
+        else:
+            raise ValueError(f"'{name}': key #{i} must be a string or an object")
+    return out
+
+
+def load_key_choices():
+    try:
+        return json.loads(KEY_CHOICES.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_key_choice(name, index):
+    choices = load_key_choices()
+    choices[name] = index
+    LMCPS_HOME.mkdir(parents=True, exist_ok=True)
+    KEY_CHOICES.write_text(json.dumps(choices), encoding="utf-8")
+
+
+def chosen_key(name, cfg):
+    """(index, pool), choosing and recording one on first use; None without keys."""
+    pool = key_pool(name, cfg)
+    if not pool:
+        return None
+    i = load_key_choices().get(name)
+    if not isinstance(i, int) or not 0 <= i < len(pool):
+        i = random.randrange(len(pool))
+        save_key_choice(name, i)
+    return i, pool
+
+
+def key_note(name, cfg):
+    """Names the key in use by label; its value is never printed."""
+    try:
+        choice = chosen_key(name, cfg)
+    except ValueError as e:
+        return f"[keys misconfigured: {e}]"
+    if choice is None:
+        return None
+    i, pool = choice
+    note = f"[key: {pool[i][0]} ({i + 1} of {len(pool)})"
+    if len(pool) > 1:
+        note += f" -- `lmcps rotate {name}` if it reports its quota spent"
+    return note + "]"
+
+
+def server_env(name, cfg):
+    """What the server's `${VAR}`s expand against."""
+    try:
+        choice = chosen_key(name, cfg)
+    except ValueError as e:
+        die(str(e))
+    if choice is None:
+        return os.environ
+    i, pool = choice
+    return {**os.environ, **pool[i][1]}
+
+
 # --- transports -------------------------------------------------------------
 
 
@@ -371,7 +452,8 @@ def session_headers(headers, record):
 
 
 def call_http(name, cfg, method, params):
-    url = expand(cfg["url"], os.environ)
+    keyenv = server_env(name, cfg)
+    url = expand(cfg["url"], keyenv)
     # Cloudflare 403s urllib's default `Python-urllib/3.x` (Alpha Vantage does).
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
@@ -379,7 +461,7 @@ def call_http(name, cfg, method, params):
     # Whatever the config asks for, verbatim. The header name is the whole point
     # of this path: a connector could not have sent `tomtom-api-key` at all.
     for k, v in (cfg.get("headers") or {}).items():
-        headers[k] = expand(v, os.environ)
+        headers[k] = expand(v, keyenv)
 
     fingerprint = hashlib.sha256(json.dumps([url, headers], sort_keys=True)
                                  .encode()).hexdigest()[:16]
@@ -402,16 +484,17 @@ def call_http(name, cfg, method, params):
 
 
 def call_stdio(name, cfg, method, params):
+    keyenv = server_env(name, cfg)
     env = dict(os.environ)
     for k, v in (cfg.get("env") or {}).items():
-        env[k] = expand(str(v), os.environ)
-    command = expand(cfg["command"], os.environ)
+        env[k] = expand(str(v), keyenv)
+    command = expand(cfg["command"], keyenv)
     # Resolving ourselves only sharpens the error on Linux, but it is what finds
     # `npx.cmd` on Windows, so one config exercises both.
     resolved = shutil.which(command, path=env.get("PATH"))
     if resolved is None:
         die(f"'{name}': command not found: {command}")
-    cmd = [resolved] + [expand(a, os.environ) for a in cfg.get("args", [])]
+    cmd = [resolved] + [expand(a, keyenv) for a in cfg.get("args", [])]
 
     # A server that fails to start says why on stderr. Discard it and every such
     # failure becomes the same unhelpful "exited before responding to initialize".
@@ -611,6 +694,9 @@ def cmd_servers(args):
         desc = first_line(cfg.get("description")) or \
             f"(no description -- run `lmcps tools {name}`)"
         print(f"{name.ljust(width)}  {ttype.ljust(6)}  {desc}")
+        note = key_note(name, cfg)
+        if note:
+            print(f"  {note}")
         if catalog is not None:
             print_index(name, indexed.get(name))
 
@@ -650,6 +736,9 @@ def cmd_tools(args):
         print(json.dumps(match, indent=2))
         return
 
+    note = key_note(args.server, cfg)
+    if note:
+        print(f"{note}\n")
     # Optional in the protocol; plenty of servers omit both.
     title = (entry.get("serverInfo") or {}).get("title")
     if title:
@@ -700,8 +789,15 @@ def cmd_call(args):
         arguments = json.loads(args.arguments) if args.arguments else {}
     except json.JSONDecodeError as e:
         die(f"arguments are not valid JSON: {e}")
-    result = call(args.server, cfg, "tools/call",
-                  {"name": args.tool, "arguments": arguments})
+    # A failure may be a spent quota, so say which key was spent.
+    note = key_note(args.server, cfg)
+    try:
+        result = call(args.server, cfg, "tools/call",
+                      {"name": args.tool, "arguments": arguments})
+    except SystemExit:
+        if note:
+            print(f"lmcps: {note}", file=sys.stderr)
+        raise
 
     text = "\n".join(c.get("text", "") for c in result.get("content", [])
                      if c.get("type") == "text")
@@ -715,8 +811,36 @@ def cmd_call(args):
     if result.get("isError"):
         print(f"lmcps: '{args.server}' tool '{args.tool}' failed:\n{text}",
               file=sys.stderr)
+        if note:
+            print(f"lmcps: {note}", file=sys.stderr)
         sys.exit(1)
     print(text)
+
+
+def cmd_rotate(args):
+    servers = load_servers()
+    cfg = pick(servers, args.server)
+    try:
+        choice = chosen_key(args.server, cfg)
+    except ValueError as e:
+        die(str(e))
+    if choice is None:
+        die(f"'{args.server}' has no `keys` to rotate through")
+    i, pool = choice
+    if args.to is None:
+        i = (i + 1) % len(pool)
+    else:
+        labels = [label for label, _ in pool]
+        if args.to in labels:
+            i = labels.index(args.to)
+        elif args.to.isdigit() and 1 <= int(args.to) <= len(pool):
+            i = int(args.to) - 1
+        else:
+            die(f"'{args.server}' has no key '{args.to}'. Keys: {', '.join(labels)}")
+    save_key_choice(args.server, i)
+    print(f"{args.server}: now using key {pool[i][0]} ({i + 1} of {len(pool)}). "
+          f"Runs or jobs started under another key stay with it; "
+          f"`lmcps rotate {args.server} <label>` switches back.")
 
 
 def utcnow():
@@ -817,14 +941,15 @@ def cmd_warm(args):
     for name, cfg in sorted(servers.items()):
         if cfg.get("type") == "http" or cfg.get("url") or not cfg.get("command"):
             continue  # nothing to install: an HTTP server answers in about a second
-        command = expand(cfg["command"], os.environ)
+        keyenv = server_env(name, cfg)
+        command = expand(cfg["command"], keyenv)
         resolved = shutil.which(command, path=os.environ.get("PATH"))
         if resolved is None:
             continue
-        cmd = [resolved] + [expand(a, os.environ) for a in cfg.get("args") or []]
+        cmd = [resolved] + [expand(a, keyenv) for a in cfg.get("args") or []]
         env = dict(os.environ)
         for k, v in (cfg.get("env") or {}).items():
-            env[k] = expand(str(v), os.environ)
+            env[k] = expand(str(v), keyenv)
         try:
             # Detached, so it outlives this process and the shell that ran it.
             kwargs = {"start_new_session": True} if os.name != "nt" else {}
@@ -896,6 +1021,11 @@ def main():
     p.add_argument("tool")
     p.add_argument("arguments", nargs="?", default="", help="JSON object of arguments")
     p.set_defaults(fn=cmd_call)
+
+    p = sub.add_parser("rotate", help="switch a server to its next key, or to a named one")
+    p.add_argument("server")
+    p.add_argument("to", nargs="?", metavar="LABEL", help="a key's label or 1-based number")
+    p.set_defaults(fn=cmd_rotate)
 
     p = sub.add_parser("describe", help="a paste-ready `description` for a newly added server")
     p.add_argument("server")

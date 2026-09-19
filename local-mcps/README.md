@@ -154,7 +154,7 @@ Free tiers are small, so the workaround had been one custom connector per key: `
 
 - **One key per conversation, chosen at random**, and kept in `$LMCPS_HOME/keys.json`. Random spreads the load across conversations. Keeping it matters more than spreading: an Apify run or a Firecrawl crawl belongs to the account that started it, so switching keys mid-task loses the task.
 - **No automatic rotation.** Quota failures are too varied to detect reliably. Alpha Vantage reports one as a successful result with `"type": "rate_limit"` in the body. Instead the key is visible: `servers` and `tools` print `[key: <label> (i of n) -- lmcps rotate <server> ...]`, a failed `call` prints it on stderr, and SKILL.md tells the model to run `lmcps rotate` when a quota runs out.
-- **An entry is a set of variables, not one key.** Each non-`label` field becomes a `${VAR}`, and expansion already covered `url`, `headers`, `env`, `args` and `command`. That handles key-in-URL (Alpha Vantage, Firecrawl), key-in-header (Apify) and multi-part credentials with no extra code.
+- **An entry is a set of variables, not one key.** Each non-`label` field becomes a `${VAR}`, and expansion already covered `url`, `headers`, `env`, `args` and `command`. That handles key-in-URL (Alpha Vantage), key-in-header (Apify, Firecrawl) and multi-part credentials with no extra code.
 - **Labels are printed, values never are.** The label is meant to say which account a key belongs to, since that is what you need to know when a quota runs out.
 
 A rotation changes the expanded headers or URL, so it opens a new HTTP session rather than reusing one opened under the previous account.

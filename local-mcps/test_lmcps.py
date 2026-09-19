@@ -361,6 +361,8 @@ class StubHandler(BaseHTTPRequestHandler):
     """A JSON-RPC endpoint that records the headers it was sent."""
     seen_headers = {}
     mode = "json"
+    methods = []
+    live_sessions = set()
 
     def do_POST(self):
         # Lowercased: urllib title-cases outgoing header names, so `tomtom-api-key`
@@ -374,7 +376,19 @@ class StubHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"no bearer token provided")
             return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        StubHandler.methods.append(body["method"])
+        sid = self.headers.get("Mcp-Session-Id")
+        if StubHandler.mode == "session" and body["method"] != "initialize":
+            # Apify's behaviour, as measured: 400 without a session, 404 for one
+            # it does not know.
+            if sid is None:
+                return self.reply(400, {"error": "No valid session ID provided"})
+            if sid not in StubHandler.live_sessions:
+                return self.reply(404, {"error": f"Session ID {sid} not found"})
+        if "id" not in body:  # a notification
+            return self.reply(202, None)
         payload = {"jsonrpc": "2.0", "id": body["id"]}
+        extra = {}
         if body["method"] == "initialize":
             if StubHandler.mode == "no-initialize":
                 payload["error"] = {"code": -32601, "message": "not supported"}
@@ -382,18 +396,28 @@ class StubHandler(BaseHTTPRequestHandler):
                 payload["result"] = {"protocolVersion": "2025-06-18", "capabilities": {},
                                      "serverInfo": {"name": "stub-maps",
                                                     "title": "Stub Maps Server"}}
+                if StubHandler.mode == "session":
+                    sid = f"sess-{len(StubHandler.live_sessions) + 1}"
+                    StubHandler.live_sessions.add(sid)
+                    extra["Mcp-Session-Id"] = sid
         elif body["method"] == "tools/list":
             payload["result"] = {"tools": [{"name": "geocode", "description": "Find a place.",
                                             "inputSchema": {"type": "object"}}]}
         else:
             payload["result"] = {"content": [{"type": "text", "text": "51.5,-0.1"}]}
         raw = json.dumps(payload)
-        if StubHandler.mode == "sse":
+        if StubHandler.mode in ("sse", "session"):
             raw = f"event: message\ndata: {raw}\n\n"
-        self.send_response(200)
+        self.reply(200, raw, extra)
+
+    def reply(self, code, body, headers=None):
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(raw.encode())
+        if body is not None:
+            self.wfile.write((body if isinstance(body, str) else json.dumps(body)).encode())
 
     def do_GET(self):
         """Serves the config file, standing in for the Dropbox shared link."""
@@ -424,6 +448,8 @@ class TestHttp(Base):
         super().setUp()
         StubHandler.mode = "json"
         StubHandler.seen_headers = {}
+        StubHandler.methods = []
+        StubHandler.live_sessions = set()
         self.httpd = HTTPServer(("127.0.0.1", 0), StubHandler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.addCleanup(self.httpd.shutdown)
@@ -448,6 +474,12 @@ class TestHttp(Base):
         self.assertEqual(self.run_lmcps("call", "maps", "geocode", "{}").returncode, 0)
         self.assertNotIn("authorization", StubHandler.seen_headers)
 
+    def test_urllibs_default_user_agent_is_not_sent(self):
+        """Cloudflare blocks `Python-urllib/*` with a 403 (error 1010)."""
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        self.assertEqual(self.run_lmcps("call", "maps", "geocode", "{}").returncode, 0)
+        self.assertNotIn("python-urllib", StubHandler.seen_headers["user-agent"].lower())
+
     def test_streamable_http_alias(self):
         self.write_config({"maps": {"type": "streamable-http", "url": self.url}})
         self.assertEqual(self.run_lmcps("tools", "maps").returncode, 0)
@@ -468,9 +500,9 @@ class TestHttp(Base):
         self.assertIn("rejected the configured headers", r.stderr)
 
     def test_describe_over_http_asks_for_serverinfo(self):
-        """The call path skips the handshake, but `describe` must not report a
-        server as saying nothing about itself when it was never asked. TomTom
-        answers a bare initialize with a serverInfo and no instructions."""
+        """`describe` must not report a server as saying nothing about itself
+        when it was never asked. TomTom answers initialize with a serverInfo and
+        no instructions."""
         self.write_config({"maps": {"type": "http", "url": self.url}})
         r = self.run_lmcps("describe", "maps")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -484,6 +516,56 @@ class TestHttp(Base):
         r = self.run_lmcps("tools", "maps")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("geocode", r.stdout)
+
+    def test_a_session_is_opened_and_reused_across_calls(self):
+        StubHandler.mode = "session"
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        for _ in range(2):
+            r = self.run_lmcps("call", "maps", "geocode", "{}")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.strip(), "51.5,-0.1")
+        self.assertEqual(StubHandler.methods, [
+            "initialize", "notifications/initialized", "tools/call", "tools/call"])
+        self.assertEqual(StubHandler.seen_headers.get("mcp-session-id"), "sess-1")
+        self.assertEqual(StubHandler.seen_headers.get("mcp-protocol-version"), "2025-06-18")
+
+    def test_an_expired_session_is_reopened_once(self):
+        StubHandler.mode = "session"
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        self.assertEqual(self.run_lmcps("call", "maps", "geocode", "{}").returncode, 0)
+        StubHandler.live_sessions.clear()  # the server forgot it
+        r = self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(StubHandler.seen_headers.get("mcp-session-id"), "sess-1")
+        self.assertEqual(StubHandler.methods.count("initialize"), 2)
+
+    def test_changed_headers_open_a_new_session(self):
+        """A session belongs to the credentials that opened it. Presenting it
+        under a different key would at best 404 and at worst act as the wrong
+        account."""
+        StubHandler.mode = "session"
+        self.write_config({"maps": {"type": "http", "url": self.url,
+                                    "headers": {"Authorization": "Bearer ${K}"}}})
+        self.run_lmcps("call", "maps", "geocode", "{}", env={"K": "a"})
+        self.run_lmcps("call", "maps", "geocode", "{}", env={"K": "b"})
+        self.assertEqual(StubHandler.methods.count("initialize"), 2)
+        self.run_lmcps("call", "maps", "geocode", "{}", env={"K": "a"})
+        self.assertEqual(StubHandler.methods.count("initialize"), 2)
+
+    def test_a_stateless_server_is_initialized_once_per_conversation(self):
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        for _ in range(2):
+            self.assertEqual(self.run_lmcps("call", "maps", "geocode", "{}").returncode, 0)
+        self.assertEqual(StubHandler.methods, [
+            "initialize", "notifications/initialized", "tools/call", "tools/call"])
+        self.assertNotIn("mcp-session-id", StubHandler.seen_headers)
+
+    def test_http_tool_lists_are_not_cached(self):
+        """A session's tools can change mid-conversation."""
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        self.run_lmcps("tools", "maps")
+        self.run_lmcps("tools", "maps")
+        self.assertEqual(StubHandler.methods.count("tools/list"), 2)
 
     def test_unreachable_url(self):
         self.write_config({"maps": {"type": "http", "url": "http://127.0.0.1:1/mcp"}})

@@ -58,10 +58,11 @@ before the verb: `lmcps --timeout 240 call ...`.
 that text is JSON. A tool that reports failure exits non-zero with the message
 on stderr — check it rather than assuming a call worked.
 
-`tools` results are cached for the conversation, so enumerate freely. `call`
-always spawns the server — ~10–25s the first time npx or uv fetches a package,
-~1–2s after — so batch your work into as few calls as the task allows rather
-than probing incrementally.
+`tools` results for stdio servers are cached for the conversation, so enumerate
+freely. `call` always spawns a stdio server — ~10–25s the first time npx or uv
+fetches a package, ~1–2s after — so batch your work into as few calls as the
+task allows rather than probing incrementally. HTTP servers spawn nothing and
+answer in about a second, `tools` included.
 
 ## Where the config comes from
 
@@ -71,16 +72,15 @@ fails silently.
 
 ## Limits
 
-- **Stateless only.** The sandbox reboots between turns and no daemon survives,
-  so every call respawns the server. Fine for maps, search, docs and APIs;
-  useless for anything holding a session — a browser MCP, a server-side cursor,
-  a transaction.
+- **Stateless stdio only.** The sandbox reboots between turns and no daemon
+  survives, so every call respawns a stdio server. Fine for maps, search, docs
+  and APIs; useless for anything holding a session — a browser MCP, a
+  server-side cursor, a transaction. HTTP servers are different: their
+  `Mcp-Session-Id` lives on the server and is kept for the whole conversation.
 - **No interactive OAuth.** No browser, nothing persists — a server cannot *run*
   an OAuth flow here. A grant you already hold is different: inline its refresh
   token and hand it to the server at spawn (`references/config.md`). Header and
   query-parameter auth work.
 - **stdio and http/streamable-http only.** No `sse`, no WebSocket.
-- **No session-required HTTP.** The HTTP path is a stateless POST; a server that
-  demands an `Mcp-Session-Id` handshake will fail.
 - **No MCP Apps UI.** Interactive UI resources will not render from script
   output.

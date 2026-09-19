@@ -133,6 +133,21 @@ The servers do not appear in Claude's tool list and are not connectors, so nothi
 
 This is also why `servers` must not spawn. A test pins that a server with a nonexistent `command` still lists cleanly: an instruction that runs at the top of every conversation has to be safe when part of the config is broken, or it gets dropped.
 
+## HTTP sessions
+
+The HTTP path used to be a bare POST with no `initialize`. That covered TomTom, Firecrawl and Alpha Vantage, and shut out Apify, which answers anything without an `Mcp-Session-Id` with a 400.
+
+It now does the handshake, and keeps the result in `$LMCPS_HOME/sessions.json` for the conversation rather than deleting the session after each call. Reuse is not only a saved round trip: Apify hangs per-session state off the id, such as Actors added as tools mid-conversation, and a fresh session per call would lose it. A reused session makes an Apify call about 1.5s end to end, interpreter start included.
+
+- **Keyed by the URL and headers after expansion**, not by server name. A session belongs to the credentials that opened it, so editing a key opens a new one instead of presenting the old session under a different account.
+- **A 404 on a known session re-opens it and retries once.** It is the one retry in `lmcps`, because the spec defines the signal and requires the response. Checked against Apify by deleting a live session server-side.
+- **A server that answers `initialize` without an id is stateless**, and the record says so, so later calls skip the handshake. A server that refuses `initialize` outright is treated the same way.
+- **HTTP tool lists are not cached**, stdio ones still are. Listing over HTTP costs under a second, and a session's tools can change under it.
+
+Nothing is ever `DELETE`d. An abandoned session expires server-side on its own schedule, which is the cost of not knowing when a conversation ends.
+
+`urllib`'s default `Python-urllib/3.x` User-Agent is replaced: Cloudflare rejects it with a 403 (error 1010) in front of Alpha Vantage's endpoint, where curl gets through.
+
 ## Security posture
 
 The config sits in plaintext in a private Dropbox app folder, and holds API keys. `${VAR}` and `${VAR:-default}` expansion works in `command`, `args`, `env`, `url` and `headers`, so a key can be pasted per conversation instead — but the default is plaintext at rest, chosen deliberately over a manual step every conversation.
@@ -144,12 +159,12 @@ The share link is unlisted rather than secret — anyone with the URL can fetch 
 ## Testing
 
 ```
-python test_lmcps.py       # 67 offline tests, no network and no npx
+python test_lmcps.py       # 79 offline tests, no network and no npx
 bash integration_test.sh   # 18 live tests against real npx and uvx servers
 TOMTOM_KEY=... bash integration_test.sh   # +2, against the real TomTom server
 ```
 
-The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, and that no `Authorization` header is ever invented.
+The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, HTTP session reuse and expiry, and that no `Authorization` header is ever invented.
 
 The catalog gets its own group, and it is mostly failure cases, because `servers` runs at the top of every conversation and every one of them has to degrade rather than break: a missing index, a corrupt one, a server the index has never seen, a server that left the config, a per-server build error, and a build older than a day. `$LMCPS_CATALOG` points the tests at a fixture so none of it touches the network. The build side is pinned separately — that a broken server cannot fail the build, that it keeps its last-good entry when `--previous` has one, and that no `inputSchema` ever reaches the catalog.
 
@@ -162,8 +177,7 @@ The live suite covers the part a fake cannot, and earned its keep twice. Both bu
 
 Inherited from the sandbox, and not fixable here:
 
-- **Stateless servers only.** The sandbox reboots between turns and no daemon survives one, so every call respawns. Fine for maps, search, docs and APIs; useless for a browser MCP holding a session or anything with a server-side cursor.
+- **Stateless stdio servers only.** The sandbox reboots between turns and no daemon survives one, so every call respawns. Fine for maps, search, docs and APIs; useless for a browser MCP holding a session or anything with a server-side cursor.
 - **No OAuth-gated servers.** Would need a device flow or a hand-pasted token. Use a connector for those.
-- **No session-required HTTP.** The HTTP path is a stateless POST with no `initialize`; a server demanding `Mcp-Session-Id` will fail. TomTom tolerates statelessness.
 - **No `sse` or WebSocket transports.**
 - **No MCP Apps UI resources.** They won't render from script output regardless.

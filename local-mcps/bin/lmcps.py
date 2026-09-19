@@ -15,6 +15,7 @@ Config is Claude Code's `mcpServers` schema, so a block copied out of any
 server's README works unchanged. See SKILL.md for where it comes from.
 """
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -289,34 +290,115 @@ def rpc(method, _id=None, **params):
     return m
 
 
-def call_http(name, cfg, method, params):
-    url = expand(cfg["url"], os.environ)
-    headers = {"Content-Type": "application/json",
-               "Accept": "application/json, text/event-stream"}
-    # Whatever the config asks for, verbatim. The header name is the whole point
-    # of this path: a connector could not have sent `tomtom-api-key` at all.
-    for k, v in (cfg.get("headers") or {}).items():
-        headers[k] = expand(v, os.environ)
-    body = json.dumps(rpc(method, "lmcps-1", **params)).encode()
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+# HTTP sessions, kept for the conversation: Apify refuses requests without one
+# and hangs per-session state off it. Keyed by the URL and headers that opened
+# it, so a changed key never presents a session to the wrong account.
+SESSIONS = LMCPS_HOME / "sessions.json"
+
+
+class SessionExpired(Exception):
+    pass
+
+
+def load_sessions():
     try:
-        raw = urllib.request.urlopen(req, timeout=60).read().decode()
+        return json.loads(SESSIONS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_session(slot, record):
+    sessions = load_sessions()
+    sessions[slot] = record
+    LMCPS_HOME.mkdir(parents=True, exist_ok=True)
+    # Concurrent calls can race; a lost write costs a handshake, not a corrupt file.
+    tmp = SESSIONS.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(sessions), encoding="utf-8")
+    os.replace(tmp, SESSIONS)
+
+
+def http_post(name, url, headers, message):
+    """Returns (response headers, body); body is None for a 202 to a notification."""
+    req = urllib.request.Request(url, data=json.dumps(message).encode(),
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw, got = r.read().decode(), r.headers
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:300]
+        # The spec's signal that a session is gone -- the one failure we retry.
+        if e.code == 404 and "Mcp-Session-Id" in headers:
+            raise SessionExpired()
         if e.code in (401, 403):
             die(f"{e.code} from '{name}': the server rejected the configured "
                 f"headers. {detail}")
         die(f"HTTP {e.code} from '{name}': {detail}")
     except OSError as e:
         die(f"cannot reach '{name}' at {url}: {e}")
+    if not raw.strip():
+        return got, None
     # Plain JSON, or SSE-framed as one or more `data:` lines.
     if raw.lstrip().startswith("data:") or "\ndata:" in raw:
         raw = "".join(l[len("data:"):].strip() for l in raw.splitlines()
                       if l.startswith("data:"))
     try:
-        return json.loads(raw)
+        return got, json.loads(raw)
     except json.JSONDecodeError:
         die(f"'{name}' returned a non-JSON body: {raw[:300]}")
+
+
+def open_session(name, url, headers):
+    """A record with no id marks a stateless server, so later calls skip the
+    handshake. Refusing initialize counts too: such a server may still serve calls."""
+    got, init = http_post(name, url, headers, rpc(
+        "initialize", "lmcps-init", protocolVersion=PROTOCOL_VERSION,
+        capabilities={}, clientInfo=CLIENT_INFO))
+    result = (init or {}).get("result")
+    if result is None:
+        return {"id": None, "init": {}}
+    record = {"id": got.get("Mcp-Session-Id"), "init": result,
+              "version": result.get("protocolVersion") or PROTOCOL_VERSION}
+    http_post(name, url, session_headers(headers, record),
+              rpc("notifications/initialized"))
+    return record
+
+
+def session_headers(headers, record):
+    if not record.get("id"):
+        return headers
+    return {**headers, "Mcp-Session-Id": record["id"],
+            "MCP-Protocol-Version": record["version"]}
+
+
+def call_http(name, cfg, method, params):
+    url = expand(cfg["url"], os.environ)
+    # Cloudflare 403s urllib's default `Python-urllib/3.x` (Alpha Vantage does).
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream",
+               "User-Agent": f"{CLIENT_INFO['name']}/{CLIENT_INFO['version']}"}
+    # Whatever the config asks for, verbatim. The header name is the whole point
+    # of this path: a connector could not have sent `tomtom-api-key` at all.
+    for k, v in (cfg.get("headers") or {}).items():
+        headers[k] = expand(v, os.environ)
+
+    fingerprint = hashlib.sha256(json.dumps([url, headers], sort_keys=True)
+                                 .encode()).hexdigest()[:16]
+    slot = f"{name}:{fingerprint}"
+    record = load_sessions().get(slot)
+    if record is None:
+        record = open_session(name, url, headers)
+        save_session(slot, record)
+    message = rpc(method, "lmcps-1", **params)
+    try:
+        _, resp = http_post(name, url, session_headers(headers, record), message)
+    except SessionExpired:
+        record = open_session(name, url, headers)
+        save_session(slot, record)
+        _, resp = http_post(name, url, session_headers(headers, record), message)
+    LAST_INIT.update(record.get("init") or {})
+    if resp is None:
+        die(f"'{name}' sent an empty response to {method}")
+    return resp
 
 
 def call_stdio(name, cfg, method, params):
@@ -456,31 +538,23 @@ def call(name, cfg, method, params):
 
 
 def list_tools(name, cfg, refresh=False):
-    """Live tools/list plus what the server said about itself at startup, cached
-    for the rest of the conversation. No durable catalog to keep in sync: the
-    sandbox disk dies with the conversation, so the cache expires on its own."""
+    """Live tools/list plus what the server said about itself at startup. Only
+    stdio results are cached: HTTP listing is cheap, and a session's tools can
+    change mid-conversation (Apify adds Actors as tools)."""
+    http = cfg.get("type") in ("http", "streamable-http")
     cache = LMCPS_HOME / "tools" / f"{name}.json"
-    if cache.is_file() and not refresh:
+    if not http and cache.is_file() and not refresh:
         try:
             return json.loads(cache.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            pass
-    # The call path skips the handshake on HTTP, which would report a server as
-    # saying nothing about itself when it was never asked. One extra POST, on a
-    # cache miss only; a server that refuses a bare initialize still lists fine.
-    if cfg.get("type") in ("http", "streamable-http"):
-        try:
-            LAST_INIT.update(call_http(name, cfg, "initialize", {
-                "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                "clientInfo": CLIENT_INFO}).get("result") or {})
-        except SystemExit:
             pass
 
     entry = {"tools": call(name, cfg, "tools/list", {}).get("tools", []),
              "instructions": LAST_INIT.get("instructions"),
              "serverInfo": LAST_INIT.get("serverInfo")}
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(entry), encoding="utf-8")
+    if not http:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(entry), encoding="utf-8")
     return entry
 
 

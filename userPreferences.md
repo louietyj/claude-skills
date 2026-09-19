@@ -20,7 +20,7 @@ Run it **to find out what I have**, not once something already looks worth reach
 2. **mcp-reddit** (Desktop) — use to fetch full Reddit post/thread content once identified.
 3. **headless-browser** — pinchtab-backed skill for anything that doesn't need my logged-in session. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
 4. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
-5. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit. Remember to fetch the schema first.
+5. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit. Remember to fetch the schema first. Don't project nested fields (topComments.body) in get-dataset-items fields; it silently drops them. Use topComments whole or omit fields.
 6. **mcp-jina** — server-side fetch, so it clears both the sandbox egress proxy and web_fetch's URL-provenance rule in one call. No captcha solver. Doesn't support Reddit.
 7. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when headless-browser and firecrawl still can't retrieve the content.
 
@@ -43,6 +43,9 @@ Preapproved:
 - AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
 - Google reviews: `web_wanderer/google-reviews-scraper`
 - Yelp reviews: `web_wanderer/yelp-reviews-scraper`
+
+IMPORTANT:
+- get-dataset-items `fields`: dot-notation paths into arrays of objects (e.g. `topComments.body`) silently drop the whole field, even though call-actor lists them as available. Request the array whole (`topComments`) or omit `fields`. If the fetch returns less than it should, re-run without fields before assuming the actor didn't return it.
 
 Feel free to search for and use other actors not in the list to accomplish a task; they are fine if pay-per-use only (no flat fee) and expected cost is under $0.05 — prefer cheapest. Before trusting one: rating/user-count don't reliably predict live reliability (a publisher's other well-rated actors are a better signal than one actor's own small sample); watch for null-heavy fields on unenriched rows, "succeeded with 0 items" as a silent failure, and a bad rating that may be scoped to one input mode (e.g. crawl-from-search vs. direct-URL) rather than the whole actor.
 </apify_actors>

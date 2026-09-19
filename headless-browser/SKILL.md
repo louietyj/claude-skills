@@ -106,4 +106,5 @@ changes.
 - Never run `pinchtab skill update` or `pinchtab skill sync` -- they write
   into other agent skill directories found on the machine. This skill is
   self-contained by design.
-- `pinchtab server stop` when finished. Optional; the sandbox is disposable.
+- Leave the server running when you're done. Follow-up questions often need
+  the browser again, and the sandbox is disposable anyway.

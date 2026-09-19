@@ -102,4 +102,4 @@ If a caller does export `PINCHTAB_SESSION` by hand anyway (because they read pin
 ## Notes
 
 - Never run `pinchtab skill update` or `pinchtab skill sync` — they write into other agent skill directories found on the machine. This skill is self-contained by design and doesn't need either.
-- `pinchtab server stop` when finished is optional; the sandbox is disposable.
+- SKILL.md says to leave the server running. In a disposable sandbox, stopping it saves nothing, costs a tool call, and makes any follow-up re-run setup.

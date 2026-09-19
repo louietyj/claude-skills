@@ -41,6 +41,8 @@ Preapproved:
 - Walmart detail: `e-commerce/walmart-product-detail-scraper` — needs a direct product URL, not a search/category URL.
 - AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search (`maxProducts` has a hard minimum of 50/query; cap billing via `callOptions.maxItems`).
 - AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
+- Google reviews: `web_wanderer/google-reviews-scraper`
+- Yelp reviews: `web_wanderer/yelp-reviews-scraper`
 
 Feel free to search for and use other actors not in the list to accomplish a task; they are fine if pay-per-use only (no flat fee) and expected cost is under $0.05 — prefer cheapest. Before trusting one: rating/user-count don't reliably predict live reliability (a publisher's other well-rated actors are a better signal than one actor's own small sample); watch for null-heavy fields on unenriched rows, "succeeded with 0 items" as a silent failure, and a bad rating that may be scoped to one input mode (e.g. crawl-from-search vs. direct-URL) rather than the whole actor.
 </apify_actors>

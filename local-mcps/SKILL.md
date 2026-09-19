@@ -40,7 +40,7 @@ a connector cannot send their auth header.
 ```bash
 lmcps servers                          # configured servers + cached tool index; spawns nothing
 lmcps tools <server>                   # the server's own instructions, then its tools
-lmcps tools <server> --schema <tool>   # one tool's full input schema
+lmcps tools <server> --schema <a>,<b>  # input schemas, one line per tool
 lmcps call <server> <tool> '{"a": 1}'  # invoke it
 lmcps describe <server>                # what a server says about itself, to write its `description`
 lmcps rotate <server> [LABEL]          # switch to the server's next API key, or a named one

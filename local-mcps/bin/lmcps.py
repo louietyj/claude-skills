@@ -5,7 +5,7 @@ header name is not on Anthropic's allowlist. Both are reachable from the
 code-execution sandbox.
 
     lmcps servers                          # names + transport + one-liner
-    lmcps tools <server> [--schema TOOL]   # live tools/list
+    lmcps tools <server> [--schema T1,T2]  # live tools/list
     lmcps call <server> <tool> '{"a": 1}'  # the thing that matters
     lmcps describe <server>                # material for a server's `description`
     lmcps rotate <server> [LABEL]          # next key in the server's `keys` pool
@@ -734,11 +734,18 @@ def cmd_tools(args):
         return
 
     if args.schema:
-        match = next((t for t in tools if t.get("name") == args.schema), None)
-        if match is None:
-            known = ", ".join(t.get("name", "") for t in tools) or "(none)"
-            die(f"'{args.server}' has no tool '{args.schema}'. Tools: {known}")
-        print(json.dumps(match, indent=2))
+        by_name = {t.get("name"): t for t in tools}
+        wanted = [n.strip() for n in args.schema.split(",") if n.strip()]
+        missing = [n for n in wanted if n not in by_name]
+        if missing:
+            known = ", ".join(by_name) or "(none)"
+            die(f"'{args.server}' has no tool '{', '.join(missing)}'. Tools: {known}")
+        # The shape native tool definitions arrive in -- one line, keys sorted at
+        # every level -- so these read like every other tool, not a new format.
+        for n in wanted:
+            t = by_name[n]
+            print(json.dumps({"description": t.get("description", ""), "name": n,
+                              "parameters": t.get("inputSchema", {})}, sort_keys=True))
         return
 
     note = key_note(args.server, cfg)
@@ -757,7 +764,7 @@ def cmd_tools(args):
     width = max(len(t.get("name", "")) for t in tools)
     for t in tools:
         print(f"{t.get('name', '').ljust(width)}  {first_line(t.get('description'))}")
-    print(f"\n`lmcps tools {args.server} --schema <tool>` for a tool's full input schema.")
+    print(f"\n`lmcps tools {args.server} --schema <tool>[,<tool>...]` for full input schemas.")
 
 
 def cmd_describe(args):
@@ -1016,7 +1023,8 @@ def main():
 
     p = sub.add_parser("tools", help="a server's tools")
     p.add_argument("server")
-    p.add_argument("--schema", metavar="TOOL", help="full input schema for one tool")
+    p.add_argument("--schema", metavar="TOOLS",
+                   help="input schemas for comma-separated tools, one line each")
     p.add_argument("--refresh", action="store_true", help="re-enumerate, ignoring the cache")
     p.add_argument("--json", action="store_true", help="the raw tools/list entry")
     p.set_defaults(fn=cmd_tools)

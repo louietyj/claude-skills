@@ -140,13 +140,24 @@ class TestTools(Base):
         self.assertNotIn("Second line", r.stdout)
         self.assertIn("boom", r.stdout)
 
-    def test_schema_prints_the_full_tool(self):
+    def test_schema_matches_the_native_tool_definition_shape(self):
         self.write_config({"adder": fake_server()})
         r = self.run_lmcps("tools", "adder", "--schema", "add")
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(r.stdout.strip().splitlines()), 1)
+        self.assertTrue(r.stdout.startswith('{"description": '))
         schema = json.loads(r.stdout)
+        self.assertEqual(list(schema), ["description", "name", "parameters"])
+        self.assertEqual(list(schema["parameters"]), sorted(schema["parameters"]))
         self.assertEqual(schema["name"], "add")
-        self.assertIn("a", schema["inputSchema"]["properties"])
+        self.assertIn("a", schema["parameters"]["properties"])
+
+    def test_schema_takes_several_tools_one_line_each(self):
+        self.write_config({"adder": fake_server()})
+        r = self.run_lmcps("tools", "adder", "--schema", "add, boom")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        names = [json.loads(l)["name"] for l in r.stdout.strip().splitlines()]
+        self.assertEqual(names, ["add", "boom"])
 
     def test_schema_for_unknown_tool_lists_the_real_ones(self):
         self.write_config({"adder": fake_server()})

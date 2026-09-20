@@ -8,6 +8,7 @@ Skills for Claude, one subdirectory each.
 - [`local-mcps/`](local-mcps/) — runs MCP servers claude.ai's connectors can't reach: `npx`/`uvx` stdio servers, and HTTP servers whose auth header name isn't allowlisted.
 - [`request-text/`](request-text/) — asks the user for text through a one-shot link (a form, fine on a phone). The submission lands in the sandbox as JSON, end-to-end encrypted, so secrets stay out of the transcript and long pastes are never re-emitted.
 - [`retell-dialer/`](retell-dialer/) — places a real phone call and supervises it live: a voice agent runs the conversation and consults Claude mid-call, which answers within seconds and can steer unprompted.
+- [`voice-mode-guide/`](voice-mode-guide/) — run in chat before switching the mobile app to voice: prints what changes, the workarounds, and the skill index into the transcript, which survives the toggle when the injected context does not.
 
 Each subdirectory is self-contained: its own `SKILL.md`, setup script, and README/docs where applicable. `session-init/` is the exception — it orchestrates the other two and expects them installed alongside it, reporting them as missing rather than failing if they aren't.
 

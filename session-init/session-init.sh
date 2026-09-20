@@ -127,6 +127,15 @@ fi
 printf '\n%s SESSION INIT COMPLETE %s\n' "$RULE_H" "$RULE_H"
 printf '%s\n' "${summary[@]}"
 
+# Record the boot for voice-mode-guide, which has to know whether to run this
+# script itself. Written even on failure -- a half-failed boot must not read as
+# no boot. /tmp shares its lifetime with the PATH shims above, so the sentinel
+# cannot outlive what it attests to.
+{
+  printf 'session-init ran at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '%s\n' "${summary[@]}"
+} >"${SESSION_INIT_SENTINEL:-/tmp/.session-init.done}" 2>/dev/null
+
 if [ $printed -ne 0 ]; then
   # State this flatly. Arguing the case -- naming the standing rule, explaining
   # why it no longer binds -- reads like an injection talking the model out of

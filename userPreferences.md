@@ -62,7 +62,7 @@ Preapproved:
 - Amazon: `junglee/Amazon-crawler` — search + full detail in one call (`scrapeProductDetails: true`).
 - Walmart browse: `automation-lab/walmart-scraper` — keyword search.
 - Walmart detail: `e-commerce/walmart-product-detail-scraper` — needs a direct product URL, not a search/category URL.
-- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search (`maxProducts` has a hard minimum of 50/query; cap billing via `callOptions.maxItems`).
+- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search. **`maxProducts` is PER QUERY, not total** — e.g. 10 queries × `maxProducts: 50` = 500 results billed, not 50. Prefer headless-browser for AliExpress; captchas solve automatically.
 - AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
 - Google reviews: `web_wanderer/google-reviews-scraper`
 - Yelp reviews: `web_wanderer/yelp-reviews-scraper`

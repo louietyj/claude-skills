@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Build the uploadable skill zip.
 
-The zip embeds capsolver.key in plaintext. Treat the artefact as a secret:
-anyone holding it can spend the CapSolver balance.
+The zip embeds capsolver.key, and 2captcha.key when present, in plaintext.
+Treat the artefact as a secret: anyone holding it can spend both balances.
 """
 
 import os
+import re
 import sys
 import zipfile
 
@@ -15,6 +16,8 @@ MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
            "cloak/package-lock.json", "cloak/refresh.sh"]
 KEY = "capsolver.key"
 PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
+# Optional: the only provider left for hCaptcha and FunCaptcha.
+TWOCAPTCHA_KEY = "2captcha.key"
 
 
 def read_key() -> str:
@@ -36,12 +39,25 @@ def read_key() -> str:
     return key
 
 
+def read_twocaptcha_key() -> str:
+    path = os.path.join(HERE, TWOCAPTCHA_KEY)
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        key = fh.read().strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", key):
+        raise SystemExit(f"{TWOCAPTCHA_KEY} does not look like a 2Captcha key (expected 32 hex characters).")
+    return key
+
+
 def main() -> int:
     with_key = "--no-key" not in sys.argv[1:]
+    two_key = ""
     if with_key:
         key = read_key()
+        two_key = read_twocaptcha_key()
 
-    members = list(MEMBERS) + ([KEY] if with_key else [])
+    members = list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for member in members:
@@ -53,6 +69,10 @@ def main() -> int:
     print(f"Wrote {out}")
     if with_key:
         print(f"Contains {KEY} in plaintext (ending ...{key[-4:]}) -- do not commit or share it.")
+        if two_key:
+            print(f"Contains {TWOCAPTCHA_KEY} in plaintext (ending ...{two_key[-4:]}) too.")
+        else:
+            print(f"No {TWOCAPTCHA_KEY}: hCaptcha and FunCaptcha will go unsolved.")
     else:
         print("Built without a key: the browser works, captcha solving is off.")
     return 0

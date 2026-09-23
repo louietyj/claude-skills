@@ -1,5 +1,6 @@
-# CapSolver key. This repo is public; the key is live and funded. The uploaded
-# skill embeds it in plaintext, so the packaged zip is a secret too.
+# Solver keys. This repo is public; the keys are live and funded. The uploaded
+# skill embeds them in plaintext, so the packaged zip is a secret too.
 capsolver.key
-!capsolver.key.example
+2captcha.key
+!*.key.example
 *.zip

@@ -260,18 +260,30 @@ for k in allowClipboard allowStateExport allowFileScheme; do
 done
 "$REAL" config set security.allowedDomains '*' >/dev/null
 
-# CapSolver. The key is never committed: it comes from the environment, or from
-# an untracked key file beside this script. Without one the solver stays
-# unregistered and cloak's fingerprint is all that carries a page -- which is
-# enough for risk-scored anti-bot (Cloudflare, DataDome) but not for a site that
-# gates every visitor behind a captcha, archive.today being the common one.
+# Captcha solving. Keys are never committed: each comes from the environment, or
+# from an untracked key file beside this script. CapSolver solves reCAPTCHA,
+# Turnstile, AWS WAF, GeeTest and MTCaptcha; 2Captcha is the only one left that
+# solves hCaptcha and FunCaptcha, and backs CapSolver up on the rest. With neither
+# key cloak's fingerprint is all that carries a page -- enough for risk-scored
+# anti-bot (Cloudflare, DataDome) but not for a site that gates every visitor
+# behind a captcha, archive.today being the common one.
 SOLVER_NOTE='no key -- captcha solving off'
 CAPSOLVER_KEY=${CAPSOLVER_API_KEY:-}
 [ -n "$CAPSOLVER_KEY" ] || CAPSOLVER_KEY=$(cat "$SKILL_DIR/capsolver.key" 2>/dev/null | tr -d '\r\n')
+TWOCAPTCHA_KEY=${TWOCAPTCHA_API_KEY:-}
+[ -n "$TWOCAPTCHA_KEY" ] || TWOCAPTCHA_KEY=$(cat "$SKILL_DIR/2captcha.key" 2>/dev/null | tr -d '\r\n')
+SOLVERS='' KEYS_NOTE=''
 if [ -n "$CAPSOLVER_KEY" ]; then
   "$REAL" config set autoSolver.external.capsolverKey "$CAPSOLVER_KEY" >/dev/null 2>&1
+  SOLVERS=capsolver, KEYS_NOTE="capsolver ...${CAPSOLVER_KEY: -4}"
+fi
+if [ -n "$TWOCAPTCHA_KEY" ]; then
+  "$REAL" config set autoSolver.external.twoCaptchaKey "$TWOCAPTCHA_KEY" >/dev/null 2>&1
+  SOLVERS=${SOLVERS}twocaptcha, KEYS_NOTE="${KEYS_NOTE:+$KEYS_NOTE, }2captcha ...${TWOCAPTCHA_KEY: -4}"
+fi
+if [ -n "$SOLVERS" ]; then
   "$REAL" config set autoSolver.enabled true >/dev/null
-  "$REAL" config set autoSolver.solvers 'capsolver,cloudflare,semantic,jschallenge' >/dev/null
+  "$REAL" config set autoSolver.solvers "${SOLVERS}cloudflare,semantic,jschallenge" >/dev/null
   "$REAL" config set autoSolver.maxAttempts 3 >/dev/null
   # A reCAPTCHA image challenge routinely runs past 60s. The 30s default kills
   # the poll after CapSolver has already been paid for the solve.
@@ -285,7 +297,7 @@ if [ -n "$CAPSOLVER_KEY" ]; then
   # idea a solve happened. Awaiting only costs time on a page carrying a
   # challenge, which is unusable until it is solved anyway.
   "$REAL" config set autoSolver.awaitOnNavigate true >/dev/null 2>&1
-  SOLVER_NOTE="OK -- capsolver key ending ...${CAPSOLVER_KEY: -4}"
+  SOLVER_NOTE="OK -- keys: $KEYS_NOTE"
 fi
 end 0
 note 'browser runtime' "$BROWSER_NOTE"

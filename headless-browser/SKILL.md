@@ -88,6 +88,28 @@ already paid for. Just proceed: fill the form, press submit, read the page.
 A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
 adds a per-attempt `history` naming the solver that refused and why.
 
+`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
+Arkose FunCaptcha, GeeTest v4, MTCaptcha and AWS WAF. People solve hCaptcha
+and FunCaptcha, so those take one to three minutes: expect the pending HINT and
+run its check again rather than giving up. A solve is paid for once, and acting
+on the solved page does not buy another.
+
+Puzzles without a sitekey (drag the piece into the gap, turn the image upright,
+pick the matching tiles, read a flickering GIF) are never solved on `nav`.
+Look at the screenshot, name the parts with selectors, and hand them over:
+
+```bash
+pinchtab vision slider <piece> --background <bg> --handle <handle>
+pinchtab vision rotate <image> [--background <bg>] --handle <h> --track <t>
+pinchtab vision select <image> --question "all shoes" --click
+pinchtab vision ocr <gif>
+```
+
+It reads the images off the page, costs about $0.002, and drags with a human
+path. For a bare "slide to verify" bar with no picture, you need no answer,
+only a human-looking drag to the end:
+`pinchtab drag <handle> --drag-x <track width> --humanize`.
+
 Most pages never reach this. Cloudflare and DataDome mostly challenge only a
 visitor they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com
 and scrapingcourse's own "Cloudflare challenge" all load untouched. Some sites
@@ -98,7 +120,7 @@ sites that gate every visitor behind a real captcha -- archive.today and its
 mirrors (archive.ph, archive.is, archive.md) are the ones you will hit.
 
 This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
-the solver as a stub. Without a key the solver is absent and nothing else
+the solver as a stub. Without keys the solvers are absent and nothing else
 changes.
 
 ## Logged-in accounts

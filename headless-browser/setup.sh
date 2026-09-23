@@ -370,7 +370,7 @@ esac
 # through `| head`, which would otherwise cut the path off.
 O=
 case "${1:-}" in
-  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload)
+  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload|vision)
     [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] && O=$(mktemp) ;;
 esac
 if [ -n "$O" ]; then exec 3>"$O"; else exec 3>&1; fi

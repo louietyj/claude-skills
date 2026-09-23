@@ -49,6 +49,41 @@ The shim screenshots after every page-changing command (`nav`, `click`, `fill`, 
 
 Most sites never need it. Cloudflare, DataDome and friends score each visitor and mostly challenge only a bad one; cloak's fingerprint scores fine, and SteamDB, g2.com and scrapingcourse's own "Cloudflare challenge" page all load with no challenge at all. What needs solving is a site that gates *every* visitor behind a real captcha regardless of reputation — archive.today and its mirrors are the ones worth caring about. Most public "captcha demo" pages are useless for testing: they use dummy sitekeys (`1x0000…`, `3x0000…`) that no solving service will process.
 
+### Two providers
+
+CapSolver dropped hCaptcha and FunCaptcha: `createTask` answers both with "We don't support this service". 2Captcha still solves both (hCaptcha is undocumented but works), so `setup.sh` loads `2captcha.key` beside `capsolver.key`. Each provider handles only the types it can solve, and CapSolver is tried first:
+
+| Captcha | CapSolver | 2Captcha |
+|---|---|---|
+| reCAPTCHA v2/v3, Enterprise, invisible; Turnstile; MTCaptcha; GeeTest v4 | yes | fallback |
+| AWS WAF | yes | no (its Amazon task returns a voucher that needs one more exchange) |
+| hCaptcha, FunCaptcha | no | yes |
+
+2Captcha's solves are done by people: hCaptcha took 55–150s live. The fork gives 2Captcha 180s whatever `solverTimeoutSec` says. Any solve that fails after it was paid for, including a poll that runs out of time (the task is still billed when it finishes), ends the run instead of buying another. The fork also stops re-solving a challenge that is already solved: the widget stays in the DOM, and with `triggerOnAction` every `fill` on the solved page used to buy and wait for a new token.
+
+Not solvable, and refused before anything is spent:
+- **GeeTest v3.** Its `challenge` is single-use, and the widget's own `get.php` has spent it before the page shows the puzzle.
+- **DataDome and Cloudflare Challenge (`AntiCloudflareTask`).** Both need a proxy that shares the browser's IP.
+- **AliExpress punish (baxia/NoCaptcha).** No provider has a task for it. From a residential IP with cloak it never appeared. If it does, `pinchtab drag <handle> --drag-x <width> --humanize` is the tool to try.
+
+### Vision
+
+Puzzles without a sitekey go through `pinchtab vision` (CapSolver Vision Engine): slider, rotate, image select, GIF text. Vision Engine validates nothing (three bytes of garbage came back as "angle 0" and were billed), so the fork checks every image first. It reads the images from Chrome's cache and never takes a slider from a screenshot. Live, it cleared nopecha.com's GeeTest v4 slide first time ("1.7 s, you beat 97% of users"). Its `rotate_2` model refused 2Captcha's rotate demo image, a plain rotated photo rather than the concentric type it expects, without charging.
+
+### Test targets with real sitekeys
+
+Each page below runs a real, server-checked challenge. Submit the page's own form after the solve to see the verdict:
+
+| Captcha | Page |
+|---|---|
+| reCAPTCHA v2, invisible, v2 Enterprise, v3, v3 Enterprise | `2captcha.com/demo/recaptcha-*` (CapSolver refuses 2Captcha's own sitekeys, so these exercise the fallback) |
+| reCAPTCHA via CapSolver | `www.google.com/recaptcha/api2/demo` |
+| hCaptcha | `accounts.hcaptcha.com/demo` |
+| MTCaptcha, GeeTest v4 | `2captcha.com/demo/mtcaptcha`, `2captcha.com/demo/geetest-v4` |
+| GeeTest v4 slide (Vision) | `nopecha.com/captcha/geetest?nocache#slide`, after switching auto-solve triggers off |
+| AWS WAF | `hiring.amazon.ca/application/api/candidate-application/update-application` |
+| FunCaptcha | `demo.arkoselabs.com/?key=DF9C4D87-CB7B-4062-9FEB-BADB6ADA61E6` (2Captcha's workers returned unsolvable twice) |
+
 Cloudflare's current *managed* challenge ("Just a moment…", `cType: 'managed'`) is different, and egov.uscis.gov shows it to every visitor. Cloak passes it unaided in a few seconds, which pinchtab logs as solver `cleared`. CapSolver cannot clear it: the widget sits in a closed shadow root with no readable sitekey, and Cloudflare issues `cf_clearance` to the browser that ran the check — CapSolver only offers that as a proxied `AntiCloudflareTask`.
 
 ## Debugging
@@ -81,6 +116,7 @@ There is now a credentials file:
 
 - **`capsolver.key` ships in the zip in plaintext**, exactly as `durable-filesystem/credentials.json` does. The uploaded skill is a credential — anyone holding it can spend the CapSolver balance. Don't commit it, don't share the zip.
 - Copy `capsolver.key.example` to `capsolver.key` and put the real key in it, or set `CAPSOLVER_API_KEY` in the environment instead. Without either, the solver is simply absent and everything else works unchanged.
+- `2captcha.key` (or `TWOCAPTCHA_API_KEY`) is optional and handled the same way. `package.py` ships it when it is present and checks that it looks like a key (32 hex characters). Without it, hCaptcha and FunCaptcha go unsolved.
 
 ## The session shim
 

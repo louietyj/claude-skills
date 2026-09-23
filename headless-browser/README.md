@@ -70,6 +70,19 @@ Not solvable, and refused before anything is spent:
 
 Puzzles without a sitekey go through `pinchtab vision` (CapSolver Vision Engine): slider, rotate, image select, GIF text. Vision Engine validates nothing (three bytes of garbage came back as "angle 0" and were billed), so the fork checks every image first. It reads the images from Chrome's cache and never takes a slider from a screenshot. Live, it cleared nopecha.com's GeeTest v4 slide first time ("1.7 s, you beat 97% of users"). Its `rotate_2` model refused 2Captcha's rotate demo image, a plain rotated photo rather than the concentric type it expects, without charging.
 
+The Vision models are each trained on a particular vendor's puzzle, and elsewhere they are unreliable:
+- **Every module answers CapSolver's own reference images** in the expected shape: `ocr_gif` text, a `rotate_2` angle, and `shein` rects as `{x1,y1,x2,y2}`. `rotate_1` said 0° for a piece that visibly needs turning.
+- **DingXiang's rotate and jigsaw demos** (`dingxiang-inc.com/business/captcha`) failed every Vision attempt. The jigsaw's `slider_1` distance pointed at nothing near the real gap: the puzzle has a decoy gap, and the answer left the piece almost where it started. Dragging the piece onto the gap by eye (mouse down, move, screenshot, up) passed, with "验证成功", so DingXiang's behaviour check accepts pinchtab's pointer. The wrong answers came from the engine.
+
+### More verified targets
+
+| Captcha | Page | Result |
+|---|---|---|
+| Turnstile, managed, real sitekey | `solvegate.io/demo/managed` | CapSolver solved it in 3.4s; the page's "Verify this token" returned Cloudflare siteverify "Token accepted" |
+| Slider / rotate (DingXiang) | `dingxiang-inc.com/business/captcha` | see above |
+
+FunCaptcha is still unproven. 2Captcha returns unsolvable for `demo.arkoselabs.com` with or without `userAgent` and `funcaptchaApiJSSubdomain`. capzy.ai's "live widget" demos render nothing. The real Arkose pages (GitHub, Roblox and Microsoft signup) sit behind account creation.
+
 ### Test targets with real sitekeys
 
 Each page below runs a real, server-checked challenge. Submit the page's own form after the solve to see the verdict:

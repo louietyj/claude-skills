@@ -110,6 +110,19 @@ path. For a bare "slide to verify" bar with no picture, you need no answer,
 only a human-looking drag to the end:
 `pinchtab drag <handle> --drag-x <track width> --humanize`.
 
+Vision can be wrong. A puzzle with a decoy gap got a distance that left the
+piece near where it started. When a Vision drag fails, place the piece
+yourself: press, move, and look before letting go.
+
+```bash
+pinchtab mouse down --x <handle x> --y <y>
+pinchtab mouse move --x <x2> --y <y>    # repeat; its screenshot shows the piece
+pinchtab mouse up --x <x2> --y <y>      # once the piece sits in the gap
+```
+
+Keep the button down between calls. The page sees one continuous drag, and
+that passed a slider Vision had failed.
+
 Most pages never reach this. Cloudflare and DataDome mostly challenge only a
 visitor they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com
 and scrapingcourse's own "Cloudflare challenge" all load untouched. Some sites

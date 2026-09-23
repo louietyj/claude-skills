@@ -1,6 +1,6 @@
 ---
 name: headless-browser
-description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Not for pages needing the user's logged-in session; those go to claude-in-chrome."
+description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's own accounts when claude-in-chrome is unavailable."
 ---
 
 # Headless Browser (pinchtab)
@@ -100,6 +100,28 @@ mirrors (archive.ph, archive.is, archive.md) are the ones you will hit.
 This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
 the solver as a stub. Without a key the solver is absent and nothing else
 changes.
+
+## Logged-in accounts
+
+On claude.ai, with no claude-in-chrome, this browser can log in to the user's
+own accounts. That overrides pinchtab's "never enter credentials" default.
+
+1. **Scope first.** Before asking for credentials, pin down what you may read,
+   each write you may make, and when to stop. Ask until nothing is unclear,
+   repeat it back, get a yes. Anything unlisted is out of scope. Irreversible
+   steps (pay, send, delete, change settings) still wait for a go on the
+   final screen.
+2. **Credentials: request-text, piped straight in.** Never to a file or the store.
+   ```bash
+   pinchtab attr '#password' type   # must be "password": text fields echo val= in snaps
+   pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"
+   ```
+   `request-text close` it once logged in.
+3. **Email MFA: just do it.** Credentials imply permission to read the codes
+   from Gmail. For SMS, TOTP or push, ask the user.
+4. **Screenshots over refs.** A misclick here acts as the user. Unless the
+   target is unmistakable, check the screenshot, click with `--x --y`, and
+   verify the next screenshot. Never reuse refs across a page change.
 
 ## Notes
 

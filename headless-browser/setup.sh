@@ -458,7 +458,7 @@ fi
 # text is in context, and stating them first invites reading the file for the
 # rule they already overrode.
 printf '\n%s CORRECTIONS TO THE FILE ABOVE %s\n' "$RULE_H" "$RULE_H"
-printf 'Three things in that file are wrong for this sandbox. Everything else in\n'
+printf 'Four things in that file are wrong for this sandbox. Everything else in\n'
 printf 'it applies exactly as written.\n'
 printf '\n1. Its Core Workflow opens with\n'
 printf '     export PINCHTAB_SESSION=$(pinchtab session create --agent-id ...)\n'
@@ -470,6 +470,8 @@ printf '   into other agent skill directories found on the machine.\n'
 printf '3. Anything it says about picking a browser or profile is already settled\n'
 printf '   by the steps above -- do not reconfigure `browser.binary`, the security\n'
 printf '   gates, or `browsers.default`.\n'
+printf '4. Its Safety Defaults forbid entering credentials. For accounts the\n'
+printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
 printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
 printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
 printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'

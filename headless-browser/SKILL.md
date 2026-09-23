@@ -89,10 +89,13 @@ A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
 adds a per-attempt `history` naming the solver that refused and why.
 
 `nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
-Arkose FunCaptcha, GeeTest v4, MTCaptcha and AWS WAF. People solve hCaptcha
-and FunCaptcha, so those take one to three minutes: expect the pending HINT and
-run its check again rather than giving up. A solve is paid for once, and acting
-on the solved page does not buy another.
+Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
+Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
+puzzle is showing: after the click that opens it, or once it is scrolled into
+view. People solve hCaptcha, FunCaptcha and the 2Captcha-only vendors, so those
+take one to three minutes: expect the pending HINT and run its check again
+rather than giving up. A solve is paid for once, and acting on the solved page
+does not buy another.
 
 Puzzles without a sitekey (drag the piece into the gap, turn the image upright,
 pick the matching tiles, read a flickering GIF) are never solved on `nav`.

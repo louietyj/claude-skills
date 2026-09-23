@@ -58,6 +58,7 @@ CapSolver dropped hCaptcha and FunCaptcha: `createTask` answers both with "We do
 | reCAPTCHA v2/v3, Enterprise, invisible; Turnstile; MTCaptcha; GeeTest v4 | yes | fallback |
 | AWS WAF | yes | no (its Amazon task returns a voucher that needs one more exchange) |
 | hCaptcha, FunCaptcha | no | yes |
+| Tencent, NetEase Yidun, Yandex SmartCaptcha, Prosopo, Lemin | no | yes |
 
 2Captcha's solves are done by people: hCaptcha took 55–150s live. The fork gives 2Captcha 180s whatever `solverTimeoutSec` says. Any solve that fails after it was paid for, including a poll that runs out of time (the task is still billed when it finishes), ends the run instead of buying another. The fork also stops re-solving a challenge that is already solved: the widget stays in the DOM, and with `triggerOnAction` every `fill` on the solved page used to buy and wait for a new token.
 
@@ -73,6 +74,20 @@ Puzzles without a sitekey go through `pinchtab vision` (CapSolver Vision Engine)
 The Vision models are each trained on a particular vendor's puzzle, and elsewhere they are unreliable:
 - **Every module answers CapSolver's own reference images** in the expected shape: `ocr_gif` text, a `rotate_2` angle, and `shein` rects as `{x1,y1,x2,y2}`. `rotate_1` said 0° for a piece that visibly needs turning.
 - **DingXiang's rotate and jigsaw demos** (`dingxiang-inc.com/business/captcha`) failed every Vision attempt. The jigsaw's `slider_1` distance pointed at nothing near the real gap: the puzzle has a decoy gap, and the answer left the piece almost where it started. Dragging the piece onto the gap by eye (mouse down, move, screenshot, up) passed, with "验证成功", so DingXiang's behaviour check accepts pinchtab's pointer. The wrong answers came from the engine.
+
+### The 2Captcha-only vendors
+
+Tencent and Yidun give their answer to a callback the site registers, so the fork hooks `new TencentCaptcha` and `initNECaptcha` at document start. The hook must be a Proxy: Yidun's loader reads static properties off `initNECaptcha`, and a plain wrapper function silently stopped its widget from rendering. Both vendors load their scripts on pages that never show a captcha, so only the rendered widget triggers a solve.
+
+| Vendor | Page | Result |
+|---|---|---|
+| Yandex SmartCaptcha | `smartcaptcha.yandexcloud.net/demo` | token accepted server-side ("Hello, user!"; a bogus token gets "Captcha validation failed") |
+| Tencent | `cloud.tencent.com/product/captcha`, then "立即体验" | ticket in 17s, delivered to the site's callback; no server check available |
+| NetEase Yidun | `dun.163.com/trial/jigsaw`, scrolled to the widget | token in 44s, in `NECaptchaValidate`; no server check available |
+| Prosopo | `demo.prosopo.io` | token in `procaptcha-response`; the demo posts to `localhost:9228`, so it verifies nothing |
+| Lemin | `2captcha.com/demo/lemin` | 2Captcha's workers returned unsolvable; the demo passes even with no solve, so it proves nothing |
+
+None of this is shared anywhere. `puppeteer-extra-plugin-recaptcha` covers only reCAPTCHA and hCaptcha, and CapSolver's SDK covers reCAPTCHA and Turnstile. 2Captcha's own extension (`rucaptcha/2captcha-solver`, MIT) is the broadest reference for where each vendor keeps its parameters and how it takes its answer: start there when adding a vendor.
 
 ### More verified targets
 

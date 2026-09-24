@@ -88,12 +88,12 @@ already paid for. Just proceed: fill the form, press submit, read the page.
 A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
 adds a per-attempt `history` naming the solver that refused and why.
 
-`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha
-(also inside an embedded form's iframe),
+`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
 Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
 puzzle is showing: after the click that opens it, or once it is scrolled into
-view. People solve hCaptcha, FunCaptcha and the 2Captcha-only vendors, so those
+view. reCAPTCHA, hCaptcha and Turnstile are also solved inside an embedded
+form's iframe, even one from another site. People solve hCaptcha, FunCaptcha and the 2Captcha-only vendors, so those
 take one to three minutes: expect the pending HINT and run its check again
 rather than giving up. A solve is paid for once, and acting on the solved page
 does not buy another.

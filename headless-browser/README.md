@@ -103,6 +103,12 @@ A widget whose page is an iframe (a payment or signup form embedded from another
 
 A frame from another site runs in its own process, as a separate CDP target that the page's frame tree does not list. Chrome also leaves its `parentId` empty; `parentFrameId` is what ties it to the tab. Pinchtab reaches it by attaching, with one trap: chromedp closes the target it attached to on cancel, and closing an iframe target closes the whole tab, so the target ID is cleared before cancelling. Verified with a reCAPTCHA in a `127.0.0.1` form framed by a `localhost` page: solved on `nav`, and the form's own callback fired.
 
+### What counts as a challenge
+
+Detection used to take words for widgets. Wikipedia's CAPTCHA articles read as challenges. Any page with a `<noscript>` "Please enable JavaScript", or a script that reads `navigator.webdriver`, read as a JavaScript block, and the `jschallenge` solver then clicked its submit buttons: that cost ~50 s on Roblox's login page. Now a vendor counts only when its widget is in real markup (a `class`, or a script or frame `src`); the generic phrases need a block-page title; and a bare "captcha" needs a page with little visible text. Visible text, not HTML size: AliExpress's punish page is 114 KB of script.
+
+Pinchtab's worker stealth attaches to page workers the way that closes a tab for frames, but Chrome refuses to close a worker target ("doesn't support closing"), so workers survive it: checked with a worker still answering 10 s later.
+
 ### More verified targets
 
 | Captcha | Page | Result |

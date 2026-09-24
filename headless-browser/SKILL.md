@@ -80,13 +80,15 @@ command to check on it. Run exactly that. Do not act on the page or navigate
 while it runs: a new navigation loads a fresh challenge over the one being
 solved.
 
-**Never click a captcha widget.** Solving injects a token and does not tick the
+**Leave a solved captcha alone.** Solving injects a token and does not tick the
 box, so a solved page still shows an unchecked "I'm not a robot" and `snap`
 still lists it. That is done, not pending -- clicking it discards a solve you
 already paid for. Just proceed: fill the form, press submit, read the page.
 
 A failed solve leaves the tab usable and says so in the HINT; `nav --json`
-shows each solver's attempt and why it failed, under `autoSolve.history`.
+shows each solver's attempt and why it failed, under `autoSolve.history`. Only
+then is the widget yours to try, as below -- except "blocked outright", which
+nothing gets past.
 
 `nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,

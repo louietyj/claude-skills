@@ -387,8 +387,9 @@ fi
 [ -n "$O" ] && [ $rc -eq 0 ] || exit $rc
 tab=
 prev=
+json=
 for a in "$@"; do
-  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; esac
+  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; --json) json=1 ;; esac
   [ "$prev" = --tab ] && tab=$a
   prev=$a
 done
@@ -411,7 +412,12 @@ if "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1; then
         break;
       }
   ' "$shot" 2>/dev/null)
-  echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)"
+  # With --json, stdout is the JSON alone, so it can be piped into a parser.
+  if [ -n "$json" ]; then
+    echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)" >&2
+  else
+    echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)"
+  fi
 fi
 exit $rc
 SHIM_EOF

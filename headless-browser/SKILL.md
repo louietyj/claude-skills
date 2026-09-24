@@ -85,8 +85,8 @@ box, so a solved page still shows an unchecked "I'm not a robot" and `snap`
 still lists it. That is done, not pending -- clicking it discards a solve you
 already paid for. Just proceed: fill the form, press submit, read the page.
 
-A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
-adds a per-attempt `history` naming the solver that refused and why.
+A failed solve leaves the tab usable and says so in the HINT; `nav --json`
+shows each solver's attempt and why it failed, under `autoSolve.history`.
 
 `nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
@@ -106,9 +106,11 @@ are a robot" over an item page, is a paid reCAPTCHA solve on `nav`. "Sorry,
 there was a problem accessing the page" has no slider, and nothing gets past
 it.
 
-Puzzles without a sitekey (drag the piece into the gap, turn the image upright,
-pick the matching tiles, read a flickering GIF) are never solved on `nav`.
-Look at the screenshot, name the parts with selectors, and hand them over:
+GeeTest v3's slide puzzle is solved on its own too, by `nav` or the next
+action: the HINT says "solved by vision". Other puzzles without a sitekey (drag
+the piece into the gap, turn the image upright, pick the matching tiles, read a
+flickering GIF) are not. Look at the screenshot, name the parts with
+selectors, and hand them over:
 
 ```bash
 pinchtab vision slider <piece> --background <bg> --handle <handle>
@@ -134,6 +136,10 @@ pinchtab mouse up --x <x2> --y <y>      # once the piece sits in the gap
 
 Keep the button down between calls. The page sees one continuous drag, and
 that passed a slider Vision had failed.
+
+A puzzle inside an iframe, even one from another site, is reachable with
+`pinchtab eval --frame <part of its URL> '<js>'`; `pinchtab eval` alone only
+sees the top page, whatever `pinchtab frame` says.
 
 Most pages never reach this. Cloudflare and DataDome mostly challenge only a
 visitor they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com

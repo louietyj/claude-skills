@@ -103,6 +103,10 @@ A widget whose page is an iframe (a payment or signup form embedded from another
 
 A frame from another site runs in its own process, as a separate CDP target that the page's frame tree does not list. Chrome also leaves its `parentId` empty; `parentFrameId` is what ties it to the tab. Pinchtab reaches it by attaching, with one trap: chromedp closes the target it attached to on cancel, and closing an iframe target closes the whole tab, so the target ID is cleared before cancelling. Verified with a reCAPTCHA in a `127.0.0.1` form framed by a `localhost` page: solved on `nav`, and the form's own callback fired.
 
+### Vision on its own
+
+GeeTest v3's slide has no token route: the widget spends its one-time challenge before a task could use it. The fork keeps a table of puzzles it hands to CapSolver Vision by itself (marker, opener, piece, background, handle, passed check); a matching page skips the token solvers, whose semantic stage otherwise clicked around the page (on 2Captcha's demo it opened the site's "Captcha solver" menu over the widget). GeeTest v3 draws its piece into a transparent canvas the size of the whole puzzle, which Vision answered with no distance until the piece was cropped to its opaque pixels. On 2captcha.com/demo/geetest: solved after an ordinary click in 8 s, and the demo's server check passed. Adding a puzzle is one row, found by solving it once with `pinchtab vision`.
+
 ### What counts as a challenge
 
 Detection used to take words for widgets. Wikipedia's CAPTCHA articles read as challenges. Any page with a `<noscript>` "Please enable JavaScript", or a script that reads `navigator.webdriver`, read as a JavaScript block, and the `jschallenge` solver then clicked its submit buttons: that cost ~50 s on Roblox's login page. Now a vendor counts only when its widget is in real markup (a `class`, or a script or frame `src`); the generic phrases need a block-page title; and a bare "captcha" needs a page with little visible text. Visible text, not HTML size: AliExpress's punish page is 114 KB of script.

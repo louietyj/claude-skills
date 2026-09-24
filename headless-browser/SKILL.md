@@ -100,8 +100,10 @@ does not buy another.
 AliExpress's "Please drag the slider to verify" page is passed on `nav` too, at
 no cost: it drags the slider, and a refused drag is retried on a fresh one up
 to three times. From this sandbox it returns every 15-20 item pages, and each
-`nav` that lands on it passes it again. "Sorry, there was a problem accessing
-the page" has no slider, and nothing gets past it.
+`nav` that lands on it passes it again. Its other form, "We need to check if you
+are a robot" over an item page, is a paid reCAPTCHA solve on `nav`. "Sorry,
+there was a problem accessing the page" has no slider, and nothing gets past
+it.
 
 Puzzles without a sitekey (drag the piece into the gap, turn the image upright,
 pick the matching tiles, read a flickering GIF) are never solved on `nav`.

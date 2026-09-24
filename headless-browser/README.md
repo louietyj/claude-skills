@@ -89,6 +89,14 @@ Tencent and Yidun give their answer to a callback the site registers, so the for
 
 None of this is shared anywhere. `puppeteer-extra-plugin-recaptcha` covers only reCAPTCHA and hCaptcha, and CapSolver's SDK covers reCAPTCHA and Turnstile. 2Captcha's own extension (`rucaptcha/2captcha-solver`, MIT) is the broadest reference for where each vendor keeps its parameters and how it takes its answer: start there when adding a vendor.
 
+### AliExpress's slider
+
+From claude.ai's sandbox, AliExpress item pages redirect to `/_____tmd_____/punish`: Alibaba's slide-to-end NoCaptcha. Its config names a cloud-IP blocklist (`cloud_ip_bl`), so the IP is what triggers it; search pages never do. No solving service covers it. 2Captcha's `AlibabaTask` is for Aliyun Captcha 2.0, a different product.
+
+The server scores the drag itself, and a drag can pass from the flagged IP. The old drag, which appeared on the handle and pressed at once, passed 1 of 4. After porting ghost-cursor's path, so the pointer travels onto the handle first, it passed 3 of 5. The fork's `nocaptcha` solver does this on `nav`: it waits for the slider to mount, drags past the end of the track, and judges by whether the URL leaves `_____tmd_____`. A refused drag is retried on a fresh slider, loaded from the item URL, up to three times.
+
+A pass sets an `x5sec` cookie, but the slider returns after 15-20 item pages anyway, sometimes after an in-page reCAPTCHA modal. The no-slider "Sorry, there was a problem accessing the page" is a hard block, and the solver reports it without dragging. The run notes are in the user's Dropbox, under `Apps/louietyj-claude-ai/drafts/aliexpress-punish/`.
+
 ### More verified targets
 
 | Captcha | Page | Result |

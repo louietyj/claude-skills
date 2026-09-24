@@ -283,7 +283,7 @@ if [ -n "$TWOCAPTCHA_KEY" ]; then
 fi
 if [ -n "$SOLVERS" ]; then
   "$REAL" config set autoSolver.enabled true >/dev/null
-  "$REAL" config set autoSolver.solvers "${SOLVERS}cloudflare,semantic,jschallenge" >/dev/null
+  "$REAL" config set autoSolver.solvers "${SOLVERS}cloudflare,nocaptcha,semantic,jschallenge" >/dev/null
   "$REAL" config set autoSolver.maxAttempts 3 >/dev/null
   # A reCAPTCHA image challenge routinely runs past 60s. The 30s default kills
   # the poll after CapSolver has already been paid for the solve.

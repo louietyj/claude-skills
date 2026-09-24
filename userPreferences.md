@@ -57,13 +57,15 @@ Run it unconditionally; it's idempotent.
 <apify_actors>
 Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
 
+**Exception: AliExpress.** Use headless-browser first, for search and item pages alike; `nav` clears AliExpress's slider and reCAPTCHA by itself. Fall back to the AliExpress actors below only when headless-browser breaks: most often the outright block (blank item pages, HINT "blocked outright") after ~40+ item pages in a session. Details: `/memory/shopping.md`.
+
 Preapproved:
 - Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).
 - Amazon: `junglee/Amazon-crawler` — search + full detail in one call (`scrapeProductDetails: true`).
 - Walmart browse: `automation-lab/walmart-scraper` — keyword search.
 - Walmart detail: `e-commerce/walmart-product-detail-scraper` — needs a direct product URL, not a search/category URL.
-- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search. **`maxProducts` is PER QUERY, not total** — e.g. 10 queries × `maxProducts: 50` = 500 results billed, not 50. Prefer headless-browser for AliExpress; captchas solve automatically.
-- AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
+- AliExpress browse (fallback only, see above): `devcake/aliexpress-products-scraper` — keyword search. **`maxProducts` is PER QUERY, not total** — e.g. 10 queries × `maxProducts: 50` = 500 results billed, not 50.
+- AliExpress detail (fallback only, see above): `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
 - Google reviews: `web_wanderer/google-reviews-scraper`
 - Yelp reviews: `web_wanderer/yelp-reviews-scraper`
 

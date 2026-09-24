@@ -93,10 +93,10 @@ Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
 Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
 puzzle is showing: after the click that opens it, or once it is scrolled into
 view. reCAPTCHA, hCaptcha and Turnstile are also solved inside an embedded
-form's iframe, even one from another site. People solve hCaptcha, FunCaptcha and the 2Captcha-only vendors, so those
-take one to three minutes: expect the pending HINT and run its check again
-rather than giving up. A solve is paid for once, and acting on the solved page
-does not buy another.
+form's iframe, even one from another site. People solve hCaptcha, FunCaptcha
+and the 2Captcha-only vendors, so those take one to three minutes: expect the
+pending HINT and run its check again rather than giving up. A solve is paid for
+once, and acting on the solved page does not buy another.
 
 AliExpress's "Please drag the slider to verify" page is passed on `nav` too, at
 no cost: it drags the slider, and a refused drag is retried on a fresh one up

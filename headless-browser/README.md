@@ -97,6 +97,12 @@ The server scores the drag itself, and a drag can pass from the flagged IP. The 
 
 A pass sets an `x5sec` cookie, but the slider returns after 15-20 item pages anyway, sometimes after an in-page reCAPTCHA modal. The no-slider "Sorry, there was a problem accessing the page" is a hard block, and the solver reports it without dragging. AliExpress also punishes a page's data API (item data, recommendations) instead of the page. The same punish page then appears in an iframe over the item, and on its reCAPTCHA step the widget is two frames down: reCAPTCHA Enterprise, with an action computed at runtime, that takes its token only through the frame's own `__recaptchaValidateCB__`. The fork reads the sitekey and action off Google's anchor frame inside it, solves it as a v2 Enterprise task, calls that callback, and counts the solve only once the iframe leaves. That path is proven against a local copy of the captured frames, not yet on AliExpress itself. The run notes are in the user's Dropbox, under `Apps/louietyj-claude-ai/drafts/aliexpress-punish/`.
 
+### Captchas in child frames
+
+A widget whose page is an iframe (a payment or signup form embedded from another site) is invisible to the top document. The fork lists the tab's frames, and a vendor frame (reCAPTCHA anchor, hCaptcha checkbox, Turnstile) whose parent is not the top document marks that parent as the widget's page. The providers then read, solve and deliver inside it.
+
+A frame from another site runs in its own process, as a separate CDP target that the page's frame tree does not list. Chrome also leaves its `parentId` empty; `parentFrameId` is what ties it to the tab. Pinchtab reaches it by attaching, with one trap: chromedp closes the target it attached to on cancel, and closing an iframe target closes the whole tab, so the target ID is cleared before cancelling. Verified with a reCAPTCHA in a `127.0.0.1` form framed by a `localhost` page: solved on `nav`, and the form's own callback fired.
+
 ### More verified targets
 
 | Captcha | Page | Result |

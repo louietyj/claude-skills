@@ -88,7 +88,8 @@ already paid for. Just proceed: fill the form, press submit, read the page.
 A failed solve leaves the tab usable and says so in the HINT; `POST /solve`
 adds a per-attempt `history` naming the solver that refused and why.
 
-`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
+`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha
+(also inside an embedded form's iframe),
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
 Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
 puzzle is showing: after the click that opens it, or once it is scrolled into

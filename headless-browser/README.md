@@ -111,6 +111,8 @@ GeeTest v3's slide has no token route: the widget spends its one-time challenge 
 
 Detection used to take words for widgets. Wikipedia's CAPTCHA articles read as challenges. Any page with a `<noscript>` "Please enable JavaScript", or a script that reads `navigator.webdriver`, read as a JavaScript block, and the `jschallenge` solver then clicked its submit buttons: that cost ~50 s on Roblox's login page. Now a vendor counts only when its widget is in real markup (a `class`, or a script or frame `src`); the generic phrases need a block-page title; and a bare "captcha" needs a page with little visible text. Visible text, not HTML size: AliExpress's punish page is 114 KB of script.
 
+When no solver can handle a captcha page, pinchtab's semantic fallback clicks the element that best matches "captcha checkbox verify button", scored against every button and link on the page. On 2Captcha's demo that was the site's "Captcha solver" menu. Its clicks are now confined to elements inside something marked as a challenge, or to pages that are only the challenge, and never land in navigation, headers, footers or menus.
+
 Pinchtab's worker stealth attaches to page workers the way that closes a tab for frames, but Chrome refuses to close a worker target ("doesn't support closing"), so workers survive it: checked with a worker still answering 10 s later.
 
 ### More verified targets

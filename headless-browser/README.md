@@ -160,6 +160,33 @@ done | grep autosolver
 
 `pinchtab cookies clear` drops a `cf_clearance` from an earlier pass, which otherwise makes a rerun load the page without a challenge.
 
+### Fixtures
+
+[`../dev/fixtures/`](../dev/fixtures/) holds mocks for the solver paths that no public demo exercises. Copy them into `dev/work/` (the sandbox's `/work`) and serve them from there:
+
+| File | What it stands for |
+|---|---|
+| `punishsrv.py` | AliExpress's punish overlay, on :8766 (`python3 punishsrv.py`). `/item/<n>.html` puts the punish iframe over an item page, with a reCAPTCHA Enterprise anchor and the `__recaptchaValidateCB__` callback inside. `/item/4.html` chains to a second challenge on `/item/5.html`, and `/item/late.html` adds the iframe 1 s after load. One CapSolver solve (~$0.001) per challenge; the token is real, and only the mock checks it. |
+| `xsite.html`, `xsite-inner.html` | A reCAPTCHA in a form framed from another site (`localhost` framing `127.0.0.1`), on :8765 (`python3 -m http.server 8765`). Uses Google's test sitekey, which CapSolver has solved without charging. The form's callback posts `ok:<token length>` to the top page's `window.__ok`. |
+| `worker.html` | A page worker that answers pings, to check a worker survives. |
+| `interstitial.html` | A bare "Continue" challenge page, where the semantic fallback may click. |
+| `mouselog.html` | Logs every mouse event with its time and `isTrusted`, to inspect humanized paths. |
+| `bal.sh`, `logs.sh` | Both providers' balances, and the autosolver's log lines. |
+| `inner_eval.py` | Runs JS inside a cross-site frame over raw CDP (port 9869), independent of pinchtab. |
+
+Restart a mock server by PID, never with `pkill -f <pattern>`: the pattern matches your own shell's command line, which then kills that shell.
+
+### Testing on AliExpress
+
+AliExpress only challenges claude.ai's egress IPs. The local sandbox gets no slider, just a plain block page. So the real test is a claude.ai run: a prompt that runs `setup.sh` on a wiped profile, browses ~100 item pages at one per ~15 s, and logs `nav --json` per page. The runs so far, each with the prompt's findings, are in the user's Dropbox, at `Apps/louietyj-claude-ai/drafts/aliexpress-punish/results-capsolverNN.md`. The latest one's closing section says what the fork should change next.
+
+### CDP traps
+
+- Closing an `iframe` target closes the whole tab. chromedp closes a target it attached to when its context is cancelled, so the fork clears `Target.TargetID` before cancelling a context attached to a frame.
+- Chrome leaves `parentId` empty on `iframe` targets; `parentFrameId` is what ties a cross-site frame to its tab.
+- A page's `Page.getFrameTree` lists only the frames in its own process. Cross-site frames appear only in the target list.
+- Closing a worker target is refused ("doesn't support closing"), so the same cancel is harmless there.
+
 `autoSolver.solverTimeoutSec` is set to 150, not the 30s default. A reCAPTCHA image challenge routinely runs past 60s, and the default kills the poll *after* CapSolver has already been paid for the solve.
 
 ## Package for claude.ai

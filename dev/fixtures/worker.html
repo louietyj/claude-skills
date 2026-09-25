@@ -1,0 +1,6 @@
+<html><body><script>
+window.__log=[];
+var w=new Worker(URL.createObjectURL(new Blob(["onmessage=function(e){postMessage('pong '+e.data+' ua='+navigator.userAgent.slice(0,30))}"],{type:'text/javascript'})));
+w.onmessage=function(e){__log.push(e.data)}; w.onerror=function(e){__log.push('error '+e.message)};
+w.postMessage('t0'); setTimeout(function(){w.postMessage('t10')},10000);
+</script></body></html>

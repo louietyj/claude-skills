@@ -72,24 +72,24 @@ you see them, and coordinates read off them land short of the target.
 
 ## Captchas
 
-Nothing to call: `nav` solves a challenge on its own when it detects one, at
-~$0.001 and 20-60s, and waits for it. It prints a HINT saying so, and says
-nothing on the ordinary pages that never trigger one. A solve that outlasts the
-call keeps running in the background, and the HINT says so and gives the
-command to check on it. Run exactly that. Do not act on the page or navigate
-while it runs: a new navigation loads a fresh challenge over the one being
-solved.
+Nothing to call: `nav`, and any later action, solves a challenge on its own when
+it detects one (~$0.001, 20-60s), and says nothing on ordinary pages. When there
+is one, the HINT puts it in one of three states. Do what that state says:
 
-**Leave a solved captcha alone.** Solving injects a token and does not tick the
-box, so a solved page still shows an unchecked "I'm not a robot" and `snap`
-still lists it. That is done, not pending -- clicking it discards a solve you
-already paid for. Just proceed: fill the form, press submit, read the page.
+- **Still pinchtab's**: being solved, or to be retried by pinchtab itself at a
+  stated time. Don't touch the page and don't navigate away (a new navigation
+  loads a fresh challenge and cancels the retry). Run the check command the
+  HINT gives, when it says.
+- **Solved**: proceed. A token solve doesn't tick the box, so a solved page
+  still shows an unchecked "I'm not a robot", and `snap` still lists it.
+  Leave it alone -- clicking it discards the solve. Fill the form, press
+  submit, read the page.
+- **Given up** ("pinchtab has given up on it; it is yours to try"): the
+  challenge is yours now, with the tools below. "Nothing gets past this" means
+  exactly that; go on without the page.
 
-A failed solve leaves the tab usable and says so in the HINT; `nav --json`
-shows each solver's attempt and why it failed, under `autoSolve.history`. Only
-a puzzle `nav` has no way to solve is yours to try, as below. One it already
-tried (AliExpress's slider, a token captcha) is retried by waiting and `nav`ing
-again, not by hand; "blocked outright" passes nothing.
+`nav --json` carries the same HINT (`autoSolve.hint`) and each solver's attempt
+and why it failed (`autoSolve.history`).
 
 `nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
@@ -97,20 +97,13 @@ Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
 puzzle is showing: after the click that opens it, or once it is scrolled into
 view. reCAPTCHA, hCaptcha and Turnstile are also solved inside an embedded
 form's iframe, even one from another site. People solve hCaptcha, FunCaptcha
-and the 2Captcha-only vendors, so those take one to three minutes: expect the
-pending HINT and run its check again rather than giving up. A solve is paid for
-once, and acting on the solved page does not buy another.
+and the 2Captcha-only vendors, so those take one to three minutes. A solve is
+paid for once, and acting on the solved page does not buy another.
 
-AliExpress's "Please drag the slider to verify" page is passed on `nav` too, at
-no cost, usually (about 3 in 4): it drags the slider once. Never drag it
-yourself: `pinchtab drag` is the same drag, and a retry right after a refusal
-has never passed. If the HINT says the drag was refused, wait a minute and `nav`
-to the page again (which drags again), or go on to another item. The
-slider returns every 10-30 item pages, and each `nav` that lands on it tries
-again. Its other form, "We need to check if you
-are a robot" over an item page, is a paid reCAPTCHA solve on `nav`. "Sorry,
-there was a problem accessing the page" has no slider, and nothing gets past
-it.
+AliExpress's "Please drag the slider to verify" page and its "We need to check
+if you are a robot" overlay are covered too. From this sandbox they come back
+every 10-30 item pages. "Sorry, there was a problem accessing the page" is the
+outright block.
 
 GeeTest v3's slide puzzle is solved on its own too, by `nav` or the next
 action: the HINT says "solved by vision". Other puzzles without a sitekey (drag
@@ -126,9 +119,9 @@ pinchtab vision ocr <gif>
 ```
 
 It reads the images off the page, costs about $0.002, and drags with a human
-path. For another site's bare "slide to verify" bar with no picture
-(AliExpress's is `nav`'s), you need no answer, only a human-looking drag to the
-end: `pinchtab drag <handle> --drag-x <track width> --humanize`.
+path. For a bare "slide to verify" bar with no picture, you need no answer,
+only a human-looking drag to the end:
+`pinchtab drag <handle> --drag-x <track width> --humanize`.
 
 Vision can be wrong. A puzzle with a decoy gap got a distance that left the
 piece near where it started. When a Vision drag fails, place the piece

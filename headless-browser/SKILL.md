@@ -85,8 +85,11 @@ is one, the HINT puts it in one of three states. Do what that state says:
   Leave it alone -- clicking it discards the solve. Fill the form, press
   submit, read the page.
 - **Given up** ("pinchtab has given up on it; it is yours to try"): the
-  challenge is yours now, with the tools below. "Nothing gets past this" means
-  exactly that; go on without the page.
+  challenge is yours now, with the tools below.
+- **Blocked outright** (a blank page, or "Sorry, there was a problem accessing
+  the page"): no solver passes it, but a fresh browser has. Run
+  `pinchtab server restart`, re-run setup.sh, and nav to the page again. Do
+  that once; if it's still blocked, go on without the page.
 
 `nav --json` carries the same HINT (`autoSolve.hint`) and each solver's attempt
 and why it failed (`autoSolve.history`).
@@ -102,8 +105,8 @@ paid for once, and acting on the solved page does not buy another.
 
 AliExpress's "Please drag the slider to verify" page and its "We need to check
 if you are a robot" overlay are covered too. From this sandbox they come back
-every 10-30 item pages. "Sorry, there was a problem accessing the page" is the
-outright block.
+every 10-30 item pages. Their outright block has been cleared by a browser
+restart (above).
 
 GeeTest v3's slide puzzle is solved on its own too, by `nav` or the next
 action: the HINT says "solved by vision". Other puzzles without a sitekey (drag

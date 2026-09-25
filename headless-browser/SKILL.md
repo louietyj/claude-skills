@@ -101,9 +101,11 @@ pending HINT and run its check again rather than giving up. A solve is paid for
 once, and acting on the solved page does not buy another.
 
 AliExpress's "Please drag the slider to verify" page is passed on `nav` too, at
-no cost: it drags the slider, and a refused drag is retried on a fresh one up
-to three times. From this sandbox it returns every 15-20 item pages, and each
-`nav` that lands on it passes it again. Its other form, "We need to check if you
+no cost, usually (about 3 in 4): it drags the slider once. If the HINT says the
+drag was refused, don't drag it again yourself -- an immediate retry has never
+passed. Wait a minute and open the page again, or go on to another item. The
+slider returns every 10-30 item pages, and each `nav` that lands on it tries
+again. Its other form, "We need to check if you
 are a robot" over an item page, is a paid reCAPTCHA solve on `nav`. "Sorry,
 there was a problem accessing the page" has no slider, and nothing gets past
 it.

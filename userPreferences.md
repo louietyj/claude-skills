@@ -57,7 +57,7 @@ Run it unconditionally; it's idempotent.
 <apify_actors>
 Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
 
-**Exception: AliExpress.** Use headless-browser first, for search and item pages alike; `nav` clears AliExpress's slider and reCAPTCHA by itself. Fall back to the AliExpress actors below only when headless-browser breaks: most often the outright block (blank item pages, HINT "blocked outright") after ~40+ item pages in a session. Details: `/memory/shopping.md`.
+**Exception: AliExpress.** Use headless-browser first, for search and item pages alike; `nav` clears AliExpress's slider and reCAPTCHA by itself. Fall back to the AliExpress actors below only when headless-browser breaks: most often the outright block (blank item pages, HINT "blocked outright") after ~40+ item pages in a session, and only once a browser restart (`pinchtab server restart`, re-run setup.sh, nav again) hasn't cleared it. Details: `/memory/shopping.md`.
 
 Preapproved:
 - Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).

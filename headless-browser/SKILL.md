@@ -87,8 +87,9 @@ already paid for. Just proceed: fill the form, press submit, read the page.
 
 A failed solve leaves the tab usable and says so in the HINT; `nav --json`
 shows each solver's attempt and why it failed, under `autoSolve.history`. Only
-then is the widget yours to try, as below -- except "blocked outright", which
-nothing gets past.
+a puzzle `nav` has no way to solve is yours to try, as below. One it already
+tried (AliExpress's slider, a token captcha) is retried by waiting and `nav`ing
+again, not by hand; "blocked outright" passes nothing.
 
 `nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
@@ -101,9 +102,10 @@ pending HINT and run its check again rather than giving up. A solve is paid for
 once, and acting on the solved page does not buy another.
 
 AliExpress's "Please drag the slider to verify" page is passed on `nav` too, at
-no cost, usually (about 3 in 4): it drags the slider once. If the HINT says the
-drag was refused, don't drag it again yourself -- an immediate retry has never
-passed. Wait a minute and open the page again, or go on to another item. The
+no cost, usually (about 3 in 4): it drags the slider once. Never drag it
+yourself: `pinchtab drag` is the same drag, and a retry right after a refusal
+has never passed. If the HINT says the drag was refused, wait a minute and `nav`
+to the page again (which drags again), or go on to another item. The
 slider returns every 10-30 item pages, and each `nav` that lands on it tries
 again. Its other form, "We need to check if you
 are a robot" over an item page, is a paid reCAPTCHA solve on `nav`. "Sorry,
@@ -124,9 +126,9 @@ pinchtab vision ocr <gif>
 ```
 
 It reads the images off the page, costs about $0.002, and drags with a human
-path. For a bare "slide to verify" bar with no picture, you need no answer,
-only a human-looking drag to the end:
-`pinchtab drag <handle> --drag-x <track width> --humanize`.
+path. For another site's bare "slide to verify" bar with no picture
+(AliExpress's is `nav`'s), you need no answer, only a human-looking drag to the
+end: `pinchtab drag <handle> --drag-x <track width> --humanize`.
 
 Vision can be wrong. A puzzle with a decoy gap got a distance that left the
 piece near where it started. When a Vision drag fails, place the piece

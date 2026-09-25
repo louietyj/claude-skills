@@ -71,6 +71,7 @@ Preapproved:
 
 IMPORTANT:
 - get-dataset-items `fields`: dot-notation paths into arrays of objects (e.g. `topComments.body`) silently drop the whole field, even though call-actor lists them as available. Request the array whole (`topComments`) or omit `fields`. If the fetch returns less than it should, re-run without fields before assuming the actor didn't return it.
+- **EVERY `call-actor` call MUST set a spend cap in `callOptions`. No exceptions.** Pay-per-event Actors: `maxTotalChargeUsd: 0.10`. Pay-per-result Actors: `maxItems` set to however many results $0.10 buys at that Actor's per-result price, taken from `fetch-actor-details`. Go higher only if the task genuinely can't be done within $0.10. Caps are per-run: nothing sets them globally, so omitting one means the run is uncapped.
 
 Feel free to search for and use other actors not in the list to accomplish a task; they are fine if pay-per-use only (no flat fee) and expected cost is under $0.05 — prefer cheapest. Before trusting one: rating/user-count don't reliably predict live reliability (a publisher's other well-rated actors are a better signal than one actor's own small sample); watch for null-heavy fields on unenriched rows, "succeeded with 0 items" as a silent failure, and a bad rating that may be scoped to one input mode (e.g. crawl-from-search vs. direct-URL) rather than the whole actor.
 </apify_actors>

@@ -37,22 +37,50 @@ pinchtab nav <url> --block-images
 pinchtab text
 ```
 
-Every command that can change the page (`nav`, `click`, `fill`, `press`,
-`scroll`, ...) also saves a screenshot and prints its path. When the text or
-snapshot doesn't add up -- a canvas, a map, refs pointing at the wrong thing --
-view that image rather than untangling the snapshot, and click what you see
-with `click --x --y`: image pixels are click coordinates, no scaling.
-
-Batch, loop and filter output as you like, but keep the `screenshot:` lines:
-end a batch with `; pinchtab shots`, which lists every screenshot since the
-last `shots` whatever the rest of the command dropped, or add `|^screenshot:`
-to your grep.
-
 The session outlives the bash call, so multi-step flows work across calls --
 nav in one, click in the next, read state in a third. The tab, its DOM state
 and typed form values all persist; you never replay earlier steps. If the
 session goes stale the shim recreates it, but that gives you a fresh tab with
 no page loaded, so re-`nav` after seeing `no_current_tab`.
+
+## Screenshots: NEVER THROW AWAY THE `screenshot:` LINE
+
+Every command that can change the page (`nav`, `click`, `fill`, `press`,
+`scroll`, ...) has ALREADY saved a screenshot, and prints
+`screenshot: <path>` first. When text or a snap comes back empty, half-loaded,
+or doesn't add up -- a canvas, a map, refs pointing at the wrong thing -- VIEW
+THAT IMAGE FIRST. One look answers what ten calls of debugging in text won't.
+Click what you see with `click --x --y`: image pixels are click coordinates,
+no scaling.
+
+**If you discard the line, you won't know the image exists, and you will end up
+debugging the page blind.** So batch, loop, grep and save tokens as much as you
+like -- just carry that line through:
+
+```bash
+# NOT: pinchtab nav <url> >/dev/null
+pinchtab nav <url> | grep '^screenshot:'          # errors still reach you on stderr
+
+# NOT: pinchtab fill e83 0.1 >/dev/null; pinchtab click e84 >/dev/null
+pinchtab fill e83 0.1 | grep '^screenshot:'; pinchtab click e84 | grep '^screenshot:'
+
+# Already grepping? Add it to the pattern (-E, or \| in plain grep).
+pinchtab click e84 2>&1 | grep -iE 'error|hint|^screenshot:'
+
+# head keeps it: the line comes first. tail does NOT -- end with shots instead.
+pinchtab nav <url> | head -20
+pinchtab nav <url> | tail -5; pinchtab shots
+
+# --json puts the line on stderr, so jq leaves it alone. Don't add 2>/dev/null.
+pinchtab nav <url> --json | jq -r .autoSolve.hint
+
+# Loops, scripts, $(...), > file, anything else: end the WHOLE command with shots.
+for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; done; pinchtab shots
+```
+
+`pinchtab shots` lists every screenshot since the last `shots` (the last 10,
+newest last), however the rest of the command filtered its output. When in
+doubt, end with it: it costs a few lines.
 
 ## The browser
 

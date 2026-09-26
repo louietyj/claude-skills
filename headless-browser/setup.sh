@@ -512,10 +512,13 @@ printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
 printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
 printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
 printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
-printf '\nPage-changing commands print `screenshot: <path>`. Batch, loop and filter\n'
-printf 'output as you like, but keep those lines: end a batch with\n'
-printf '`; pinchtab shots`, which lists every screenshot since the last `shots`\n'
-printf 'whatever the rest of the command dropped, or add `|^screenshot:` to your grep.\n'
+printf '\n!!! NEVER THROW AWAY THE `screenshot: <path>` LINE !!!\n'
+printf 'Every page-changing command has already saved one. When text or a snap\n'
+printf 'looks wrong, VIEW THAT IMAGE before debugging in text. Filter all you\n'
+printf 'like, but carry the line through (SKILL.md has more examples):\n'
+printf "  instead of >/dev/null         | grep '^screenshot:'\n"
+printf "  in a grep you already run     add |^screenshot: to the -E pattern\n"
+printf '  tail, loops, scripts, $(...)  end the whole command with ; pinchtab shots\n'
 printf '\nThat file links a references/ directory. It is NOT printed here; read a\n'
 printf 'page from it only if you actually need it:\n'
 for f in "$PINCHTAB_DOCS"/references/*; do

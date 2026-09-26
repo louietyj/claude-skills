@@ -16,6 +16,7 @@ failed=0
 fatal=0
 docs_repeat=0
 DOCS_MARK=/tmp/.headless-browser-docs-printed
+SHOT_LEDGER=/tmp/pinchtab-shots-unseen
 DOTS='.........................................'
 RULE_H='════════'
 RULE_S='────────'
@@ -324,6 +325,7 @@ cat > "$SHIM" <<SHIM_EOF
 # setup.sh rewrites it on every run.
 REAL=$REAL
 SESSION_FILE_DEFAULT=$SESSION_FILE
+L=$SHOT_LEDGER
 SHIM_EOF
 cat >> "$SHIM" <<'SHIM_EOF'
 SELF=$(readlink -f "$0" 2>/dev/null)
@@ -332,6 +334,21 @@ if [ ! -x "$REAL" ] || [ "$(readlink -f "$REAL" 2>/dev/null)" = "$SELF" ]; then
   exit 70
 fi
 F=${PINCHTAB_SESSION_FILE:-$SESSION_FILE_DEFAULT}
+
+# The shim's own command, for batches that filtered out the `screenshot:` lines.
+# It can't tell which of those lines were seen, so it repeats them all.
+if [ "${1:-}" = shots ]; then
+  if [ ! -s "$L" ]; then
+    echo 'screenshots: none since the last `pinchtab shots`'
+    exit 0
+  fi
+  n=$(wc -l < "$L")
+  echo 'screenshots since the last `pinchtab shots`, newest last (image pixels are click --x/--y coordinates):'
+  [ "$n" -gt 10 ] && echo "  ... $((n - 10)) older not shown, numbered just before the first below"
+  tail -n 10 "$L" | sed 's/^/  /'
+  : > "$L"
+  exit 0
+fi
 
 resolve() {
   unset PINCHTAB_SESSION            # a stale value makes `session create` fail
@@ -412,6 +429,7 @@ if "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1; then
         break;
       }
   ' "$shot" 2>/dev/null)
+  printf '%s  %s\n' "$shot" "${dims:-?}" >> "$L"
   # With --json, stdout is the JSON alone, so it can be piped into a parser.
   if [ -n "$json" ]; then
     echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)" >&2
@@ -434,6 +452,7 @@ esac
 # chain -- server, browser launch, session resolution -- and a misconfigured
 # browser binary fails here or else on the caller's first real page.
 if "$SHIM" nav https://example.com --block-images >/dev/null 2>&1; then
+  rm -f "$SHOT_LEDGER"   # the caller's first `shots` shouldn't list example.com
   echo "server up, session ${SID:-<lazy>}, test nav OK"
   end 0
   note 'server + session' 'OK -- session is already initialized'
@@ -493,6 +512,10 @@ printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
 printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
 printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
 printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
+printf '\nPage-changing commands print `screenshot: <path>`. Batch, loop and filter\n'
+printf 'output as you like, but keep those lines: end a batch with\n'
+printf '`; pinchtab shots`, which lists every screenshot since the last `shots`\n'
+printf 'whatever the rest of the command dropped, or add `|^screenshot:` to your grep.\n'
 printf '\nThat file links a references/ directory. It is NOT printed here; read a\n'
 printf 'page from it only if you actually need it:\n'
 for f in "$PINCHTAB_DOCS"/references/*; do

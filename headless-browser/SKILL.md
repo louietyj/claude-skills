@@ -43,6 +43,11 @@ snapshot doesn't add up -- a canvas, a map, refs pointing at the wrong thing --
 view that image rather than untangling the snapshot, and click what you see
 with `click --x --y`: image pixels are click coordinates, no scaling.
 
+Batch, loop and filter output as you like, but keep the `screenshot:` lines:
+end a batch with `; pinchtab shots`, which lists every screenshot since the
+last `shots` whatever the rest of the command dropped, or add `|^screenshot:`
+to your grep.
+
 The session outlives the bash call, so multi-step flows work across calls --
 nav in one, click in the next, read state in a third. The tab, its DOM state
 and typed form values all persist; you never replay earlier steps. If the

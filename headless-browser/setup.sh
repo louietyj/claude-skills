@@ -410,10 +410,11 @@ for a in "$@"; do
   [ "$prev" = --tab ] && tab=$a
   prev=$a
 done
-# claude.ai shows the user what is under /mnt/user-data/outputs, flattened: the
-# pinchtab- prefix keeps the shots together there. The counter lives outside it.
+# claude.ai shows the user everything under /mnt/user-data/outputs, so only the
+# latest shot and a zip of all of them go there, not one file per shot.
+OUT=/mnt/user-data/outputs
 D=$HOME/pinchtab-shots
-[ -d /mnt/user-data/outputs ] && D=/mnt/user-data/outputs/pinchtab-shots
+[ -d $OUT ] && D=/home/claude/pinchtab-shots
 D=${PINCHTAB_SHOT_DIR:-$D}
 mkdir -p "$D"
 # A shot taken the moment the command returns catches spinners and half-applied
@@ -422,7 +423,7 @@ mkdir -p "$D"
 N=/tmp/pinchtab-shot-count
 n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$N"
-shot=$D/pinchtab-$(printf %04d $n)-$1.jpg
+shot=$D/$(printf %04d $n)-$1.jpg
 small=${shot%.jpg}-scale-0.5.jpg
 # The half-size copy is the one to view by default: a quarter of the image
 # tokens. A build without --also-scale (upstream, an older fork) gets the full
@@ -452,6 +453,26 @@ DIMS
     printf 'screenshot: %s\n' "$line" >&2
   else
     printf 'screenshot: %s\n' "$line"
+  fi
+  if [ -d $OUT ]; then
+    cp -f "$shot" $OUT/pinchtab-shot-latest.jpg
+    # Append only what the zip lacks, so the cost doesn't grow with the session.
+    # A zip broken by two concurrent shims is rebuilt instead.
+    python3 - "$D" $OUT/pinchtab-shots.zip <<'PY' 2>/dev/null
+import os, sys, zipfile
+d, z = sys.argv[1:]
+def add(mode):
+    with zipfile.ZipFile(z, mode) as f:
+        have = set(f.namelist())
+        for n in sorted(os.listdir(d)):
+            a = "pinchtab-shots/" + n
+            if a not in have:
+                f.write(os.path.join(d, n), a)
+try:
+    add("a")
+except zipfile.BadZipFile:
+    add("w")
+PY
   fi
 fi
 exit $rc

@@ -50,7 +50,7 @@ Every command that can change the page (`nav`, `click`, `fill`, `press`,
 one line naming both:
 
 ```
-screenshot: <dir>/pinchtab-0017-reload.jpg (1440x779), half: pinchtab-0017-reload-scale-0.5.jpg (720x389)
+screenshot: /home/claude/pinchtab-shots/0017-reload.jpg (1440x779), half: 0017-reload-scale-0.5.jpg (720x389)
 ```
 
 The half-size file sits in the same directory. When text or a snap comes back

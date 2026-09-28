@@ -343,9 +343,9 @@ if [ "${1:-}" = shots ]; then
     exit 0
   fi
   n=$(wc -l < "$L")
-  echo 'screenshots since the last `pinchtab shots`, newest last (image pixels are click --x/--y coordinates):'
-  [ "$n" -gt 10 ] && echo "  ... $((n - 10)) older not shown, numbered just before the first below"
-  tail -n 10 "$L" | sed 's/^/  /'
+  echo 'screenshots since the last `pinchtab shots`, newest last:'
+  [ "$n" -gt 20 ] && echo "  ... $((n - 20)) older lines not shown, numbered just before the first below"
+  tail -n 20 "$L" | sed 's/^/  /'
   : > "$L"
   exit 0
 fi
@@ -423,21 +423,35 @@ N=/tmp/pinchtab-shot-count
 n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$N"
 shot=$D/pinchtab-$(printf %04d $n)-$1.jpg
-if "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1; then
-  dims=$(node -e '
-    const b = require("fs").readFileSync(process.argv[1]);
-    for (let i = 2; i + 9 < b.length; i += 2 + b.readUInt16BE(i + 2))
-      if (b[i + 1] >= 0xc0 && b[i + 1] <= 0xc3) {
-        console.log(b.readUInt16BE(i + 7) + "x" + b.readUInt16BE(i + 5));
-        break;
-      }
-  ' "$shot" 2>/dev/null)
-  printf '%s  %s\n' "$shot" "${dims:-?}" >> "$L"
+small=${shot%.jpg}-scale-0.5.jpg
+# The half-size copy is the one to view by default: a quarter of the image
+# tokens. A build without --also-scale (upstream, an older fork) gets the full
+# shot alone; it exits 0 on an unknown flag, so the file is the only sign.
+"$REAL" screenshot -o "$shot" --also-scale 0.5 ${tab:+--tab "$tab"} >/dev/null 2>&1
+[ -s "$shot" ] || "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1
+if [ -s "$shot" ]; then
+  read -r full_dims small_dims <<DIMS
+$(node -e '
+  console.log(process.argv.slice(1).map(f => {
+    try {
+      const b = require("fs").readFileSync(f);
+      for (let i = 2; i + 9 < b.length; i += 2 + b.readUInt16BE(i + 2))
+        if (b[i + 1] >= 0xc0 && b[i + 1] <= 0xc3)
+          return b.readUInt16BE(i + 7) + "x" + b.readUInt16BE(i + 5);
+    } catch {}
+    return "?";
+  }).join(" "));
+' "$shot" "$small" 2>/dev/null)
+DIMS
+  lines="$shot (${full_dims:-?} px; image pixels are click --x/--y coordinates)"
+  [ -s "$small" ] && lines="$lines
+$small (${small_dims:-?} px, a quarter of the tokens; double its pixels for --x/--y)"
+  printf '%s\n' "$lines" >> "$L"
   # With --json, stdout is the JSON alone, so it can be piped into a parser.
   if [ -n "$json" ]; then
-    echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)" >&2
+    printf '%s\n' "$lines" | sed 's/^/screenshot: /' >&2
   else
-    echo "screenshot: $shot (${dims:-?} px; image pixels are click --x/--y coordinates)"
+    printf '%s\n' "$lines" | sed 's/^/screenshot: /'
   fi
 fi
 exit $rc

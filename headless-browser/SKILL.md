@@ -46,12 +46,17 @@ no page loaded, so re-`nav` after seeing `no_current_tab`.
 ## Screenshots: NEVER THROW AWAY THE `screenshot:` LINE
 
 Every command that can change the page (`nav`, `click`, `fill`, `press`,
-`scroll`, ...) has ALREADY saved a screenshot, and prints
-`screenshot: <path>` first. When text or a snap comes back empty, half-loaded,
-or doesn't add up -- a canvas, a map, refs pointing at the wrong thing -- VIEW
-THAT IMAGE FIRST. One look answers what ten calls of debugging in text won't.
-Click what you see with `click --x --y`: image pixels are click coordinates,
-no scaling.
+`scroll`, ...) has ALREADY saved a screenshot at two sizes, and prints a
+`screenshot: <path>` line for each first. When text or a snap comes back
+empty, half-loaded, or doesn't add up -- a canvas, a map, refs pointing at the
+wrong thing -- VIEW THE IMAGE FIRST. One look answers what ten calls of
+debugging in text won't.
+
+View the half-size `-scale-0.5.jpg` by default: it costs a quarter of the
+tokens and is still readable. Open the full-size one for small print, or when
+a click has to be exact. Click what you see with `click --x --y`: the
+full-size image's pixels are click coordinates, so double what you read off
+the half-size one.
 
 **If you discard the line, you won't know the image exists, and you will end up
 debugging the page blind.** So batch, loop, grep and save tokens as much as you
@@ -79,7 +84,7 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 ```
 
 `pinchtab shots` lists every screenshot since the last `shots` (the last 10,
-newest last), however the rest of the command filtered its output. When in
+at both sizes, newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
 
 ## The browser

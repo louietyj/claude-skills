@@ -1,0 +1,14 @@
+<html><body>
+<button id="t" style="font-size:24px">off</button>
+<script>
+window.clicks = 0;
+var t = document.getElementById('t');
+t.addEventListener('mousedown', function () {
+  var end = Date.now() + 600;
+  while (Date.now() < end) {}
+});
+t.addEventListener('click', function (e) {
+  clicks++;
+  t.textContent = t.textContent === 'off' ? 'on' : 'off';
+});
+</script></body></html>

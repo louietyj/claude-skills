@@ -173,6 +173,7 @@ done | grep autosolver
 | `worker.html` | A page worker that answers pings, to check a worker survives. |
 | `interstitial.html` | A bare "Continue" challenge page, where the semantic fallback may click. |
 | `mouselog.html` | Logs every mouse event with its time and `isTrusted`, to inspect humanized paths. |
+| `slowclick.html` | A toggle whose `mousedown` blocks for 600 ms, like a heavy page on one vCPU. `window.clicks` counts the clicks that landed: each `pinchtab click` must add exactly one. |
 | `bal.sh`, `logs.sh` | Both providers' balances, and the autosolver's log lines. |
 | `inner_eval.py` | Runs JS inside a cross-site frame over raw CDP (port 9869), independent of pinchtab. |
 

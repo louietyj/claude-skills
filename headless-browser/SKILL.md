@@ -101,6 +101,18 @@ parse coordinates out of HTML: SVG `cx`/`cy`, `x`/`y` and inline positions
 come before transforms are applied. In one run they put seats at negative y,
 stacked 82 placeholders at one point, and misplaced a whole tier boundary.
 
+But if you are several evals into reverse-engineering the DOM -- guessing
+class names, walking nesting, working out which element is which -- to answer
+something you could see, stop and look. A half-size shot costs ~370 tokens,
+less than most eval output. For detail, zoom in on one element:
+
+```bash
+pinchtab screenshot -s '<selector>' -o /home/claude/crop.jpg   # full resolution
+pinchtab screenshot --annotate -o /home/claude/refs.jpg          # numbered ref boxes
+```
+
+A crop's pixels are not click coordinates; the full-size shot's are.
+
 ## The browser
 
 The runtime is

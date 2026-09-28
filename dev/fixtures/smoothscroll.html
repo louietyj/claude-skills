@@ -1,0 +1,27 @@
+<html><head><style>
+body { margin: 0; height: 5000px; background: linear-gradient(#fff, #36c); }
+#target { position: absolute; top: 1500px; left: 100px; width: 200px; height: 50px; background: #c33;
+  transition: transform 1s; }
+#target.in { transform: translateX(400px); }
+</style></head><body>
+<div id="target">target</div>
+<script>
+// Like Lenis: takes over the wheel and eases window.scrollTo over 1 s. The
+// scroll changes nothing in the DOM, so a mutation-only settle misses it.
+// ?css leaves the wheel to Chrome, and the first scroll slides #target 400px
+// right over a 1 s transition instead.
+var from = 0, to = 0, t0 = 0, anim = false;
+if (location.search === '?css') addEventListener('scroll', function () {
+  document.getElementById('target').classList.add('in');
+});
+else addEventListener('wheel', function (e) {
+  e.preventDefault();
+  from = scrollY; to = Math.max(0, to + e.deltaY); t0 = performance.now();
+  if (!anim) { anim = true; requestAnimationFrame(step); }
+}, {passive: false});
+function step(now) {
+  var p = Math.min(1, (now - t0) / 1000);
+  scrollTo(0, from + (to - from) * (1 - Math.pow(1 - p, 3)));
+  if (p < 1) requestAnimationFrame(step); else anim = false;
+}
+</script></body></html>

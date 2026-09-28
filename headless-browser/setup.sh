@@ -416,6 +416,9 @@ D=$HOME/pinchtab-shots
 [ -d /mnt/user-data/outputs ] && D=/mnt/user-data/outputs/pinchtab-shots
 D=${PINCHTAB_SHOT_DIR:-$D}
 mkdir -p "$D"
+# A shot taken the moment the command returns catches spinners and half-applied
+# re-renders, each costing the agent another look.
+"$REAL" wait --dom-quiet ${tab:+--tab "$tab"} >/dev/null 2>&1 || true
 N=/tmp/pinchtab-shot-count
 n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$N"
@@ -495,7 +498,7 @@ fi
 # text is in context, and stating them first invites reading the file for the
 # rule they already overrode.
 printf '\n%s CORRECTIONS TO THE FILE ABOVE %s\n' "$RULE_H" "$RULE_H"
-printf 'Four things in that file are wrong for this sandbox. Everything else in\n'
+printf 'Five things in that file are wrong for this sandbox. Everything else in\n'
 printf 'it applies exactly as written.\n'
 printf '\n1. Its Core Workflow opens with\n'
 printf '     export PINCHTAB_SESSION=$(pinchtab session create --agent-id ...)\n'
@@ -509,6 +512,11 @@ printf '   by the steps above -- do not reconfigure `browser.binary`, the securi
 printf '   gates, or `browsers.default`.\n'
 printf '4. Its Safety Defaults forbid entering credentials. For accounts the\n'
 printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
+printf '5. Skip `wait --load network-idle`: analytics keep most sites from ever\n'
+printf '   going idle, so it just times out. `pinchtab wait --dom-quiet` waits for\n'
+printf '   300ms with no DOM change and no spinner, 2s at most. Page-changing\n'
+printf '   commands already run it before their screenshot, and --snap, --snap-diff\n'
+printf '   and --text run it before reading.\n'
 printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
 printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
 printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'

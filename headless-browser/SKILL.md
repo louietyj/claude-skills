@@ -87,6 +87,14 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 at both sizes, newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
 
+## Where things are on the page
+
+For layout questions (seat maps, charts, which tier or row a thing is in),
+ask the live page with `pinchtab eval` and `getBoundingClientRect()`. Don't
+parse coordinates out of HTML: SVG `cx`/`cy`, `x`/`y` and inline positions
+come before transforms are applied. In one run they put seats at negative y,
+stacked 82 placeholders at one point, and misplaced a whole tier boundary.
+
 ## The browser
 
 The runtime is

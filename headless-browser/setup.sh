@@ -344,8 +344,8 @@ if [ "${1:-}" = shots ]; then
   fi
   n=$(wc -l < "$L")
   echo 'screenshots since the last `pinchtab shots`, newest last:'
-  [ "$n" -gt 20 ] && echo "  ... $((n - 20)) older lines not shown, numbered just before the first below"
-  tail -n 20 "$L" | sed 's/^/  /'
+  [ "$n" -gt 10 ] && echo "  ... $((n - 10)) older not shown, numbered just before the first below"
+  tail -n 10 "$L" | sed 's/^/  /'
   : > "$L"
   exit 0
 fi
@@ -443,15 +443,15 @@ $(node -e '
   }).join(" "));
 ' "$shot" "$small" 2>/dev/null)
 DIMS
-  lines="$shot (${full_dims:-?} px; image pixels are click --x/--y coordinates)"
-  [ -s "$small" ] && lines="$lines
-$small (${small_dims:-?} px, a quarter of the tokens; double its pixels for --x/--y)"
-  printf '%s\n' "$lines" >> "$L"
+  # SKILL.md explains the two sizes once; this line only names them.
+  line="$shot (${full_dims:-?})"
+  [ -s "$small" ] && line="$line, half: ${small##*/} (${small_dims:-?})"
+  printf '%s\n' "$line" >> "$L"
   # With --json, stdout is the JSON alone, so it can be piped into a parser.
   if [ -n "$json" ]; then
-    printf '%s\n' "$lines" | sed 's/^/screenshot: /' >&2
+    printf 'screenshot: %s\n' "$line" >&2
   else
-    printf '%s\n' "$lines" | sed 's/^/screenshot: /'
+    printf 'screenshot: %s\n' "$line"
   fi
 fi
 exit $rc

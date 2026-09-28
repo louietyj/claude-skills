@@ -46,8 +46,14 @@ no page loaded, so re-`nav` after seeing `no_current_tab`.
 ## Screenshots: NEVER THROW AWAY THE `screenshot:` LINE
 
 Every command that can change the page (`nav`, `click`, `fill`, `press`,
-`scroll`, ...) has ALREADY saved a screenshot at two sizes, and prints a
-`screenshot: <path>` line for each first. When text or a snap comes back
+`scroll`, ...) has ALREADY saved a screenshot at two sizes, and first prints
+one line naming both:
+
+```
+screenshot: <dir>/pinchtab-0017-reload.jpg (1440x779), half: pinchtab-0017-reload-scale-0.5.jpg (720x389)
+```
+
+The half-size file sits in the same directory. When text or a snap comes back
 empty, half-loaded, or doesn't add up -- a canvas, a map, refs pointing at the
 wrong thing -- VIEW THE IMAGE FIRST. One look answers what ten calls of
 debugging in text won't.
@@ -84,7 +90,7 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 ```
 
 `pinchtab shots` lists every screenshot since the last `shots` (the last 10,
-at both sizes, newest last), however the rest of the command filtered its output. When in
+newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
 
 ## Where things are on the page

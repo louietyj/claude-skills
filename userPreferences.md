@@ -58,7 +58,10 @@ Run it unconditionally; it's idempotent.
 Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
 
 **AliExpress** — actors, in exactly this shape:
-1. **Search:** ONE `devcake/aliexpress-products-scraper` call with every search query batched into it, `maxProducts: 50` (the minimum), and `callOptions.maxTotalChargeUsd: 0.003`. **Use $0.003 — never $0.10, never any other value, overriding the general cap rule below.** The run still returns the full dataset; the cap only stops billing. `maxProducts` is per query, so without this cap 10 queries bill 500 results — that once burned my monthly quota.
+1. **Search:** one `devcake/aliexpress-products-scraper` call per search query, each with `maxProducts: 50` (the minimum) and `callOptions.maxTotalChargeUsd: 0.003` (overrides the general cap rule below).
+   - DO NOT use $0.10 or any other cap. $0.003 still returns all 50 results; the cap only stops billing.
+   - DO NOT batch `searchQueries`. A capped batched run often returns only the first query's 50 results.
+   - DO NOT run uncapped. You're billed `maxProducts` × queries — that once burned my monthly quota.
 2. **Detail:** pick the listings worth reading from the search results and pass their URLs in one `piotrv1001/aliexpress-product-details-scraper` call (normal cap rule applies).
 3. **Images:** when the description leaves unclear what the product actually is — ambiguous, or you suspect seller shenanigans (misleading title, bait variant, specs that don't match) — download all the listing's images from the detail output, tile them into one mosaic, and read that instead of trusting the text.
 
@@ -68,7 +71,7 @@ Preapproved:
 - Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).
 - Amazon: `junglee/Amazon-crawler` — search + full detail in one call (`scrapeProductDetails: true`).
 - Walmart browse and detail: `sian.agency/walmart-data-scraper` — Use `state` for grocery/in-store localization, not `zip` (accepted but ignored).
-- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search. **Always `maxTotalChargeUsd: 0.003`** (see above).
+- AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search. **One call per query, always `maxTotalChargeUsd: 0.003`** (see above).
 - AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
 - Google reviews: `web_wanderer/google-reviews-scraper`
 - Yelp reviews: `web_wanderer/yelp-reviews-scraper`

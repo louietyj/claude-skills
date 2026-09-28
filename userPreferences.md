@@ -67,8 +67,7 @@ headless-browser is only the fallback here: it's clunky per listing and gets blo
 Preapproved:
 - Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).
 - Amazon: `junglee/Amazon-crawler` — search + full detail in one call (`scrapeProductDetails: true`).
-- Walmart browse: `automation-lab/walmart-scraper` — keyword search.
-- Walmart detail: `e-commerce/walmart-product-detail-scraper` — needs a direct product URL, not a search/category URL.
+- Walmart browse and detail: `sian.agency/walmart-data-scraper` — Use `state` for grocery/in-store localization, not `zip` (accepted but ignored).
 - AliExpress browse: `devcake/aliexpress-products-scraper` — keyword search. **Always `maxTotalChargeUsd: 0.003`** (see above).
 - AliExpress detail: `piotrv1001/aliexpress-product-details-scraper` — needs a product URL.
 - Google reviews: `web_wanderer/google-reviews-scraper`

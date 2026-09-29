@@ -268,6 +268,16 @@ for k in allowClipboard allowStateExport allowFileScheme; do
 done
 "$REAL" config set security.allowedDomains '*' >/dev/null
 
+# Cowork routes all egress through a proxy on 127.0.0.1, so every page comes
+# back from a loopback IP, which pinchtab's SSRF guard 403s unless told the
+# proxy is trusted. `security down` leaves this one alone.
+LOOPBACK_PROXY=false
+for p in "${HTTPS_PROXY:-}" "${https_proxy:-}" "${HTTP_PROXY:-}" "${http_proxy:-}" \
+         "${ALL_PROXY:-}" "${all_proxy:-}"; do
+  case "$p" in *://127.*|*://localhost*|*://\[::1\]*) LOOPBACK_PROXY=true ;; esac
+done
+"$REAL" config set security.trustLoopbackProxy "$LOOPBACK_PROXY" >/dev/null
+
 # Captcha solving. Keys are never committed: each comes from the environment, or
 # from an untracked key file beside this script. CapSolver solves reCAPTCHA,
 # Turnstile, AWS WAF, GeeTest and MTCaptcha; 2Captcha is the only one left that
@@ -495,16 +505,22 @@ esac
 
 # Through the shim, not $REAL: this is the only thing that exercises the whole
 # chain -- server, browser launch, session resolution -- and a misconfigured
-# browser binary fails here or else on the caller's first real page.
-if "$SHIM" nav https://example.com --block-images >/dev/null 2>&1; then
+# browser binary fails here or else on the caller's first real page. Not the
+# exit code: nav exits 0 even when it prints `Error 403`. Nor the title alone:
+# after a blocked nav it is still the previous page's.
+NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1)
+NAV_TITLE=$("$SHIM" title 2>/dev/null)
+if ! grep -q '^Error' <<<"$NAV_OUT" && [ "$NAV_TITLE" = "Example Domain" ]; then
   rm -f "$SHOT_LEDGER"   # the caller's first `shots` shouldn't list example.com
   echo "server up, session ${SID:-<lazy>}, test nav OK"
   end 0
   note 'server + session' 'OK -- session is already initialized'
 else
-  echo "server up, session ${SID:-<lazy>}, but the test nav FAILED" >&2
+  echo "server up, session ${SID:-<lazy>}, but the test nav FAILED:" >&2
+  grep '^Error' <<<"$NAV_OUT" >&2
+  echo "page title: '$NAV_TITLE' (expected 'Example Domain')" >&2
   end 1
-  note 'server + session' 'FAILED -- the browser does not launch'
+  note 'server + session' 'FAILED -- the browser cannot load a page'
   fatal=1
 fi
 
@@ -551,7 +567,8 @@ printf '2. Never run `pinchtab skill update` or `pinchtab skill sync`. They writ
 printf '   into other agent skill directories found on the machine.\n'
 printf '3. Anything it says about picking a browser or profile is already settled\n'
 printf '   by the steps above -- do not reconfigure `browser.binary`, the security\n'
-printf '   gates, or `browsers.default`.\n'
+printf '   gates (trustLoopbackProxy included: it is set to match the egress\n'
+printf '   proxy here), or `browsers.default`.\n'
 printf '4. Its Safety Defaults forbid entering credentials. For accounts the\n'
 printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
 printf '5. Skip `wait --load network-idle`: analytics keep most sites from ever\n'

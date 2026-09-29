@@ -105,8 +105,13 @@ if [ -x "$REAL" ]; then
   echo "already installed: $("$REAL" --version 2>/dev/null || echo unknown)"
   rc=0
 else
+  # pinchtab's postinstall copies its skill into ~/.claude/skills/ if that exists,
+  # which in Cowork and cloud Claude Code is a live skill competing with this one.
+  PLANTED="$HOME/.claude/skills/pinchtab"
+  [ -e "$PLANTED" ] && had_planted=1 || had_planted=0
   npm install -g pinchtab
   rc=$?
+  [ $had_planted -eq 0 ] && rm -rf "$PLANTED"
 fi
 end $rc
 if [ $rc -ne 0 ] || [ ! -x "$REAL" ]; then

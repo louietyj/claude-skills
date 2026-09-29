@@ -2,8 +2,9 @@
 //
 //   dev/sandbox.sh sh 'node --test /mnt/skills/user/request-text/test_request_text.mjs'
 //
-// Most cases use `open --local` (no tunnel). The reconnect case needs hostc on
-// PATH (setup.sh installs it) and network; RT_SKIP_TUNNEL=1 skips it.
+// Most cases use `open --local` (no tunnel); the tunnel cases run against a
+// fake hostc, so nothing here needs network. setup.sh's self-test covers the
+// real tunnel.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -163,26 +164,44 @@ test("state is private to the sandbox user", async () => {
   await run(["close", id]);
 });
 
-test("a hostc reconnect is reported as exit 3 with the new URL, which then works",
-  { skip: process.env.RT_SKIP_TUNNEL === "1" && "RT_SKIP_TUNNEL=1" }, async () => {
-    // hostc's own e2e hook: SIGUSR2 forces a reconnect, which mints a new tunnel.
-    const r = await run(["open", "--field", "a:line"], { HOSTC_E2E_RECONNECT_SIGNAL: "1" });
-    assert.equal(r.code, 0, r.err);
-    const id = r.out.match(/^id:\s+(\S+)/m)[1];
-    const oldUrl = r.out.match(/^url:\s+(\S+)/m)[1];
-    const st = JSON.parse(fs.readFileSync(path.join(HOME, id, "state.json"), "utf8"));
-    process.kill(st.hostcPid, "SIGUSR2");
+// Stands in for hostc 2.x: same argv and output, no tunnel. SIGUSR2 plays a
+// tunnel that expired while offline, the one reconnect that changes the URL.
+const FAKE_HOSTC = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rt-hostc-")), "hostc");
+fs.writeFileSync(FAKE_HOSTC, `#!/usr/bin/env node
+const target = process.argv[2] ?? "";
+if (process.argv.length !== 3 || !/^127\\.0\\.0\\.1:\\d+$/.test(target)) {
+  console.error("error Unknown arguments " + process.argv.slice(2).join(" "));
+  process.exit(2);
+}
+const show = (host) =>
+  console.log("\\n  \\x1b[1mhttps://" + host + ".hostc.app\\x1b[22m  \\x1b[2m→ http://" + target + "\\x1b[22m\\n");
+show("first");
+process.on("SIGUSR2", () => {
+  console.log("The tunnel expired while offline. It has a new URL:");
+  show("second");
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1 << 30);
+`, { mode: 0o755 });
+process.env.REQUEST_TEXT_HOSTC = FAKE_HOSTC;
 
-    const w = await run(["wait", id, "--timeout", "60"]);
-    assert.equal(w.code, 3, w.err);
-    const newUrl = w.err.match(/https:\/\/\S+/)[0];
-    assert.notEqual(newUrl, oldUrl);
+test("a tunnel's public URL is picked out of hostc's output", async () => {
+  const { id, url } = await open("--field", "a:line");
+  assert.match(url, /^https:\/\/first\.hostc\.app\/\S+$/);
+  await run(["close", id]);
+});
 
-    const again = await run(["wait", id, "--timeout", "1"]);
-    assert.equal(again.code, 2, "a new URL is reported once, not on every wait");
+test("a hostc URL change is reported once as exit 3", async () => {
+  const { id, url: oldUrl } = await open("--field", "a:line");
+  const st = JSON.parse(fs.readFileSync(path.join(HOME, id, "state.json"), "utf8"));
+  process.kill(st.hostcPid, "SIGUSR2");
 
-    assert.equal((await submitViaPage(newUrl, { a: "via new url" })).status, 200);
-    const got = await run(["wait", id]);
-    assert.deepEqual(JSON.parse(got.out), { a: "via new url" });
-    await run(["close", id]);
-  });
+  const w = await run(["wait", id, "--timeout", "10"]);
+  assert.equal(w.code, 3, w.err);
+  const newUrl = w.err.match(/https:\/\/\S+/)[0];
+  assert.equal(newUrl, oldUrl.replace("first", "second"), "same token, new host");
+
+  const again = await run(["wait", id, "--timeout", "1"]);
+  assert.equal(again.code, 2, "a new URL is reported once, not on every wait");
+  await run(["close", id]);
+});

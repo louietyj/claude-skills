@@ -41,11 +41,12 @@ CLI=$(find_cli) || fail "request-text.mjs not found -- the skill files are missi
 NODE=$(command -v node 2>/dev/null) && "$NODE" -e '' 2>/dev/null \
   || fail "no working node on PATH."
 
-# hostc's protocol moves; its own docs say to stay on @latest.
+# hostc's protocol moves, so take its fixes, but not a new major: 2.0 changed
+# the CLI and its output and broke this skill on the day it shipped.
 NPM_PREFIX=$(npm prefix -g)
 HOSTC="$NPM_PREFIX/bin/hostc"
-echo "installing hostc@latest ..."
-timeout 180 npm install -g --no-fund --no-audit hostc@latest >/tmp/request-text-npm.log 2>&1
+echo "installing hostc@^2 ..."
+timeout 180 npm install -g --no-fund --no-audit 'hostc@^2' >/tmp/request-text-npm.log 2>&1
 [ -x "$HOSTC" ] || { tail -20 /tmp/request-text-npm.log >&2; fail "hostc did not install."; }
 echo "hostc $("$HOSTC" --version 2>/dev/null || echo '?')"
 

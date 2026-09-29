@@ -27,7 +27,7 @@ shell state dies with the bash call. Keep ids in your own reply text.
 ```bash
 request-text open --title "GitHub token for gh" --field token:secret
 # id:  rt-3f9a1c2e
-# url: https://t-xxxxxxxxxx.hostc.dev/<token>
+# url: https://xxxxxxxxxxxx.hostc.app/<token>
 ```
 
 Put the URL in your reply as a clickable link and say what to enter. **Then call
@@ -82,7 +82,7 @@ Other options: `--ttl-min N` (default 30; the link dies after that).
 
 The page encrypts in the browser to a key pair made for this request; the
 private half never leaves the sandbox server's memory. The tunnel relay
-(hostc.dev) and the sandbox's TLS-intercepting egress see only ciphertext. An
+(hostc.app) and the sandbox's TLS-intercepting egress see only ciphertext. An
 actively malicious relay could still serve a tampered page, since it delivers
 the page too. The link is one-shot and unguessable; submissions are decrypted
 or rejected. If the user asks, say this plainly.

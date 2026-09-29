@@ -12,14 +12,14 @@ without the value going through its own output:
 ## How it works
 
 ```
-phone ──https──▶ hostc.dev (Cloudflare Worker) ══WSS══▶ hostc client ──▶ serve (127.0.0.1)
+phone ──https──▶ hostc.app (Cloudflare Worker) ══WSS══▶ hostc client ──▶ serve (127.0.0.1)
                                                         └───────── claude.ai sandbox ─────────┘
 ```
 
 1. `request-text open` starts a detached `serve` process (its own session, so
    the sandbox doesn't kill it when the bash call ends). The process makes an
    ECDH P-256 key pair, keeps the private key in memory only, and runs
-   `hostc <port>` to get a public URL. The URL ends in a random 128-bit path;
+   `hostc 127.0.0.1:<port>` to get a public URL. The URL ends in a random 128-bit path;
    every other path returns 404.
 2. The page embeds the public key. On submit, the browser makes its own
    temporary key pair and derives an AES-256-GCM key (ECDH → HKDF-SHA256, salt
@@ -33,8 +33,9 @@ phone ──https──▶ hostc.dev (Cloudflare Worker) ══WSS══▶ host
    the sandbox's 300s per-command limit and uses exit codes to tell Claude
    whether to wait again (2), give the user a new URL (3), or give up (4).
 
-hostc makes a new tunnel, with a new URL, whenever it reconnects. `serve`
-watches for a second `Public URL:` line and `wait` reports it once as exit 3.
+hostc keeps its URL across reconnects, unless the tunnel expired while offline;
+then it prints a new one. `serve` watches for a second URL line and `wait`
+reports it once as exit 3.
 
 ## Threat model
 
@@ -43,8 +44,8 @@ gateway intercepts TLS on the way out too. The payload encryption means that
 neither of them, nor any log they keep, sees plaintext. It does **not** protect
 against an *actively* malicious hostc operator, which could serve a modified
 page, since the relay delivers the page as well as the ciphertext. Pointing
-hostc at your own deployment (`hostc config set server-url ...`, or
-`HOSTC_SERVER_URL`) closes that. The link is single-use and expires (default 30
+hostc at your own deployment (`HOSTC_SERVER`, which `serve` passes through)
+closes that. The link is single-use and expires (default 30
 minutes).
 
 ## Why hostc
@@ -65,5 +66,5 @@ python request-text/package.py   # -> request-text/request-text.zip
 ```
 
 `open --local` skips the tunnel and serves on 127.0.0.1, which is what most
-tests use. The reconnect test uses hostc's own `HOSTC_E2E_RECONNECT_SIGNAL`
-hook; set `RT_SKIP_TUNNEL=1` to skip it when offline.
+tests use. The tunnel tests run against a fake hostc that mimics 2.x's argv and
+output; setup.sh's self-test is what exercises the real one.

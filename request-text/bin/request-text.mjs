@@ -244,15 +244,16 @@ async function serve(id) {
   }
   save();
 
-  hostc = spawn(HOSTC, [String(state.port), "--local-host", "127.0.0.1"], {
+  hostc = spawn(HOSTC, [`127.0.0.1:${state.port}`], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
   });
   state.hostcPid = hostc.pid;
   save();
 
-  // hostc prints "Public URL:" once per tunnel. A reconnect mints a new tunnel
-  // with a new URL, which strands the link the user already has.
+  // hostc prints "  <url>  → <origin>" for each tunnel. A reconnect keeps the
+  // URL unless the tunnel expired while offline; then it prints a new one, which
+  // strands the link the user already has.
   let buf = "";
   const onOutput = (chunk) => {
     const text = chunk.toString();
@@ -262,7 +263,7 @@ async function serve(id) {
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
-      const m = line.match(/Public URL:\s*(https:\/\/\S+)/);
+      const m = line.replace(/\x1b\[[0-9;]*m/g, "").match(/^\s*(https:\/\/\S+)\s+→/);
       if (!m) continue;
       const url = `${m[1].replace(/\/+$/, "")}/${meta.token}`;
       if (url === state.url) continue;

@@ -8,7 +8,7 @@ description: "Place a real phone call on Louie's behalf and supervise it live â€
 There is nothing else to read here. The skill is one script:
 
 ```bash
-bash /mnt/skills/*/retell-dialer/setup.sh
+bash "$(ls -1dt /mnt/skills/*/retell-dialer ~/.claude/skills/synced/*/retell-dialer 2>/dev/null | head -1)/setup.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints the guide into your
@@ -25,9 +25,9 @@ line.
 Its output is a transcript of work already done: do not re-run it, or anything
 it shows, this conversation.
 
-The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
-`/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
-one breaks on the other.
+The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
+or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
+`~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
 
 **Never re-derive the path or set a shell variable for it.** Shell state dies
 with the bash call that set it. Just call `dialer`.

@@ -21,14 +21,16 @@ RULE_H='════════'
 RULE_S='────────'
 DOTS='.........................................'
 
-# Skills land under /mnt/skills/user/ or /mnt/skills/plugins/ depending on how
-# they were installed; hardcoding either one breaks on the other. An unmatched
-# glob stays literal, which the -d test rejects.
+# Chat puts skills under /mnt/skills/user/ or /mnt/skills/plugins/; Cowork and
+# cloud Claude Code sync them to $HOME/.claude/skills/synced/<bucket>/, newest
+# bucket wins. An unmatched glob stays literal, which the -d test rejects.
 find_skill() {
   local dir
   for dir in /mnt/skills/*/"$1"; do
     [ -d "$dir" ] && { printf '%s' "$dir"; return 0; }
   done
+  dir=$(ls -1dt "$HOME"/.claude/skills/synced/*/"$1" 2>/dev/null | head -1)
+  [ -d "$dir" ] && { printf '%s' "$dir"; return 0; }
   return 1
 }
 

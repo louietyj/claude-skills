@@ -14,16 +14,18 @@ Each subdirectory is self-contained: its own `SKILL.md`, setup script, and READM
 
 ## Local sandbox
 
-Everything here runs in claude.ai's Linux code-execution sandbox, so debug it there rather than on Windows. [`dev/sandbox.sh`](dev/sandbox.sh) is a Docker stand-in:
+Everything here runs in a Linux sandbox — claude.ai's code-execution sandbox, or the Cowork / cloud Claude Code box — so debug it there rather than on Windows. [`dev/sandbox.sh`](dev/sandbox.sh) is a Docker stand-in:
 
 ```bash
-dev/sandbox.sh up                                              # once; idempotent
-dev/sandbox.sh sh 'bash /mnt/skills/*/headless-browser/setup.sh' # SKILL.md commands run verbatim
-dev/sandbox.sh sh                                              # interactive shell
+dev/sandbox.sh up                  # once; idempotent
+dev/sandbox.sh sh '<command>'      # SKILL.md commands run verbatim
+dev/sandbox.sh sh                  # interactive shell
 dev/sandbox.sh down
 ```
 
 Each skill is mounted read-only at `/mnt/skills/user/<name>` straight from the working tree, so there is no zip to rebuild between edits; untracked secrets beside a skill come along as they would in the zip. `dev/work/` (gitignored) is `/work` inside, for handing in a locally built binary or pulling out logs.
+
+The two surfaces keep skills in different places: chat under `/mnt/skills/{user,plugins}/`, Cowork and cloud Claude Code under `~/.claude/skills/synced/<bucket>/` with no `/mnt/skills/user`. Every entry point has to find both. `SANDBOX_LAYOUT=cowork SANDBOX_NAME=cw-sandbox dev/sandbox.sh up` builds a second container with the synced layout (and no `/home/claude`); pass the same `SANDBOX_NAME` to `sh`.
 
 It is a stand-in, not a copy: `node:24-bookworm` plus Chromium's libraries, running as root. It does not reproduce the real sandbox's datacenter IP, which sites that score visitors treat differently, or claude.ai's egress policy.
 

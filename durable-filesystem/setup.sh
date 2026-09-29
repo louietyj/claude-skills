@@ -9,13 +9,18 @@ set -euo pipefail
 
 find_cfs_py() {
   local candidate
+  # Beside this script first; the rest are fallbacks. `synced` is where Cowork
+  # and cloud Claude Code put skills, and the newest bucket wins.
   for candidate in \
+    "$(cd "$(dirname "$0")" && pwd)/bin/cfs.py" \
     /mnt/skills/user/durable-filesystem/bin/cfs.py \
-    /mnt/skills/*/durable-filesystem/bin/cfs.py
+    /mnt/skills/*/durable-filesystem/bin/cfs.py \
+    "$(ls -1dt "$HOME"/.claude/skills/synced/*/durable-filesystem/bin/cfs.py \
+       2>/dev/null | head -1)"
   do
     [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
   done
-  candidate=$(find /mnt /opt /home -name cfs.py -path '*durable-filesystem*' \
+  candidate=$(find /mnt /opt /home "$HOME" -name cfs.py -path '*durable-filesystem*' \
     2>/dev/null | head -1)
   [ -n "$candidate" ] && { printf '%s' "$candidate"; return 0; }
   return 1

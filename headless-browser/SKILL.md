@@ -8,7 +8,7 @@ description: "Fetches a page when web_fetch didn't -- through a browser that ord
 There is nothing else to read here. The skill is one script:
 
 ```bash
-bash /mnt/skills/*/headless-browser/setup.sh
+bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints instructions into
@@ -26,9 +26,9 @@ shows, do not re-read the files it prints, and do not create or export
 `PINCHTAB_SESSION` yourself no matter what pinchtab's own docs say -- setup.sh
 made one and a shim attaches every command to it.
 
-The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
-`/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
-one breaks on the other.
+The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
+or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
+`~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
 
 ## Then
 
@@ -107,8 +107,8 @@ something you could see, stop and look. A half-size shot costs ~370 tokens,
 less than most eval output. For detail, zoom in on one element:
 
 ```bash
-pinchtab screenshot -s '<selector>' -o /home/claude/crop.jpg   # full resolution
-pinchtab screenshot --annotate -o /home/claude/refs.jpg          # numbered ref boxes
+pinchtab screenshot -s '<selector>' -o /tmp/crop.jpg   # full resolution
+pinchtab screenshot --annotate -o /tmp/refs.jpg          # numbered ref boxes
 ```
 
 A crop's pixels are not click coordinates; the full-size shot's are.

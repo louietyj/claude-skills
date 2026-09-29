@@ -31,11 +31,14 @@ if [ -f "$GUIDE_SENTINEL" ] && [ "${1:-}" != "--force" ]; then
   exit 0
 fi
 
+# Same lookup as session-init.sh.
 find_skill() {
   local dir
   for dir in /mnt/skills/*/"$1"; do
     [ -d "$dir" ] && { printf '%s' "$dir"; return 0; }
   done
+  dir=$(ls -1dt "$HOME"/.claude/skills/synced/*/"$1" 2>/dev/null | head -1)
+  [ -d "$dir" ] && { printf '%s' "$dir"; return 0; }
   return 1
 }
 
@@ -92,7 +95,7 @@ printf 'have. Use it the way you use the injected block: match a request against
 printf 'a description, then read that path.\n'
 if ! python3 "$HERE/skill-index.py"; then
   printf '\nFAILED to build the index. The skills are still on disk:\n'
-  printf '  ls -d /mnt/skills/{public,user,plugins}/*/\n'
+  printf '  ls -d /mnt/skills/{public,user,plugins}/*/ ~/.claude/skills/synced/*/*/\n'
   printf 'and each holds a SKILL.md whose frontmatter says when to use it.\n'
 fi
 

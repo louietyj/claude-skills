@@ -12,10 +12,10 @@ The command list is not the interface: writes need a `rev` proving you read the 
 ## Setup (once per conversation)
 
 ```bash
-bash /mnt/skills/*/durable-filesystem/setup.sh
+bash "$(ls -1dt /mnt/skills/*/durable-filesystem ~/.claude/skills/synced/*/durable-filesystem 2>/dev/null | head -1)/setup.sh"
 ```
 
-The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or `/mnt/skills/plugins/` depending on how it was installed, and hardcoding either one breaks on the other.
+The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/` or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under `~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
 
 Puts `cfs` on PATH and proves it can reach the store. **`session-init` runs this for you — if this file reached you through its transcript, setup is done; do not run it again.**
 

@@ -12,7 +12,7 @@ through your output unless you choose to print them.
 ## Setup (once per conversation)
 
 ```bash
-bash /mnt/skills/*/request-text/setup.sh
+bash "$(ls -1dt /mnt/skills/*/request-text ~/.claude/skills/synced/*/request-text 2>/dev/null | head -1)/setup.sh"
 ```
 
 Installs the tunnel client, puts `request-text` on PATH, and runs a real

@@ -19,7 +19,7 @@ is the client for them:
 ## Setup (once per conversation)
 
 ```bash
-bash /mnt/skills/*/local-mcps/setup.sh
+bash "$(ls -1dt /mnt/skills/*/local-mcps ~/.claude/skills/synced/*/local-mcps 2>/dev/null | head -1)/setup.sh"
 ```
 
 Puts `lmcps` on PATH, fetches the config, and prints the configured servers.

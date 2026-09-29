@@ -8,7 +8,7 @@ description: "Briefing to run in CHAT, in the turn before the user switches the 
 There is nothing to read here. The skill is one script:
 
 ```bash
-bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh
+bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** Its entire purpose is to put
@@ -19,9 +19,9 @@ Run it now, then answer. It prints the briefing and the skill index, and boots
 the conversation first if `session-init` has not already run. It is idempotent:
 a second run says so in a few lines rather than repeating itself.
 
-The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
-`/mnt/skills/plugins/` depending on how it was installed, and hardcoding
-either one breaks on the other.
+The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
+or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
+`~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
 
 Best run from chat, before the switch. If the user asks for it from inside
 voice, run it anyway -- through `code_execution` and `subprocess`, since

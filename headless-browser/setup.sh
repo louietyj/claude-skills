@@ -87,7 +87,9 @@ NPM_ROOT="$(npm root -g)"
 REAL="$NPM_ROOT/pinchtab/bin/pinchtab"
 BIN_DIR="$(dirname "$(dirname "$NPM_ROOT")")/bin"
 SHIM="$BIN_DIR/pinchtab"
-SESSION_FILE="${PINCHTAB_SESSION_FILE:-/home/claude/.pinchtab-session}"
+# Cloud Claude Code has no /home/claude.
+WORK_DIR=/home/claude; [ -d "$WORK_DIR" ] || WORK_DIR=$HOME
+SESSION_FILE="${PINCHTAB_SESSION_FILE:-$WORK_DIR/.pinchtab-session}"
 PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
 
 # --- 1. the package ----------------------------------------------------------

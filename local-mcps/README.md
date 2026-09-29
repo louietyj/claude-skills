@@ -73,7 +73,7 @@ A failed run is inert by design: a server that fails to enumerate keeps its last
 1. Put the config at the root of the durable filesystem — `.../Apps/louietyj-claude-ai/mcp.json`. Use Claude Code's `mcpServers` schema so blocks copy-paste from any server's README; see `config.example.json`. Give every server a `description` (`lmcps describe <server>` gathers the material), because that is the only thing standing between a configured server and never being used.
 2. In Dropbox, right-click it → **Copy link**, and paste the URL into `config-url.txt` (see `config-url.example.txt`). Paste it as-is — `lmcps` rewrites the query string itself.
 3. `python package.py` → produces `local-mcps.zip`.
-4. Upload the zip to claude.ai under Settings → Capabilities → Skills. It lands under `/mnt/skills/user/` or `/mnt/skills/plugins/` depending on the install route, which is why `SKILL.md` invokes setup through a glob rather than a literal path.
+4. Upload the zip to claude.ai under Settings → Capabilities → Skills. In chat it lands under `/mnt/skills/user/` or `/mnt/skills/plugins/` depending on the install route, and in Cowork and cloud Claude Code under `~/.claude/skills/synced/<bucket>/`, which is why `SKILL.md` searches both for setup rather than using a literal path.
 5. Paste `user-preferences.md` into Settings → Profile → personal preferences.
 6. Confirm code-execution network egress allows `dropbox.com` (for the config) plus whatever your servers need — `registry.npmjs.org` and `pypi.org` for `npx`/`uvx`.
 

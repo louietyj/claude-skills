@@ -2,7 +2,7 @@
 **At the start of every conversation, before you answer anything, run:**
 
 ```bash
-bash /mnt/skills/*/session-init/session-init.sh
+bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them.
@@ -20,14 +20,14 @@ I toggle this app between typed chat and voice. Voice swaps your injected contex
 **When I say I'm about to switch** — going hands-free, getting in the car, starting a call — run this before I do:
 
 ```bash
-bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh
+bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"
 ```
 
 **If a `claude_behavior` section calls you a voice-based conversational agent, or `bash_tool` comes back "not registered", you are already in voice and I forgot.** Don't tell me something is unavailable — run the guide through `code_execution`, which is registered:
 
 ```python
 import subprocess
-r = subprocess.run("bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh",
+r = subprocess.run('bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"',
                    shell=True, capture_output=True, text=True)
 print(r.stdout, r.stderr)
 ```

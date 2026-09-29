@@ -8,7 +8,7 @@ description: "One-touch conversation boot, run as the first action of every conv
 There is nothing to read here. The skill is one script:
 
 ```bash
-bash /mnt/skills/*/session-init/session-init.sh
+bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints instructions into
@@ -19,9 +19,9 @@ otherwise have gone to `durable-filesystem` and `local-mcps` for -- their setup
 output, their complete instructions, and the memory index -- so neither of those
 skills needs a separate invocation afterwards.
 
-The glob is deliberate: an uploaded skill lands under `/mnt/skills/user/` or
-`/mnt/skills/plugins/` depending on how it was installed, and hardcoding either
-one breaks on the other.
+The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
+or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
+`~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
 
 Its output is a transcript of work already done. Do not re-run the commands it
 shows or re-read the files it prints.

@@ -9,10 +9,20 @@
 # Each skill is mounted read-only at /mnt/skills/user/<name>, where an uploaded
 # skill lands, so the commands in its SKILL.md run verbatim. dev/work/ is mounted
 # at /work for handing files in and out (a locally built binary, logs, HTML dumps).
+#
+# SANDBOX_LAYOUT=cowork mounts them where Cowork and cloud Claude Code sync them
+# instead -- $HOME/.claude/skills/synced/<bucket>/<name>, with no /mnt/skills
+# user tier and no /home/claude. Give it its own SANDBOX_NAME.
 set -euo pipefail
 
 NAME=${SANDBOX_NAME:-claude-sandbox}
 IMAGE=${SANDBOX_IMAGE:-node:24-bookworm}
+LAYOUT=${SANDBOX_LAYOUT:-chat}
+case "$LAYOUT" in
+  chat)   SKILLS=/mnt/skills/user; WORKDIR=/home/claude ;;
+  cowork) SKILLS=/root/.claude/skills/synced/test-org_test-acct; WORKDIR=/root ;;
+  *) printf 'SANDBOX_LAYOUT must be chat or cowork\n' >&2; exit 2 ;;
+esac
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK="$REPO/dev/work"
 
@@ -33,21 +43,22 @@ up() {
   for skill in "$REPO"/*/; do
     [ -f "$skill/SKILL.md" ] || continue
     name=$(basename "$skill")
-    mounts+=(-v "$(host_path "$skill"):/mnt/skills/user/$name:ro")
+    mounts+=(-v "$(host_path "$skill"):$SKILLS/$name:ro")
   done
 
   # Chrome dies on Docker's default 64MB /dev/shm.
-  docker run -d --name "$NAME" --shm-size=1g "${mounts[@]}" "$IMAGE" sleep infinity >/dev/null
+  docker run -d --name "$NAME" --shm-size=1g --label "sandbox.workdir=$WORKDIR" \
+    "${mounts[@]}" "$IMAGE" sleep infinity >/dev/null
+  [ "$LAYOUT" = chat ] && docker exec "$NAME" mkdir -p /home/claude
 
   # The chromium package is here for its shared libraries as much as the browser:
   # a downloaded Chromium (cloakbrowser, puppeteer) will not start without them.
   docker exec "$NAME" bash -c '
-    mkdir -p /home/claude
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       chromium fonts-liberation >/dev/null
   '
-  echo "$NAME is up; skills are under /mnt/skills/user, dev/work is /work"
+  echo "$NAME is up; skills are under $SKILLS, dev/work is /work"
 }
 
 case "${1:-}" in
@@ -57,10 +68,13 @@ case "${1:-}" in
   sh)
     shift
     tty=(-i); [ -t 0 ] && [ -t 1 ] && tty=(-it)
+    # Containers from before the label existed are all chat layout.
+    wd=$(docker inspect -f '{{index .Config.Labels "sandbox.workdir"}}' "$NAME")
+    wd=${wd:-/home/claude}
     if [ $# -eq 0 ]; then
-      docker exec "${tty[@]}" -w /home/claude "$NAME" bash
+      docker exec "${tty[@]}" -w "$wd" "$NAME" bash
     else
-      docker exec "${tty[@]}" -w /home/claude "$NAME" bash -c "$*"
+      docker exec "${tty[@]}" -w "$wd" "$NAME" bash -c "$*"
     fi
     ;;
   down)

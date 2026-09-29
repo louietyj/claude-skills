@@ -423,7 +423,8 @@ if grep -q 'bad_session' "$E"; then
   "$REAL" "$@" >&3 2>"$E"; rc=$?
 fi
 
-[ -n "$O" ] && [ $rc -eq 0 ] || exit $rc
+# Failures get a shot too: "why didn't that click land?" is answered by looking.
+[ -n "$O" ] || exit $rc
 tab=
 prev=
 json=

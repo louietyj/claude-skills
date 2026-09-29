@@ -328,6 +328,11 @@ begin 'start server and mint a session'
 "$REAL" server restart >/dev/null
 sleep 2
 
+# npm's bin/pinchtab is a Node launcher that exits 0 whatever the binary
+# returned, so the shim runs the binary itself and callers get real exit codes.
+GO_BIN=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+[ -x "$GO_BIN" ] || GO_BIN=$REAL
+
 # Session shim. Callers never manage PINCHTAB_SESSION: the shim resolves one on
 # first use, reuses it across bash calls, and recreates it if it goes stale.
 #
@@ -340,7 +345,7 @@ cat > "$SHIM" <<SHIM_EOF
 #!/bin/sh
 # pinchtab shim -- installed by headless-browser/setup.sh. Do not edit in place;
 # setup.sh rewrites it on every run.
-REAL=$REAL
+REAL=$GO_BIN
 SESSION_FILE_DEFAULT=$SESSION_FILE
 L=$SHOT_LEDGER
 SHIM_EOF
@@ -412,7 +417,7 @@ E=$(mktemp)
 trap '[ -n "$O" ] && cat "$O" && rm -f "$O"; cat "$E" >&2; rm -f "$E"' EXIT
 
 "$REAL" "$@" >&3 2>"$E"; rc=$?
-# pinchtab exits 0 on a bad session, so the retry must never be gated on $rc
+# Keyed on the message, not $rc: every failure exits 1, and only this one retries.
 if grep -q 'bad_session' "$E"; then
   rm -f "$F"; resolve
   "$REAL" "$@" >&3 2>"$E"; rc=$?
@@ -444,7 +449,7 @@ shot=$D/$(printf %04d $n)-$1.jpg
 small=${shot%.jpg}-scale-0.5.jpg
 # The half-size copy is the one to view by default: a quarter of the image
 # tokens. A build without --also-scale (upstream, an older fork) gets the full
-# shot alone; it exits 0 on an unknown flag, so the file is the only sign.
+# shot alone.
 "$REAL" screenshot -o "$shot" --also-scale 0.5 ${tab:+--tab "$tab"} >/dev/null 2>&1
 [ -s "$shot" ] || "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1
 if [ -s "$shot" ]; then
@@ -505,12 +510,11 @@ esac
 
 # Through the shim, not $REAL: this is the only thing that exercises the whole
 # chain -- server, browser launch, session resolution -- and a misconfigured
-# browser binary fails here or else on the caller's first real page. Not the
-# exit code: nav exits 0 even when it prints `Error 403`. Nor the title alone:
-# after a blocked nav it is still the previous page's.
-NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1)
+# browser binary fails here or else on the caller's first real page. The title
+# too: a nav that lands on Chrome's own error page (a dead proxy) exits 0.
+NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1); nav_rc=$?
 NAV_TITLE=$("$SHIM" title 2>/dev/null)
-if ! grep -q '^Error' <<<"$NAV_OUT" && [ "$NAV_TITLE" = "Example Domain" ]; then
+if [ $nav_rc -eq 0 ] && [ "$NAV_TITLE" = "Example Domain" ]; then
   rm -f "$SHOT_LEDGER"   # the caller's first `shots` shouldn't list example.com
   echo "server up, session ${SID:-<lazy>}, test nav OK"
   end 0

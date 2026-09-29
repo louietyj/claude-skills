@@ -216,7 +216,8 @@ That instruction is wrong for this environment and the shim exists to route arou
 
 - **Sessions must survive across bash calls**, since a multi-step flow (nav, then click, then read) runs as separate tool calls with no shared shell state. The shim resolves a session from a file on disk on first use and reuses it — callers never create or export one themselves.
 - **`session create` must run unscoped.** A session-scoped caller gets `403`, so a hand-rolled `export PINCHTAB_SESSION=$(pinchtab session create ...)` silently captures an empty string and looks like it worked. The shim always resolves the ambient session before dispatching, except when the command itself is `session`.
-- **A stale session is retried transparently.** Pinchtab exits `0` even on a bad session, so the shim greps stderr for `bad_session` and retries with a freshly minted one rather than trusting the exit code.
+- **A stale session is retried transparently.** The shim greps stderr for `bad_session` and retries with a freshly minted one; every failure exits 1, so the exit code can't tell this one apart.
+- **The shim runs the Go binary, not npm's `bin/pinchtab`.** That Node launcher exits 0 whatever the binary returned (fixed in the fork's launcher, not upstream's, and npm installs upstream's).
 - **The shim is reinstalled last, unconditionally**, because `npm install -g` recreates the real `pinchtab` bin symlink and would otherwise wipe it out from under the shim.
 
 If a caller does export `PINCHTAB_SESSION` by hand anyway (because they read pinchtab's own docs instead of this skill's), the shim adopts it as the persistent session so the *next* call — which has no export — attaches to the same tab instead of silently starting a blank one.

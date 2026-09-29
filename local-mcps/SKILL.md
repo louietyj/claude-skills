@@ -56,8 +56,12 @@ Arguments are one JSON object, quoted. `--timeout SECS` (default 120) goes
 before the verb: `lmcps --timeout 240 call ...`.
 
 `call` prints the tool's text content verbatim, so `| jq` works directly when
-that text is JSON. A tool that reports failure exits non-zero with the message
-on stderr — check it rather than assuming a call worked.
+that text is JSON. Images, audio and binary resources are saved to files
+instead, and each leaves a line like `[image: /path/to/file.png (image/png,
+303134 bytes)]` where it sat in the result; open that path to see it.
+`--out-dir DIR` after `call` picks where they go. A tool that reports failure
+exits non-zero with the message on stderr — check it rather than assuming a call
+worked.
 
 `tools` results for stdio servers are cached for the conversation, so enumerate
 freely. `call` always spawns a stdio server — ~10–25s the first time npx or uv

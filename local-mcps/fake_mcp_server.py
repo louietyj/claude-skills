@@ -13,6 +13,7 @@
     eatstdin swallows the first request before serving, as a cold `npx` does
     echoenv  tools/call returns the value of $FAKE_TOKEN
 """
+import base64
 import json
 import os
 import sys
@@ -27,6 +28,8 @@ TOOLS = [
                      "required": ["b", "a"]}},
     {"name": "boom", "description": "Always fails.", "inputSchema": {"type": "object"}},
 ]
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\nfake image body"
 
 
 def out(obj):
@@ -147,6 +150,27 @@ def main():
             elif name == "boom":
                 out(result(rid, {"content": [{"type": "text", "text": "it went boom"}],
                                  "isError": True}))
+            # snapshot and mixed are left out of TOOLS so listed tool counts stay put.
+            elif name == "snapshot":
+                # Caption then image, the shape of Google Maps' maps_static_map.
+                out(result(rid, {"content": [
+                    {"type": "text", "text": "Map generated"},
+                    {"type": "image", "mimeType": "image/png",
+                     "data": base64.b64encode(PNG_BYTES).decode()}]}))
+            elif name == "mixed":
+                # No text block at all, so nothing may fall back to dumping JSON.
+                out(result(rid, {"content": [
+                    {"type": "audio", "mimeType": "audio/wav",
+                     "data": base64.b64encode(b"RIFF-fake").decode()},
+                    {"type": "resource", "resource": {
+                        "uri": "file:///r.bin", "mimeType": "application/octet-stream",
+                        "blob": base64.b64encode(b"\x00\x01\x02").decode()}},
+                    {"type": "resource", "resource": {
+                        "uri": "file:///r.txt", "mimeType": "text/plain",
+                        "text": "embedded text"}},
+                    {"type": "resource_link", "uri": "https://example.invalid/r",
+                     "name": "r"},
+                    {"type": "hologram"}]}))
             elif name == "add":
                 total = args.get("a", 0) + args.get("b", 0)
                 out(result(rid, {"content": [{"type": "text", "text": str(total)}]}))

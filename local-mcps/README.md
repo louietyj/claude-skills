@@ -170,12 +170,12 @@ The share link is unlisted rather than secret — anyone with the URL can fetch 
 ## Testing
 
 ```
-python test_lmcps.py       # 91 offline tests, no network and no npx
+python test_lmcps.py       # 94 offline tests, no network and no npx
 bash integration_test.sh   # 18 live tests against real npx and uvx servers
 TOMTOM_KEY=... bash integration_test.sh   # +2, against the real TomTom server
 ```
 
-The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, SSE unwrapping, HTTP session reuse and expiry, key choice and rotation, and that no `Authorization` header is ever invented.
+The offline suite runs against `fake_mcp_server.py`, a stdio server with switchable misbehaviour — it interleaves log lines with responses, blocks on a `roots/list` request until answered, sends an unsupported request, advertises `instructions`, or dies without a handshake — and an in-process HTTP stub. It covers config resolution and every way it can fail, `${VAR}` expansion, string JSON-RPC ids, the dispatch loop, stderr surfacing, in-band `isError`, non-text content saved to files, SSE unwrapping, HTTP session reuse and expiry, key choice and rotation, and that no `Authorization` header is ever invented.
 
 The catalog gets its own group, and it is mostly failure cases, because `servers` runs at the top of every conversation and every one of them has to degrade rather than break: a missing index, a corrupt one, a server the index has never seen, a server that left the config, a per-server build error, and a build older than a day. `$LMCPS_CATALOG` points the tests at a fixture so none of it touches the network. The build side is pinned separately — that a broken server cannot fail the build, that it keeps its last-good entry when `--previous` has one, and that no `inputSchema` ever reaches the catalog.
 

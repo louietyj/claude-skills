@@ -16,8 +16,10 @@ Config is Claude Code's `mcpServers` schema, so a block copied out of any
 server's README works unchanged. See SKILL.md for where it comes from.
 """
 import argparse
+import base64
 import hashlib
 import json
+import mimetypes
 import os
 import queue
 import random
@@ -794,6 +796,38 @@ def cmd_describe(args):
           "the whole of what decides whether this server ever gets picked.")
 
 
+# Python knows only audio/x-wav on Linux; Windows' registry hides the gap.
+EXTENSIONS = {"audio/wav": ".wav"}
+
+
+def render_content(blocks, out_dir, stem):
+    """Text verbatim; binary blocks go to disk and leave their path in place."""
+    parts = []
+    for i, c in enumerate(blocks):
+        kind = c.get("type")
+        if kind == "text":
+            parts.append(c.get("text", ""))
+            continue
+        if kind == "resource_link":
+            parts.append(f"[resource_link: {c.get('uri')}]")
+            continue
+        res = c.get("resource", {}) if kind == "resource" else c
+        if "text" in res:
+            parts.append(res["text"])
+            continue
+        data = res.get("blob") if kind == "resource" else res.get("data")
+        if data is None:
+            parts.append(f"[{kind} block, not rendered]")
+            continue
+        mime = res.get("mimeType", "")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ext = EXTENSIONS.get(mime) or mimetypes.guess_extension(mime) or ".bin"
+        path = out_dir / f"{stem}-{i}{ext}"
+        path.write_bytes(base64.b64decode(data))
+        parts.append(f"[{kind}: {path.resolve()} ({mime}, {path.stat().st_size} bytes)]")
+    return "\n".join(parts)
+
+
 def cmd_call(args):
     servers = load_servers()
     cfg = pick(servers, args.server)
@@ -811,8 +845,8 @@ def cmd_call(args):
             print(f"lmcps: {note}", file=sys.stderr)
         raise
 
-    text = "\n".join(c.get("text", "") for c in result.get("content", [])
-                     if c.get("type") == "text")
+    stem = f"{args.server}-{args.tool}-{time.time_ns()}"
+    text = render_content(result.get("content", []), Path(args.out_dir), stem)
     if not text and "structuredContent" in result:
         text = json.dumps(result["structuredContent"], indent=2)
     if not text:
@@ -1033,6 +1067,8 @@ def main():
     p.add_argument("server")
     p.add_argument("tool")
     p.add_argument("arguments", nargs="?", default="", help="JSON object of arguments")
+    p.add_argument("--out-dir", default=str(LMCPS_HOME / "out"), metavar="DIR",
+                   help="where image, audio and binary resource blocks are saved")
     p.set_defaults(fn=cmd_call)
 
     p = sub.add_parser("rotate", help="switch a server to its next key, or to a named one")

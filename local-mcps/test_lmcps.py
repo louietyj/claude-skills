@@ -259,6 +259,37 @@ class TestStdioProtocol(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "3")
 
+    def test_an_image_is_saved_and_its_path_follows_the_caption(self):
+        """Only text blocks used to be printed, so a static map came back as its
+        caption alone."""
+        self.write_config({"adder": fake_server()})
+        out = self.tmp / "out"
+        r = self.run_lmcps("call", "adder", "snapshot", "{}", "--out-dir", str(out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        caption, placeholder = r.stdout.strip().splitlines()
+        self.assertEqual(caption, "Map generated")
+        [saved] = out.iterdir()
+        self.assertEqual(saved.suffix, ".png")
+        self.assertEqual(saved.read_bytes(), b"\x89PNG\r\n\x1a\nfake image body")
+        self.assertEqual(placeholder, f"[image: {saved.resolve()} (image/png, 23 bytes)]")
+
+    def test_every_non_text_block_is_accounted_for_and_no_base64_is_printed(self):
+        """With no text block the old fallback dumped the raw result, base64 and
+        all, onto stdout."""
+        self.write_config({"adder": fake_server()})
+        out = self.tmp / "out"
+        r = self.run_lmcps("call", "adder", "mixed", "{}", "--out-dir", str(out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.strip().splitlines()
+        self.assertRegex(lines[0], r"^\[audio: .*-0\.wav \(audio/wav, 9 bytes\)\]$")
+        self.assertRegex(lines[1], r"^\[resource: .*-1\.bin \(application/octet-stream, 3 bytes\)\]$")
+        self.assertEqual(lines[2:], ["embedded text",
+                                     "[resource_link: https://example.invalid/r]",
+                                     "[hologram block, not rendered]"])
+        self.assertEqual(sorted(p.read_bytes() for p in out.iterdir()),
+                         [b"\x00\x01\x02", b"RIFF-fake"])
+        self.assertNotIn("UklGRi1mYWtl", r.stdout)
+
     def test_log_lines_interleaved_with_responses_are_skipped(self):
         self.write_config({"adder": fake_server("noisy")})
         r = self.run_lmcps("call", "adder", "add", '{"a": 20, "b": 22}')

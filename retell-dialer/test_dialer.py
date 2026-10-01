@@ -244,7 +244,7 @@ class DispatchGuard(unittest.TestCase):
 
     def dispatch(self, force=False):
         args = Args(to="+15550100", force=force, opening="hi", purpose="p",
-                    brief="the brief", brief_file=None)
+                    other_party="the front desk", brief="the brief", brief_file=None)
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             try:
@@ -434,13 +434,17 @@ class CheckVars(unittest.TestCase):
     """An unset variable renders as a literal `{{brief}}` -- a live call with
     no instructions at all."""
 
+    COMPLETE = {"opening": "hi", "brief": "b", "call_purpose": "p", "other_party": "the front desk"}
+
     def test_empty_and_whitespace_are_refused(self):
-        for bad in ("", "   ", None):
-            with self.assertRaises(SystemExit):
-                dialer.check_vars({"opening": "hi", "call_purpose": "x", "brief": bad})
+        for key in self.COMPLETE:
+            for bad in ("", "   ", None):
+                with self.subTest(key=key, value=bad), self.assertRaises(SystemExit), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    dialer.check_vars({**self.COMPLETE, key: bad})
 
     def test_complete_set_passes(self):
-        dialer.check_vars({"opening": "hi", "brief": "b", "call_purpose": "p"})
+        dialer.check_vars(self.COMPLETE)
 
 
 class GregorianCalendar(unittest.TestCase):
@@ -461,7 +465,8 @@ class GregorianCalendar(unittest.TestCase):
         sent = {}
         saved = dialer.retell
         dialer.retell = lambda cfg, path, **kw: (sent.update(kw["body"]), (201, {}))[1]
-        variables = {"opening": "hi", "brief": "the brief", "call_purpose": "p"}
+        variables = {"opening": "hi", "brief": "the brief", "call_purpose": "p",
+                     "other_party": "the front desk"}
         try:
             dialer.create_call({"from_number": "+1", "agent_id": "a"}, variables, web=False, to="+2")
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
@@ -714,6 +719,21 @@ class ResumeAfterActing(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_cli(*argv, stdin="  \n")
         self.assertEqual(self.seen, {})
+
+
+class AgentPrompt(unittest.TestCase):
+    """agent.json carries a copy of agent/prompt.md; an edit to one without
+    `agent-push` deploys a prompt nobody reviewed."""
+
+    def test_agent_json_matches_prompt_md(self):
+        prompt = dialer.render_prompt(Path(dialer.PROMPT).read_text(encoding="utf-8"))
+        spec = json.loads(Path(dialer.AGENT_SPEC).read_text(encoding="utf-8"))
+        self.assertEqual(spec["retell_llm"]["general_prompt"], prompt,
+                         "agent/prompt.md changed -- run `dialer agent-push`")
+
+    def test_title_and_comments_are_stripped(self):
+        rendered = dialer.render_prompt("# title\n\n<!--\nnote\n-->\n\nA\n\n\n\nB <!-- x -->\n")
+        self.assertEqual(rendered, "A\n\nB")
 
 
 if __name__ == "__main__":

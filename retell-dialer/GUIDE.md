@@ -74,6 +74,10 @@ coaching on tone or telephone manner.
 `dispatch` appends the same Gregorian calendar to every brief, so the agent has
 it too. Leave it out of what you write.
 
+Call the other party "they" throughout, never "the user", "the human" or "the
+customer". The agent has repeatedly answered as the business it was calling;
+`--other-party` already says who they are.
+
 **Take stock before you write.** Every fact about Louie that could come up,
 every decision the call could force, every tool you hold. Then sort each into
 the buckets below: what differs between them is whether it goes into the brief,
@@ -202,8 +206,11 @@ dialer health
     Queue, token, agent, webhook, number. setup.sh already ran it; run it
     again only to diagnose a failure.
 
-dialer dispatch --to +16695550142 --opening "…" --purpose "…" --brief-file brief.md
+dialer dispatch --to +16695550142 --other-party "…" --opening "…" --purpose "…" --brief-file brief.md
     --to          E.164.
+    --other-party Who answers, as a noun phrase: "the front desk at Bright
+                  Smiles Dental", "an Xfinity billing rep". The prompt's first
+                  line names them as everything the agent hears.
     --opening     The one question to lead with, right after the disclosure,
                   which the agent adds itself. See "The sentence after the
                   disclosure decides the call".
@@ -297,6 +304,7 @@ A call, start to finish (output trimmed):
 
 ```text
 $ dialer dispatch --to +16695550142 --purpose "move a dental cleaning" \
+    --other-party "the front desk at Bright Smiles Dental" \
     --opening "Could Louie's Friday cleaning move to next week?" \
     --brief-file brief.md
 {"call_id": "call_8f2e", "call_status": "registered", "call_type": "phone_call"}

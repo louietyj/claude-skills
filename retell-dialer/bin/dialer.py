@@ -25,6 +25,7 @@ import calendar
 import datetime
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -35,6 +36,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
 STAGED = os.path.join(os.path.dirname(HERE), "state", "staged-call.json")
 JOURNAL = os.path.join(os.path.dirname(HERE), "state", "journal.jsonl")
+AGENT_SPEC = os.path.join(os.path.dirname(HERE), "agent", "agent.json")
+PROMPT = os.path.join(os.path.dirname(HERE), "agent", "prompt.md")
 
 RETELL = "https://api.retellai.com"
 
@@ -44,7 +47,7 @@ POLL_BUDGET = 200
 WATCH_INTERVAL = 15       # batching floor; GUIDE.md says when to raise it
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
-DYNAMIC_VARS = ("opening", "brief", "call_purpose")
+DYNAMIC_VARS = ("opening", "brief", "call_purpose", "other_party")
 TIMEZONE = "America/Los_Angeles"   # Louie's, and the agent's (agent.json)
 DAY_LETTERS = "MTWRFSU"            # indexed by calendar.weekday()
 
@@ -224,6 +227,7 @@ def describe_call(c):
             "to": c.get("to_number"),
             "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts / 1000)) if ts else None,
             "purpose": variables.get("call_purpose"),
+            "other_party": variables.get("other_party"),
             "opening": variables.get("opening"),
             "brief": variables.get("brief")}
 
@@ -247,7 +251,8 @@ def read_variables(args):
     if args.brief_file:
         with open(args.brief_file, encoding="utf-8") as fh:
             brief = fh.read().strip()
-    return {"opening": args.opening, "brief": brief, "call_purpose": args.purpose}
+    return {"opening": args.opening, "brief": brief, "call_purpose": args.purpose,
+            "other_party": args.other_party}
 
 
 def local_today():
@@ -903,6 +908,56 @@ def cmd_agent_pull(cfg, args):
     emit(out)
 
 
+def render_prompt(markdown):
+    """agent/prompt.md as the agent sees it: no title, no HTML comments."""
+    _, body = markdown.split("\n", 1)
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    return re.sub(r"\n{3,}", "\n\n", body).strip()
+
+
+def cmd_agent_push(cfg, args):
+    """Sends only the model, prompt, tools and handbook toggles; any other
+    difference from the spec is reported, not sent."""
+    with open(PROMPT, encoding="utf-8") as fh:
+        prompt = render_prompt(fh.read())
+    with open(AGENT_SPEC, encoding="utf-8") as fh:
+        raw = fh.read()
+    spec = json.loads(raw)
+    # A load/dump that reformatted the file would bury the prompt change in noise.
+    if json.dumps(spec, indent=2, ensure_ascii=False) + "\n" != raw:
+        die(f"{AGENT_SPEC} is not in json.dumps(indent=2) form -- reformat it first")
+    if spec["retell_llm"]["general_prompt"] != prompt:
+        spec["retell_llm"]["general_prompt"] = prompt
+        with open(AGENT_SPEC, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(spec, indent=2, ensure_ascii=False) + "\n")
+        print(f"inlined {os.path.basename(PROMPT)} into {os.path.basename(AGENT_SPEC)}")
+
+    live_spec = json.loads(json.dumps(spec).replace("{{WORKER_URL}}", cfg["worker_url"]))
+    llm = live_spec.pop("retell_llm")
+    for name, path, body in (
+            ("llm", f"/update-retell-llm/{cfg['llm_id']}",
+             {k: llm[k] for k in ("model", "general_prompt", "general_tools")}),
+            ("agent", f"/update-agent/{cfg['agent_id']}",
+             {"handbook_config": live_spec["handbook_config"]})):
+        status, resp = retell(cfg, path, method="PATCH", body=body)
+        if status != 200:
+            die(f"{name} push returned {status}: {json.dumps(resp)[:300]}")
+
+    drift = []
+    for name, path, want in (("agent", f"/get-agent/{cfg['agent_id']}",
+                              {k: v for k, v in live_spec.items() if k != "response_engine"}),
+                             ("llm", f"/get-retell-llm/{cfg['llm_id']}", llm)):
+        status, have = retell(cfg, path)
+        if status != 200:
+            die(f"{name} pull returned {status}: {json.dumps(have)[:300]}")
+        # A null in the spec is Retell's default, which it leaves out entirely.
+        drift += [f"{name}.{k}" for k, v in want.items()
+                  if have.get(k) != v and not (v is None and k not in have)]
+    if drift:
+        die(f"pushed, but live differs from the spec in: {', '.join(drift)}")
+    print(f"pushed; live agent matches {os.path.basename(AGENT_SPEC)}")
+
+
 def main():
     # Transcripts carry whatever the agent said, and a brief written with an em
     # dash comes back through here. On a Windows console that is cp1252 by
@@ -928,6 +983,10 @@ def main():
                             help="the one question to lead with, after the disclosure")
         parser.add_argument("--purpose", required=True,
                             help="one phrase, for call screening")
+        # The prompt's first line names who is on the other end. Left to the
+        # brief's prose, the agent kept answering as the business it called.
+        parser.add_argument("--other-party", required=True,
+                            help="who answers, e.g. 'the front desk at Riverside Dental'")
         parser.add_argument("--brief", help="the brief, inline")
         parser.add_argument("--brief-file", help="or the brief, from a file")
 
@@ -1017,6 +1076,7 @@ def main():
 
     sub.add_parser("health", help="check queue, token, agent and number").set_defaults(fn=cmd_health)
     sub.add_parser("agent-pull", description="dump the live agent and LLM config").set_defaults(fn=cmd_agent_pull)
+    sub.add_parser("agent-push", description="inline agent/prompt.md, push agent.json, verify").set_defaults(fn=cmd_agent_push)
 
     args = ap.parse_args()
     args.fn(load_config(), args)

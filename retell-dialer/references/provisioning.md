@@ -59,9 +59,34 @@ freezes v0 and sends future edits to a new draft, and which of the two calls
 would then run is undocumented. Don't publish without checking a call's
 `agent_version` afterwards.
 
-The prompt is deliberately almost empty — `{{brief}}` plus the invariants. Three
-dynamic variables are supplied per call (`opening`, `brief`, `call_purpose`), so
-each call's instructions are written fresh rather than configured once.
+The prompt is ours end to end: a role key naming `{{other_party}}`, speech and
+style rules, caller-side examples, then `{{brief}}` and the invariants. Four
+dynamic variables are supplied per call (`other_party`, `opening`, `brief`,
+`call_purpose`), so each call's instructions are written fresh. Edit it in
+`agent/prompt.md`, then `dialer agent-push`: it inlines the file into
+`agent.json` (title and HTML comments stripped), PATCHes the model, prompt,
+tools and handbook toggles, and fails if the live config then differs from the
+spec. A test fails while the two files disagree.
+
+Every `handbook_config` preset is off. They are written for an agent that *is*
+the business answering customers — persona, examples, empathy lines, intake-style
+name confirmation — and with them on, the agent kept answering as the business
+it had called ("who can you transfer you to"). The parts worth keeping (speech
+normalization, NATO spelling, filler words, hard ceilings) are copied into the
+prompt, reworded where they assumed the business side.
+[`retell-handbook.md`](retell-handbook.md) has the presets' text.
+
+Retell also adds a current date and time block to the newest user turn
+("Current Time Awareness"), and no setting turns it off. On short turns the
+agent took it for the other party's words ("that message looks like a block of
+calendar text") until the prompt described it.
+
+The model stays on `claude-5-sonnet`. On `claude-5.5-sonnet` the agent spoke its
+reasoning aloud ("The transcript shows only 'Sure'… I'll repeat the intro") and
+dismissed short turns as system text; the same prompt on Sonnet 5 did neither.
+Sonnet 5.5 cannot fully disable thinking (`disabled` is a 400; the lowest
+setting is `between_tools`), and Retell doesn't say what it sends instead.
+Retest before upgrading.
 
 The agent lets the other side speak first (`start_speaker: user`, speaking
 itself after 3s of silence). On a fixed timer it talked over "Wooga Korean
@@ -69,6 +94,10 @@ Barbecue" and the host hung up. The price is that the first reply is generated
 rather than pre-synthesised, 2–4s after their greeting. `reminder_max_count: 0`
 because Retell's default nudge after 10s of silence had the agent disclose into
 hold music, then skip the disclosure for the human who came back.
+`press_digit` has `speak_after_execution: false` for the same reason: with it on,
+Retell asks the model for a line after every keypress, and the menu hears it as
+input. `end_call` has it off too: with it on, the agent spoke a line ("I'll wrap
+up here") after hanging up.
 
 The voice is `retell-Rita`: brisk, with a little line noise that reads as a real
 caller. The slower, warmer voices suit an agent answering a helpline, not a
@@ -80,8 +109,7 @@ count is every turn's full context: general prompt, tool descriptions, handbook
 presets, transcript, tool results and any knowledge base retrievals, so a
 knowledge base is no escape. A long call passes 4,000 on transcript alone,
 which is why the invariants and tool descriptions are compressed and GUIDE.md
-gates every brief on a compression pass. The handbook presets stay on
-deliberately: Retell's tuned text, worth its tokens.
+gates every brief on a compression pass.
 
 ## A phone number
 

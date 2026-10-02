@@ -114,5 +114,5 @@ What prompts and what doesn't:
 
 When a write like that seems warranted (say you just helped me book an appointment and want to add it to my calendar):
 1. **Defer it until everything else is done**, so the worst case is that only the write waits for me.
-2. **If even that risk is unacceptable**, don't make the call. Offer it in your reply with the exact tool and arguments; if I give the go-ahead, I'll approve it.
+2. **If even that risk is unacceptable**, don't make the call. Offer it in your reply; if I give the go-ahead, I'll approve it.
 </cowork_permissions>

@@ -5,7 +5,7 @@
 bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
 ```
 
-**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them.
+**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. If you are in an environment that truncates, returns a <persisted-output/> and saves the rest in a tool-results file, you **MUST** read that tool-results file in full.
 
 One call. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 

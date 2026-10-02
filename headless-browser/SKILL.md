@@ -93,6 +93,15 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
 
+## Files
+
+A PDF, image or other file URL is not a page: `text` and `snap` see nothing
+of it, and `nav` says so in a HINT. Save it instead:
+
+```bash
+pinchtab download '<url>' -o /tmp/<name>
+```
+
 ## Where things are on the page
 
 For layout questions (seat maps, charts, which tier or row a thing is in),

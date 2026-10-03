@@ -36,6 +36,7 @@
   "volume": 1,
   "enable_expressive_mode": false,
   "enable_backchannel": false,
+  "reminder_trigger_ms": 60000,
   "reminder_max_count": 0,
   "max_call_duration_ms": 1800000,
   "interruption_sensitivity": 0.3,

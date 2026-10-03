@@ -121,7 +121,7 @@ def setUpModule():
     FAKE = fake_stt.start(8798)
     if len(sys.argv) > 1:
         return
-    persist = tempfile.mkdtemp(prefix="claude-listen-test-")
+    persist = tempfile.mkdtemp(prefix="live-listen-test-")
     cmd = f"npx wrangler dev --port {PORT} --persist-to {persist} {WRANGLER_VARS}"
     WRANGLER = subprocess.Popen(cmd, cwd=HERE, shell=True, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)

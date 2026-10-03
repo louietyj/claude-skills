@@ -1,4 +1,4 @@
-// claude-listen relay: a phone or watch streams mic audio here, a Durable Object
+// live-listen relay: a phone or watch streams mic audio here, a Durable Object
 // relays it to Soniox and assembles speaker turns, and Claude long-polls the
 // turns from a sandbox that can be recycled without losing any. Deepgram does
 // the optional full-file pass afterwards.

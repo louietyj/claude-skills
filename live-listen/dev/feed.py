@@ -45,7 +45,7 @@ def main():
     base, k = cfg["worker_url"].rstrip("/"), cfg["device_token"]
     sid = args.id
     if not sid:
-        req = urllib.request.Request(f"{base}/armed?k={k}", headers={"user-agent": "claude-listen-feed"})
+        req = urllib.request.Request(f"{base}/armed?k={k}", headers={"user-agent": "live-listen-feed"})
         sessions = json.load(urllib.request.urlopen(req, timeout=15))["sessions"]
         armed = [s for s in sessions if s["state"] == "armed"]
         if not armed:

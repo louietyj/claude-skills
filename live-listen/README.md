@@ -1,4 +1,4 @@
-# claude-listen
+# live-listen
 
 Claude listens to a live conversation through Louie's phone or Pixel Watch and
 steers him in chat while it runs.
@@ -36,6 +36,9 @@ video call to join.
 
 ## Setup
 
+The relay is deployed as the `claude-listen` Worker (the name predates the
+skill's; skill names can't contain "claude"), and that name is in its URL.
+
 ```bash
 cd worker
 npx wrangler deploy
@@ -61,7 +64,7 @@ survives, but the seconds in between are lost.
 ## Packaging
 
 ```bash
-python package.py     # -> claude-listen.zip, upload to claude.ai
+python package.py     # -> live-listen.zip, upload to claude.ai
 ```
 
 The zip bundles `config.json`, so **the artefact is a credential**: the CLI

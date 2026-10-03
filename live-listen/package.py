@@ -12,7 +12,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NAME = "claude-listen"
+NAME = "live-listen"
 
 # dev/, spike/ and worker/ are deliberately absent: the Worker is deployed from a
 # checkout with wrangler, never from inside a conversation.

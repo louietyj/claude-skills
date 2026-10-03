@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#000">
-<title>claude-listen</title>
+<title>live-listen</title>
 <style>
 /* One layout for watch and phone: the stage fills the screen (on a round
    watch, exactly the face), and the middle sits near the centre, where a
@@ -73,7 +73,7 @@ button:active{background:#2a2a2a}
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const KEY = "claude-listen-k";
+const KEY = "claude-listen-k";   // the relay's name; changing it would unpair devices
 // Only reported to Claude; both devices show the same page.
 const UI = new URLSearchParams(location.search).get("ui")
   || (Math.min(innerWidth, innerHeight, screen.width, screen.height) <= 320 ? "watch" : "phone");

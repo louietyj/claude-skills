@@ -18,15 +18,15 @@ find_listen_py() {
   # more than one bucket can exist, so the glob is sorted by mtime, newest wins.
   for candidate in \
     "$(cd "$(dirname "$0")" && pwd)/bin/listen.py" \
-    /mnt/skills/user/claude-listen/bin/listen.py \
-    /mnt/skills/*/claude-listen/bin/listen.py \
-    "$(ls -1dt "$HOME"/.claude/skills/synced/*/claude-listen/bin/listen.py \
+    /mnt/skills/user/live-listen/bin/listen.py \
+    /mnt/skills/*/live-listen/bin/listen.py \
+    "$(ls -1dt "$HOME"/.claude/skills/synced/*/live-listen/bin/listen.py \
        2>/dev/null | head -1)"
   do
     [ -n "$candidate" ] && [ -f "$candidate" ] && \
       { printf '%s' "$candidate"; return 0; }
   done
-  candidate=$(find /mnt /opt /home "$HOME" -name listen.py -path '*claude-listen*' \
+  candidate=$(find /mnt /opt /home "$HOME" -name listen.py -path '*live-listen*' \
     2>/dev/null | head -1)
   [ -n "$candidate" ] && { printf '%s' "$candidate"; return 0; }
   return 1
@@ -50,7 +50,7 @@ end() {  # $1 = step number, $2 = exit status
   printf '%s[%d/%d] end (exit %d)\n' "$RULE_S" "$1" "$TOTAL" "$2"
 }
 
-printf '%s CLAUDE LISTEN SETUP %s\n' "$RULE_H" "$RULE_H"
+printf '%s LIVE LISTEN SETUP %s\n' "$RULE_H" "$RULE_H"
 printf 'What follows is a transcript of %d steps as they ran.\n' "$TOTAL"
 
 begin 1 'install the `listen` shim'
@@ -73,7 +73,7 @@ done
 
 cat > "$BIN_DIR/listen" <<SHIM_EOF
 #!/bin/sh
-# listen shim -- installed by claude-listen/setup.sh, rewritten on every run.
+# listen shim -- installed by live-listen/setup.sh, rewritten on every run.
 exec "$PY" "$LISTEN_PY" "\$@"
 SHIM_EOF
 chmod +x "$BIN_DIR/listen"
@@ -108,7 +108,7 @@ fi
 end 3 $guide_rc
 
 status=READY; [ $rc -eq 0 ] || status=DOWN
-printf '\n%s CLAUDE LISTEN %s %s\n' "$RULE_H" "$status" "$RULE_H"
+printf '\n%s LIVE LISTEN %s %s\n' "$RULE_H" "$status" "$RULE_H"
 printf '  [1/3] listen shim ..... OK -- installed\n'
 if [ $rc -ne 0 ]; then
   printf '  [2/3] listen health ... FAILED\n'

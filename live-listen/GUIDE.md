@@ -1,4 +1,4 @@
-# claude-listen
+# live-listen
 
 Louie's phone or watch is the microphone. A relay transcribes it with speaker
 labels and stores every turn; you read it a few seconds behind and steer Louie

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client for claude-listen: Claude's side of a conversation Louie's phone or
+"""Client for live-listen: Claude's side of a conversation Louie's phone or
 watch is recording.
 
 The relay keeps every speaker turn, device event and note as numbered entries,
@@ -19,7 +19,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
 # The skill directory can be read-only (/mnt/skills), so state goes under $HOME.
-STATE = os.environ.get("CLAUDE_LISTEN_STATE") or os.path.expanduser("~/.claude-listen")
+STATE = os.environ.get("LIVE_LISTEN_STATE") or os.path.expanduser("~/.live-listen")
 
 # Inside the Bash tool's default 120s timeout; it only caps silence.
 WATCH_BUDGET = 90
@@ -49,7 +49,7 @@ def request(url, *, method="GET", body=None, timeout=30):
     """(status, parsed_or_text); never raises, so errors stay readable mid-conversation."""
     data = json.dumps(body).encode() if body is not None else None
     # Cloudflare answers urllib's default User-Agent with a 403 (error 1010).
-    hdrs = {"content-type": "application/json", "user-agent": "claude-listen/1.0"}
+    hdrs = {"content-type": "application/json", "user-agent": "live-listen/1.0"}
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -311,7 +311,7 @@ def cmd_audio(cfg, args):
     for seg in body.get("segs") or []:
         query = urllib.parse.urlencode({"token": cfg["cli_token"], "id": sid, "seg": seg["n"]})
         req = urllib.request.Request(f"{cfg['worker_url']}/audio?{query}",
-                                     headers={"user-agent": "claude-listen/1.0"})
+                                     headers={"user-agent": "live-listen/1.0"})
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 data = resp.read()

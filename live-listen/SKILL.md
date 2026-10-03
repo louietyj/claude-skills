@@ -1,14 +1,14 @@
 ---
-name: claude-listen
+name: live-listen
 description: "Listen in on a live conversation through Louie's phone or Pixel Watch as the microphone: read a real-time speaker-labelled transcript a few seconds behind and steer Louie in chat while it runs. Use whenever Louie asks Claude to listen in, sit in on, coach him through, or take notes on an in-person conversation, meeting, appointment or negotiation, including a Zoom/Meet/Teams call (the phone just listens to the room). NOT for placing phone calls (retell-dialer)."
 ---
 
-# claude-listen
+# live-listen
 
 There is nothing else to read here. The skill is one script:
 
 ```bash
-bash "$(ls -1dt /mnt/skills/*/claude-listen ~/.claude/skills/synced/*/claude-listen 2>/dev/null | head -1)/setup.sh"
+bash "$(ls -1dt /mnt/skills/*/live-listen ~/.claude/skills/synced/*/live-listen 2>/dev/null | head -1)/setup.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints the guide into your

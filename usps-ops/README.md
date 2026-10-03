@@ -12,7 +12,7 @@ scripts/
   fill_template.py    .dotx + spec.json -> .docx
   preview.sh          .docx -> PNG via LibreOffice
   tracking_dat.py     prepend a line to QuickLetterTracker's tracking.dat
-fonts/                Figtree (OFL) for previews; USPSIMBStandard is not committed, see below
+fonts/                Figtree (OFL) and USPSIMBStandard (USPS license, in the same folder), for previews
 tests/test_usps_ops.py
 ```
 
@@ -29,6 +29,8 @@ The encoder, serial and `tracking.dat` tests are self-contained. The PDF and tem
 
 ## Package for claude.ai
 
-Put `USPSIMBStandard.ttf` (free from USPS's [Intelligent Mail barcode font page](https://ribbs.usps.gov/onecodesolution/download.cfm)) in `fonts/`. It has no license text, so it is gitignored rather than redistributed. Then `python package.py` writes `usps-ops.zip`; upload it under Settings → Capabilities → Skills.
+`python package.py` writes `usps-ops.zip`; upload it under Settings → Capabilities → Skills.
+
+`fonts/USPSIMBStandard.ttf` is redistributed under the [USPS IMb license](https://postalpro.usps.com/onecodesolution), which allows it provided the copyright notice, conditions and disclaimer travel with it (`fonts/USPS-IMb-LICENSE.txt`, included in the zip) and the font isn't sold on its own.
 
 The Dropbox connector can't upload binaries, so the skill hands over the files as downloads and he saves them to `Sent Mail` himself.

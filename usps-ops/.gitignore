@@ -1,0 +1,8 @@
+# Built by package.py.
+*.zip
+.venv/
+__pycache__/
+.pytest_cache/
+# USPS's font has no license text, so it stays out of the public repo. Drop it in
+# by hand: package.py and the dev sandbox pick it up from here.
+fonts/USPSIMBStandard.ttf

@@ -9,6 +9,7 @@ Skills for Claude, one subdirectory each.
 - [`polish-message/`](polish-message/) — drafts emails and messages in Louie's voice: a throwaway first draft in a discarded tool call, a forced rethink, then the final. `voice.md` is his style, distilled from his sent mail.
 - [`request-text/`](request-text/) — asks the user for text through a one-shot link (a form, fine on a phone). The submission lands in the sandbox as JSON, end-to-end encrypted, so secrets stay out of the transcript and long pastes are never re-emitted.
 - [`retell-dialer/`](retell-dialer/) — places a real phone call and supervises it live: a voice agent runs the conversation and consults Claude mid-call, which answers within seconds and can steer unprompted.
+- [`usps-ops/`](usps-ops/) — turns letters, postcards and stamps.com postage into print-ready Word files carrying Louie's own Intelligent Mail barcode, so USPS tracks each piece under his mailer ID, and logs it to QuickLetterTracker.
 - [`voice-mode-guide/`](voice-mode-guide/) — run in chat before switching the mobile app to voice: prints what changes, the workarounds, and the skill index into the transcript, which survives the toggle when the injected context does not.
 
 Each subdirectory is self-contained: its own `SKILL.md`, setup script, and README/docs where applicable. `session-init/` is the exception — it orchestrates the other two and expects them installed alongside it, reporting them as missing rather than failing if they aren't.

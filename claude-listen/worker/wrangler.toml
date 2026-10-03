@@ -1,0 +1,21 @@
+name = "claude-listen"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Overridable so tests can point the relay at local fakes. Workers open an
+# outbound websocket with fetch(), so the live URL is https://, not wss://.
+[vars]
+SONIOX_URL = "https://stt-rt.soniox.com/transcribe-websocket"
+DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
+
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "Session"
+
+[[durable_objects.bindings]]
+name = "REGISTRY"
+class_name = "Registry"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Session", "Registry"]

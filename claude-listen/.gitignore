@@ -1,0 +1,12 @@
+# Holds the CLI and device tokens: read a live conversation, buzz Louie's watch.
+# This repo is public.
+config.json
+!config.example.json
+
+# Packaged skill -- bundles the config, so the artefact is a credential too.
+*.zip
+
+__pycache__/
+.wrangler/
+dev/*.webm
+dev/*.wav

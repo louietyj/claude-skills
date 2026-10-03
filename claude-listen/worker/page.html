@@ -1,0 +1,333 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#000">
+<title>claude-listen</title>
+<style>
+/* One layout for watch and phone: the stage fills the screen (on a round
+   watch, exactly the face), and the middle sits near the centre, where a
+   circle is widest. Sizes are in vmin; Samsung Internet on a Pixel Watch 3
+   lays out 456 CSS px at a pixel ratio of 1, though screen.width says 228. */
+:root{--fg:#e8e8e8;--clock:#b4b4b4;--dim:#8a8a8a;--amber:#e0a030;--red:#e05040}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#000;color:var(--fg);font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+body{display:flex;align-items:center;justify-content:center;overflow:hidden;text-align:center}
+#stage{position:relative;width:100vw;height:100vh;height:100dvh}
+button,input{font:inherit;color:var(--fg);background:#161616;border:0.6vmin solid #3a3a3a;cursor:pointer}
+button:active{background:#2a2a2a}
+.hide{display:none!important}
+/* A circle narrows toward the top: the ~48vmin-wide clock clears the edge
+   only below ~8%. */
+#top{position:absolute;top:9%;left:0;right:0;display:flex;flex-direction:column;align-items:center}
+#clock{color:var(--clock);font-size:20vmin;line-height:1;font-variant-numeric:tabular-nums}
+#sid{color:var(--dim);font-size:6vmin;letter-spacing:.15em}
+/* Centred between the clock and stop, not on the face, so a tall block
+   never rides up into the clock. */
+#mid{position:absolute;top:54%;left:10%;right:10%;transform:translateY(-50%)}
+#pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
+#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center}
+#debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
+#msg{color:var(--dim);font-size:8vmin}
+#status{font-size:7vmin;font-weight:600}
+#status.amber{color:var(--amber)} #status.red{color:var(--red)}
+#note{color:#fff;font-weight:700;font-size:6.5vmin;line-height:1.2}
+#note.flash{animation:flash .5s ease-in-out 6 alternate}
+#note.old{color:var(--dim);font-weight:600}
+@keyframes flash{from{opacity:1}to{opacity:.35}}
+.big{width:44vmin;height:44vmin;border-radius:50%;display:flex;flex-direction:column;
+     align-items:center;justify-content:center;font-size:7vmin}
+.big b{font-size:10vmin;letter-spacing:.04em}
+#stop{width:17vmin;height:17vmin;border-radius:50%;font-size:8vmin;line-height:1;padding:0;border-color:#4a2a2a}
+#list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
+.row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
+.row small{display:block;color:var(--dim);font-size:5vmin}
+#pairmsg{color:var(--dim);font-size:7vmin}
+#code{width:62vmin;font-size:11vmin;text-align:center;letter-spacing:.2em;border-radius:3vmin;padding:1vmin}
+#pairbtn{border-radius:4vmin;padding:1vmin 6vmin;font-size:8vmin}
+</style>
+</head><body>
+<div id="stage">
+<div id="top">
+  <div id="clock"></div>
+  <div id="sid"></div>
+</div>
+<div id="mid">
+  <div id="pair" class="hide">
+    <div id="pairmsg">Pairing code</div>
+    <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="······">
+    <button id="pairbtn">Pair</button>
+  </div>
+  <div id="idle" class="hide">
+    <div id="msg">Waiting for Claude…</div>
+    <div id="list"></div>
+  </div>
+  <div id="live" class="hide">
+    <div id="status"></div>
+    <div id="note"></div>
+  </div>
+</div>
+<div id="bot"><button id="stop" class="hide" aria-label="stop">⏹</button></div>
+<div id="debug" class="hide"></div>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const KEY = "claude-listen-k";
+// Only reported to Claude; both devices show the same page.
+const UI = new URLSearchParams(location.search).get("ui")
+  || (Math.min(innerWidth, innerHeight, screen.width, screen.height) <= 320 ? "watch" : "phone");
+
+// The device token: from a #k= link (stored, then stripped), else storage, else pairing.
+function store(k) { try { k ? localStorage.setItem(KEY, k) : localStorage.removeItem(KEY); } catch {} }
+let K = new URLSearchParams(location.hash.slice(1)).get("k") || "";
+if (K) { store(K); history.replaceState(null, "", location.pathname + location.search); }
+else { try { K = localStorage.getItem(KEY) || ""; } catch {} }
+
+const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
+  (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+
+let mode = "idle", sid = null, ws = null, stream = null, rec = null, lock = null;
+let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
+
+function tick() {
+  const d = new Date();
+  $("clock").textContent = `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+tick(); setInterval(tick, 1000);
+
+function show(screen) {
+  for (const s of ["pair", "idle", "live"]) $(s).classList.toggle("hide", s !== screen);
+  $("stop").classList.toggle("hide", screen !== "live");
+  if (screen !== "live") $("sid").textContent = "";
+}
+function status(text, cls) { $("status").textContent = text || ""; $("status").className = cls || ""; }
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+// ---- pairing --------------------------------------------------------------------
+
+function needPairing(why) {
+  K = ""; store("");
+  mode = "pair";
+  $("pairmsg").innerHTML = why || "Pairing code";
+  show("pair");
+}
+
+// The sixth digit submits: no extra tap on a watch.
+$("code").addEventListener("input", () => {
+  if ($("code").value.replace(/\D/g, "").length === 6) $("pairbtn").click();
+});
+
+$("pairbtn").onclick = async () => {
+  const code = $("code").value.replace(/\D/g, "");
+  if (code.length !== 6) { $("pairmsg").textContent = "Enter 6 digits"; return; }
+  try {
+    const r = await fetch("/pair/claim", { method: "POST", body: JSON.stringify({ code }) });
+    const out = await r.json();
+    if (!out.ok) { $("pairmsg").textContent = capital(out.error || "wrong code"); return; }
+    K = out.k; store(K);
+    $("code").value = "";
+    mode = "idle"; show("idle"); poll();
+  } catch { $("pairmsg").textContent = "Offline…"; }
+};
+
+function capital(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// ---- idle: find what Claude armed --------------------------------------------------
+
+async function poll() {
+  if (mode !== "idle") return;
+  try {
+    const r = await fetch(`/armed?k=${encodeURIComponent(K)}`, { cache: "no-store" });
+    if (r.status === 401) return needPairing("Not paired.<br>Pairing code");
+    render((await r.json()).sessions || []);
+  } catch { $("msg").textContent = "Offline…"; }
+}
+
+function render(sessions) {
+  const list = $("list");
+  list.innerHTML = "";
+  $("msg").classList.toggle("hide", sessions.length > 0);
+  if (sessions.length === 0) $("msg").textContent = "Waiting for Claude…";
+  if (sessions.length === 1) {
+    const s = sessions[0];
+    const b = document.createElement("button");
+    b.className = "big";
+    b.innerHTML = `${s.state === "live" ? "Rejoin" : "Start"}<b>${s.id}</b>`;
+    b.onclick = () => start(s.id);
+    list.appendChild(b);
+    return;
+  }
+  for (const s of sessions) {
+    const b = document.createElement("button");
+    b.className = "row";
+    b.innerHTML = `${s.state === "live" ? "● " : ""}${s.id}<small></small>`;
+    b.querySelector("small").textContent = s.label || "";
+    b.onclick = () => start(s.id);
+    list.appendChild(b);
+  }
+}
+
+setInterval(poll, 3000);
+
+// ---- live -------------------------------------------------------------------------
+
+async function wake() {
+  try { if (navigator.wakeLock && !lock) { lock = await navigator.wakeLock.request("screen");
+        lock.addEventListener("release", () => { lock = null; }); } } catch {}
+}
+
+async function start(id) {
+  if (!MIME) { $("msg").classList.remove("hide"); $("msg").textContent = "This browser can't record audio"; return; }
+  try {
+    // Processing off: it flattens the voice differences diarization relies on.
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
+  sid = id; mode = "live"; failures = 0;
+  clearTimeout(noteTimer);
+  $("note").textContent = "";
+  show("live");
+  $("sid").textContent = id;
+  stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
+  await wake();
+  connect();
+}
+
+function connect() {
+  clearTimeout(retryTimer);
+  if (mode !== "live") return;
+  status("Connecting…", "amber");
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const sock = new WebSocket(`${proto}//${location.host}/device?k=${encodeURIComponent(K)}&id=${sid}`);
+  ws = sock;
+  sock.onopen = () => {
+    backoff = 1000; failures = 0;
+    status("");
+    send({ type: "hello", ui: UI });
+    send({ type: "vis", state: document.visibilityState });
+    segment();
+  };
+  sock.onmessage = (m) => { try { onMessage(JSON.parse(m.data)); } catch {} };
+  sock.onclose = (e) => {
+    if (ws !== sock || mode !== "live") return;
+    stopRecorder();
+    if (e.code === 4000) return finish("Opened on another device");
+    failures++;
+    if (failures >= 4) return checkStillLive();
+    status("Reconnecting…", "amber");
+    retryTimer = setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 10000);
+  };
+}
+
+// A refused socket and a dropped network look alike, so after a few failures
+// ask whether the session still exists.
+async function checkStillLive() {
+  try {
+    const r = await fetch(`/armed?k=${encodeURIComponent(K)}`, { cache: "no-store" });
+    const ids = ((await r.json()).sessions || []).map((s) => s.id);
+    if (!ids.includes(sid)) return finish("Session is over");
+  } catch {}
+  status("Reconnecting…", "amber");
+  retryTimer = setTimeout(connect, backoff);
+  backoff = Math.min(backoff * 2, 10000);
+}
+
+// One recorder run = one webm header = one transcriber stream on the server.
+// Blobs are sent synchronously, so chunk order cannot race.
+function segment() {
+  stopRecorder();
+  send({ type: "seg" });
+  rec = new MediaRecorder(stream, { mimeType: MIME, audioBitsPerSecond: 64000 });
+  rec.ondataavailable = (e) => { if (e.data.size && ws && ws.readyState === 1) ws.send(e.data); };
+  rec.onerror = () => status("Recorder error", "red");
+  rec.start(250);
+}
+
+function stopRecorder() {
+  if (!rec) return;
+  rec.ondataavailable = null;   // its final chunk must not land in the next segment
+  try { rec.stop(); } catch {}
+  rec = null;
+}
+
+function onMessage(m) {
+  if (m.type === "restart") segment();
+  else if (m.type === "note") showNote(m.text);
+  else if (m.type === "ended") finish("Session ended");
+}
+
+// A long steer shrinks until it fits between the session id and stop.
+function fitNote(n) {
+  const room = $("stage").clientHeight * 0.36;
+  let size = 6.5;
+  n.style.fontSize = size + "vmin";
+  while (n.scrollHeight > room && size > 4) {
+    size -= 0.5;
+    n.style.fontSize = size + "vmin";
+  }
+}
+
+// A steer stays until the next replaces it, dimmed once stale.
+const NOTE_FRESH_MS = 30000;
+function showNote(text) {
+  try { navigator.vibrate && navigator.vibrate([80, 60, 80]); } catch {}
+  const n = $("note");
+  n.textContent = text;
+  fitNote(n);
+  n.classList.remove("flash", "old"); void n.offsetWidth; n.classList.add("flash");
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => { n.classList.remove("flash"); n.classList.add("old"); }, NOTE_FRESH_MS);
+}
+
+function finish(why) {
+  mode = "idle";
+  clearTimeout(retryTimer);
+  stopRecorder();
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  const sock = ws; ws = null;
+  try { sock && sock.close(1000); } catch {}
+  try { lock && lock.release(); } catch {}
+  lock = null;
+  show("idle");
+  $("list").innerHTML = "";
+  $("msg").classList.remove("hide");
+  $("msg").textContent = why;
+  setTimeout(() => { if (mode === "idle") poll(); }, 4000);
+}
+
+// Flush the recorder first: its last chunk carries the final words.
+$("stop").onclick = async () => {
+  const r = rec;
+  rec = null;
+  if (r) await new Promise((res) => { r.onstop = res; try { r.stop(); } catch { res(); } });
+  send({ type: "stop" });
+  setTimeout(() => finish("Stopped"), 300);
+};
+
+document.addEventListener("visibilitychange", () => {
+  if (mode !== "live") { if (document.visibilityState === "visible") poll(); return; }
+  send({ type: "vis", state: document.visibilityState });
+  if (document.visibilityState === "visible") {
+    wake();
+    if (!ws || ws.readyState > 1) { backoff = 1000; connect(); }
+  }
+});
+
+// ?debug: the viewport this browser reports, for fitting a new device.
+if (new URLSearchParams(location.search).has("debug")) {
+  const d = $("debug");
+  d.classList.remove("hide");
+  const report = () => {
+    const vv = window.visualViewport;
+    d.textContent = `inner ${innerWidth}x${innerHeight} screen ${screen.width}x${screen.height}\n` +
+      `dpr ${devicePixelRatio} vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}@${vv.scale}` : "-"} ui ${UI}`;
+  };
+  report(); addEventListener("resize", report);
+}
+
+if (K) { show("idle"); poll(); } else needPairing();
+</script>
+</body></html>

@@ -1,0 +1,13 @@
+{
+  "_comment": [
+    "Copy to config.json, which is gitignored -- this repo is public.",
+    "",
+    "cli_token     gates Claude's routes: reading the transcript, sending notes.",
+    "device_token  gates the device routes and rides in the bookmark's #fragment.",
+    "              `listen bookmark` prints the bookmark URLs."
+  ],
+
+  "worker_url": "https://claude-listen.EXAMPLE.workers.dev",
+  "cli_token": "...",
+  "device_token": "..."
+}

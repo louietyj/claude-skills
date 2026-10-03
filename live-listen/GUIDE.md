@@ -63,6 +63,13 @@ Then:
    types. The relay keeps recording either way. Your cursor is saved, so
    nothing is lost, but you stop listening.
 
+**Answer first, then watch: never in the same step.** `watch` blocks for up
+to 90s, and tool calls made together return together, so a lookup run in
+parallel with `watch` holds its answer back until `watch` returns. On a real
+call, Louie asked at 00:50, the answer arrived at 01:27, and he had asked
+again by then. The order is always: lookups (in parallel with each other is
+fine), then the note in chat, then `listen watch` on its own.
+
 **End your turn only when** `watch` returns `event: ended` (then wrap up), or
 Louie tells you to stop. Not on a quiet stretch (`idle` means watch again), not
 after a good note, not to ask Louie a question (ask in chat and keep watching).

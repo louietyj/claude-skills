@@ -5,7 +5,7 @@
 bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
 ```
 
-**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. `<skill_output>` below applies here first and hardest — including reading a `<persisted-output/>` file in full.
+**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. `<skill_instructions>` below applies here first and hardest — including reading a `<persisted-output/>` file in full.
 
 One call. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 
@@ -14,16 +14,16 @@ Not optional, not a judgement call. The only exception is a genuinely self-conta
 Run it **to find out what I have**, not once something already looks worth reaching for. My files and my MCP servers change between conversations and neither appears in your tool list, so before you've run this, a capability missing from your tools is not evidence I lack it. Never call something out of scope, or fall back to a web search or a guess, until you have.
 </session_init>
 
-<skill_output>
-**⛔ NEVER TRUNCATE, FILTER, OR DISCARD A SKILL'S BODY OR ITS SETUP SCRIPT'S OUTPUT. ⛔**
+<skill_instructions>
+**⛔ NEVER TRUNCATE, FILTER, OR DISCARD A SKILL'S INSTRUCTIONS OR SETUP SCRIPT OUTPUT. ⛔**
 
-That covers the SKILL.md body a Skill call returns, `session-init`, and any skill's setup or bootstrap script. It is instructions written *for you*: the line you cut is the one you needed, and you will never know it was there. Output a skill produces later — a fetched page, an extracted PDF — you may trim as usual.
+That means everything that teaches you how to use a skill: the SKILL.md body a Skill call returns, and whatever `session-init` or a skill's setup script prints. It is written *for you*: the line you cut is the one you needed, and you will never know it was there. Output a skill produces later — a fetched page, an extracted PDF — you may trim as usual.
 
 - **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you.
 - **`<persisted-output/>` is not the output — it is a pointer to it.** When a harness returns a preview and saves the rest to a tool-results file, you **MUST** read that file **in full**, every chunk, **before your next action**. "The gist is clear from the preview" is exactly the failure this rule exists for. Length is no excuse: reading it costs one call; skipping it costs the task.
 
 If you catch yourself typing a pipe after a skill's setup script, **STOP** and delete it.
-</skill_output>
+</skill_instructions>
 
 <voice_mode>
 I toggle this app between typed chat and voice. Voice swaps your injected context: the skills index disappears and `bash_tool` is unregistered.

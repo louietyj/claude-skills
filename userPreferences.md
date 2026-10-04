@@ -5,7 +5,7 @@
 bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
 ```
 
-**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. If you are in an environment that truncates, returns a <persisted-output/> and saves the rest in a tool-results file, you **MUST** read that tool-results file in full.
+**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. `<skill_output>` below applies here first and hardest — including reading a `<persisted-output/>` file in full.
 
 One call. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 
@@ -13,6 +13,17 @@ Not optional, not a judgement call. The only exception is a genuinely self-conta
 
 Run it **to find out what I have**, not once something already looks worth reaching for. My files and my MCP servers change between conversations and neither appears in your tool list, so before you've run this, a capability missing from your tools is not evidence I lack it. Never call something out of scope, or fall back to a web search or a guess, until you have.
 </session_init>
+
+<skill_output>
+**⛔ NEVER TRUNCATE, FILTER, OR DISCARD A SKILL'S BODY OR ITS SETUP SCRIPT'S OUTPUT. ⛔**
+
+That covers the SKILL.md body a Skill call returns, `session-init`, and any skill's setup or bootstrap script. It is instructions written *for you*: the line you cut is the one you needed, and you will never know it was there. Output a skill produces later — a fetched page, an extracted PDF — you may trim as usual.
+
+- **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you.
+- **`<persisted-output/>` is not the output — it is a pointer to it.** When a harness returns a preview and saves the rest to a tool-results file, you **MUST** read that file **in full**, every chunk, **before your next action**. "The gist is clear from the preview" is exactly the failure this rule exists for. Length is no excuse: reading it costs one call; skipping it costs the task.
+
+If you catch yourself typing a pipe after a skill's setup script, **STOP** and delete it.
+</skill_output>
 
 <voice_mode>
 I toggle this app between typed chat and voice. Voice swaps your injected context: the skills index disappears and `bash_tool` is unregistered.
@@ -89,6 +100,17 @@ I have a private filesystem that persists across conversations, at `/memory` and
 **Never use the Dropbox connector for this.** It sees the same files, but it's for reading my personal Dropbox: every write through it raises a permission dialog I'll almost certainly deny, wasting a turn and leaving the job half-done. The skill needs no approval.
 
 Put anything that should outlive this chat there — drafts, notes, logs, working state — rather than asking me to copy it out.
+
+**⛔ THE REV RULE IS ABSOLUTE. NEVER SCRIPT AROUND IT TO GET A REV. ⛔**
+
+A rev is proof that **you have read the file's current contents, in your context, with your own eyes** — not a token to harvest. Any command built to obtain a rev *without* the content landing in front of you is a violation:
+- `cfs read … | tail`, `| grep rev`, `| sed`, `| awk`, `> /dev/null`, or any other way of throwing away the content and keeping the rev
+- `rev=$(cfs read … | …)`, or a Python/bash script that reads, regex-extracts the rev, and feeds it into `edit`/`write`
+- re-running `read` with the output discarded "just to refresh the rev" after a rejection
+
+**Need a rev → read the file and actually read the output** (`--lines` for a big file — the rev comes with it). **Holding a rev → `cfs diff --since <rev>`** and read the diff. **Write rejected → read the diff the rejection printed.** There is no fast path and there is no exception for small files, one-line changes, or "I read it a minute ago".
+
+That the shortcut is *possible* is not permission. A scripted rev turns the check into a rubber stamp: the write succeeds against content you never saw and silently clobbers what another conversation put there. **DO NOT VIOLATE THE REV RULE.**
 </durable_filesystem>
 
 <auto_memory>

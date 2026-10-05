@@ -12,6 +12,7 @@ Skills for Claude, one subdirectory each.
 - [`retell-dialer/`](retell-dialer/) — places a real phone call and supervises it live: a voice agent runs the conversation and consults Claude mid-call, which answers within seconds and can steer unprompted.
 - [`usps-ops/`](usps-ops/) — turns letters, postcards and stamps.com postage into print-ready Word files carrying Louie's own Intelligent Mail barcode, so USPS tracks each piece under his mailer ID, and logs it to QuickLetterTracker.
 - [`voice-mode-guide/`](voice-mode-guide/) — run in chat before switching the mobile app to voice: prints what changes, the workarounds, and the skill index into the transcript, which survives the toggle when the injected context does not.
+- [`phomymo-link/`](phomymo-link/) — fills a label template with text and packs the whole design into a phomymo.louietyj.me link that opens ready to print on the M110.
 - [`risk-parity-rebalance/`](risk-parity-rebalance/) — `/risk-parity-rebalance`: plans a rebalance of the IBKR risk-parity portfolio from live positions, IBKR's published futures close-out table and 60-month vols via `local-mcps`, then stages the trades as IBKR instructions for approval.
 
 Each subdirectory is self-contained: its own `SKILL.md`, setup script, and README/docs where applicable. `session-init/` is the exception — it orchestrates the other two and expects them installed alongside it, reporting them as missing rather than failing if they aren't.

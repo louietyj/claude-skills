@@ -5,9 +5,8 @@ description: "Designs labels for Louie's Phomemo M110 printer and gives him a ph
 
 # phomymo-link
 
-`https://phomymo.louietyj.me/#design=v1.<data>` carries a whole label design, so anything in the design
-(his phone number, on some templates) is in the link. Opening it loads the design into Phomymo, his fork
-of a browser label designer; he taps Print there. Nothing is stored server-side.
+`https://phomymo.louietyj.me/#design=v1.<data>` carries a whole label design. Opening it loads the design
+into Phomymo, his fork of a browser label designer; he taps Print there.
 
 ## Designs
 
@@ -18,7 +17,9 @@ source files it names are on the same host (e.g. `/canvas.js`).
 Start a design from `/Phomymo Templates/48x40.json` in his main Dropbox (not the durable filesystem): his
 blank page, like Word's Normal.dotm. It sets the label size for his 50 x 40 mm labels (printed 48 mm wide,
 the head's width) and holds one text box inset 3 mm on every side, with sample text. It carries no design
-intent; lay the label out as you see fit. The other files in that folder are bare-bones quick starts he
+intent; lay the label out as you see fit. The printer can print to the edges, but labels don't hold their
+alignment on the roll, so anything within about 3 mm of an edge may get cut off; that's what his inset is
+for. The other files in that folder are bare-bones quick starts he
 edits by hand in Phomymo, not designs to fill, so open one only if he names it. The Dropbox connector's
 `download_link` plus `curl` gets a file into the sandbox byte-exact; the link is single-use and expires,
 and `fetch` is the fallback if `curl` can't reach it.

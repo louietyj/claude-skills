@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Usage: make_link.py DESIGN.json [Field=value ...]  ->  prints a Phomymo design link.
 
-Each Field=value replaces {{Field}} in the design. Use \\n in a value for a line break.
+Each Field=value replaces {{Field}} in the design (an error if the design has none). Use \\n in a value
+for a line break.
 """
 import base64
 import json
@@ -13,8 +14,12 @@ BASE_URL = "https://phomymo.louietyj.me/"
 
 text = open(sys.argv[1], encoding="utf-8").read()
 for arg in sys.argv[2:]:
-    field, value = arg.split("=", 1)
-    text = text.replace("{{" + field + "}}", json.dumps(value.replace("\\n", "\n"))[1:-1])
+    field, _, value = arg.partition("=")
+    placeholder = "{{" + field + "}}"
+    if placeholder not in text:
+        found = sorted(set(re.findall(r"\{\{(\w+)\}\}", text))) or ["none"]
+        sys.exit(f"error: {sys.argv[1]} has no {placeholder} (placeholders: {', '.join(found)})")
+    text = text.replace(placeholder, json.dumps(value.replace("\\n", "\n"))[1:-1])
 for field in sorted(set(re.findall(r"\{\{(\w+)\}\}", text))):
     print(f"warning: {{{{{field}}}}} not filled", file=sys.stderr)
 

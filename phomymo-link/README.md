@@ -5,7 +5,7 @@ it at [phomymo.louietyj.me](https://phomymo.louietyj.me), his fork of
 [Phomymo](https://github.com/transcriptionstream/phomymo), ready to print on his M110.
 
 ```
-SKILL.md      when to use it, where templates live, how to write label text
+SKILL.md      what a fresh Claude can't know: the link, where templates and format docs live, the scripts
 make_link.py  design JSON (+ optional Field=value pairs) -> link (stdlib only)
 preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
 ```

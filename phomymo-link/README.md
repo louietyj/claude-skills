@@ -5,14 +5,16 @@ it at [phomymo.louietyj.me](https://phomymo.louietyj.me), his fork of
 [Phomymo](https://github.com/transcriptionstream/phomymo), ready to print on his M110.
 
 ```
-SKILL.md          when to use it, where templates live, how to write label text
-design-format.md  the design JSON, for editing templates or composing labels from scratch
-make_link.py      design JSON (+ optional Field=value pairs) -> link (stdlib only)
-preview.mjs       link -> PNG of the exact bitmap Print would send (headless Chromium)
+SKILL.md      when to use it, where templates live, how to write label text
+make_link.py  design JSON (+ optional Field=value pairs) -> link (stdlib only)
+preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
 ```
 
-`design-format.md` was worked out from the fork's source (`elements.js` for fields and defaults,
-`canvas.js` for what values do, `index.html` for the option lists); Phomymo has no format docs.
+The design JSON reference lives in the fork, at
+[`src/web/docs/design-format.md`](https://github.com/louietyj/phomymo/blob/master/src/web/docs/design-format.md),
+deployed as https://phomymo.louietyj.me/docs/design-format.md, so it changes in the same commits as the
+code it describes. Phomymo has no format docs of its own; that page is reverse-engineered from the source
+and names the files to read when it falls short.
 
 ## Preview
 

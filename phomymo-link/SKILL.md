@@ -10,15 +10,24 @@ design into Phomymo, his fork of the browser label designer. He taps Print. Noth
 
 ## The design
 
-A label is a JSON design: label size plus a list of text, shape, barcode, QR and image elements. Read
-`design-format.md` (beside this file) before editing or composing one. You can:
+A label is a JSON design: label size plus a list of text, shape, barcode, QR and image elements. Before
+editing or composing one, read the format doc, which is deployed with the code it describes:
+
+```bash
+curl -fsSL https://phomymo.louietyj.me/docs/design-format.md
+```
+
+Phomymo has no official format docs; that page was reverse-engineered from the fork's source and says
+which files to read when it isn't enough. If a field behaves differently from the doc, or you need one it
+doesn't cover, read the code it points to (same host, e.g. `curl https://phomymo.louietyj.me/canvas.js`)
+rather than guessing, and trust the preview over both. You can:
 
 - **Start from one of his templates** when one fits. They live in his main Dropbox, not the durable
   filesystem, in `/Phomymo Templates/`, one Phomymo JSON export each. Use the Dropbox connector:
   `list_folder` to see what's there, then `download_link` for the one you need and `curl` it into the
   sandbox, which keeps the JSON byte-exact. Edit it freely in your copy: change the text, move or resize
   elements, add or remove them. Never write your changes back to his Dropbox.
-- **Compose one from scratch** when nothing fits, following `design-format.md`.
+- **Compose one from scratch** when nothing fits.
 
 `{{Name}}` placeholders, if a template has them, are filled by `make_link.py`'s `Name=value` arguments, a
 shortcut rather than a requirement. `[[dt|YYYY-MM-DD]]` and other `[[...]]` expressions are filled by

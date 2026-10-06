@@ -15,17 +15,17 @@ A design is JSON: label size plus text, shape, barcode, QR and image elements. T
 reverse-engineered, at `https://phomymo.louietyj.me/docs/design-format.md`. Where it's silent or wrong, the
 source files it names are on the same host (e.g. `/canvas.js`).
 
-His templates, in his main Dropbox (not the durable filesystem) under `/Phomymo Templates/`, are
-starting points in the sense of Word's Normal.dotm, not fill-in forms: label size, margins and fonts set
-up the way he likes, with sample text ("Content") meant to be overwritten. Start from one to get those
-right, then edit the JSON however the label needs. `48x40.json` is the plain one: a blank 48 x 40 mm
-canvas with one text box inset 3 mm on every side. The Dropbox connector's `download_link` plus `curl`
-gets a template into the sandbox byte-exact; the link is single-use and expires, and `fetch` is the
-fallback if `curl` can't reach it.
+Start a design from `/Phomymo Templates/48x40.json` in his main Dropbox (not the durable filesystem): his
+blank page, like Word's Normal.dotm. It sets the label size for his 50 x 40 mm labels (printed 48 mm wide,
+the head's width) and holds one text box inset 3 mm on every side, with sample text. It carries no design
+intent; lay the label out as you see fit. The other files in that folder are bare-bones quick starts he
+edits by hand in Phomymo, not designs to fill, so open one only if he names it. The Dropbox connector's
+`download_link` plus `curl` gets a file into the sandbox byte-exact; the link is single-use and expires,
+and `fetch` is the fallback if `curl` can't reach it.
 
 `{{Name}}` placeholders are for designs you write yourself: `make_link.py` fills them from `Name=value`
-arguments and errors on an argument that matches none (his templates have none). `[[...]]` expressions
-are evaluated by Phomymo when it prints; the format doc lists them and their pitfalls.
+arguments and errors on an argument that matches none. `[[...]]` expressions are evaluated by Phomymo when
+it prints; the format doc lists them and their pitfalls.
 
 ## Scripts
 

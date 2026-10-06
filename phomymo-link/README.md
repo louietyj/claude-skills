@@ -1,14 +1,18 @@
 # phomymo-link
 
-Turns a Phomymo label template plus some text into a link that opens the finished label at
-[phomymo.louietyj.me](https://phomymo.louietyj.me), Louie's fork of
+Lets Claude design a label, from one of Louie's templates or from scratch, and hand him a link that opens
+it at [phomymo.louietyj.me](https://phomymo.louietyj.me), his fork of
 [Phomymo](https://github.com/transcriptionstream/phomymo), ready to print on his M110.
 
 ```
-SKILL.md      when to use it, where templates live, how to write label text
-make_link.py  template JSON + Field=value pairs -> link (stdlib only)
-preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
+SKILL.md          when to use it, where templates live, how to write label text
+design-format.md  the design JSON, for editing templates or composing labels from scratch
+make_link.py      design JSON (+ optional Field=value pairs) -> link (stdlib only)
+preview.mjs       link -> PNG of the exact bitmap Print would send (headless Chromium)
 ```
+
+`design-format.md` was worked out from the fork's source (`elements.js` for fields and defaults,
+`canvas.js` for what values do, `index.html` for the option lists); Phomymo has no format docs.
 
 ## Preview
 

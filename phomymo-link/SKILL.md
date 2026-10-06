@@ -1,6 +1,6 @@
 ---
 name: phomymo-link
-description: "Makes a one-tap print link for Louie's Phomemo M110 label printer: fills one of his Phomymo label templates with text and packs the whole design into a phomymo.louietyj.me link that he opens and prints. Use whenever he wants a label printed or a print link (food label, folder label, address label), including when the label text comes from something you looked up, like today's cafe menu."
+description: "Designs labels for Louie's Phomemo M110 printer and hands him a one-tap phomymo.louietyj.me link that opens the finished label ready to print: start from one of his templates or compose the layout yourself (text, shapes, barcodes, QR codes), and check a pixel-exact preview before sending. Use whenever he wants a label printed or a print link (food label, folder label, address label), including when the label text comes from something you looked up, like today's cafe menu."
 ---
 
 # phomymo-link
@@ -8,30 +8,35 @@ description: "Makes a one-tap print link for Louie's Phomemo M110 label printer:
 A link `https://phomymo.louietyj.me/#design=v1.<data>` carries a whole label design. Opening it loads the
 design into Phomymo, his fork of the browser label designer. He taps Print. Nothing is saved on his side.
 
-## Templates
+## The design
 
-They live in his main Dropbox, not the durable filesystem, in `/Phomymo Templates/`, one Phomymo JSON
-export each. Reach them with the Dropbox connector: `list_folder` to see what's there, then
-`download_link` for the one you need and `curl` it into the sandbox. That keeps the JSON byte-exact rather
-than retyped from `fetch` output.
+A label is a JSON design: label size plus a list of text, shape, barcode, QR and image elements. Read
+`design-format.md` (beside this file) before editing or composing one. You can:
 
-- `{{Name}}` is a field you fill. Grep the template for `{{` to see which ones it has.
-- `[[dt|YYYY-MM-DD]]` and other `[[...]]` expressions are filled by Phomymo at print time. Leave them.
-- A template without the field you need is his to change. Say so; don't edit it.
+- **Start from one of his templates** when one fits. They live in his main Dropbox, not the durable
+  filesystem, in `/Phomymo Templates/`, one Phomymo JSON export each. Use the Dropbox connector:
+  `list_folder` to see what's there, then `download_link` for the one you need and `curl` it into the
+  sandbox, which keeps the JSON byte-exact. Edit it freely in your copy: change the text, move or resize
+  elements, add or remove them. Never write your changes back to his Dropbox.
+- **Compose one from scratch** when nothing fits, following `design-format.md`.
+
+`{{Name}}` placeholders, if a template has them, are filled by `make_link.py`'s `Name=value` arguments, a
+shortcut rather than a requirement. `[[dt|YYYY-MM-DD]]` and other `[[...]]` expressions are filled by
+Phomymo at print time. Leave them.
 
 ## Make the link
 
-With the template's `download_link` URL in hand, one bash call, since shell variables die between calls:
+With the design at `/tmp/label.json` (downloaded and edited, or written from scratch), one bash call, since
+shell variables die between calls:
 
 ```bash
 SKILL_DIR="$(ls -1dt /mnt/skills/*/phomymo-link ~/.claude/skills/synced/*/phomymo-link 2>/dev/null | head -1)"
-curl -fsSL -o /tmp/label.json '<download_link URL>'
 python3 "$SKILL_DIR/make_link.py" /tmp/label.json "Content=Jasmine rice, broccoli, braised tofu, bulgogi" > /tmp/link.txt
 node "$SKILL_DIR/preview.mjs" "$(cat /tmp/link.txt)" /tmp/preview.png && cat /tmp/link.txt
 ```
 
-The link is single-use and short-lived; get a fresh one per run. If `curl` can't reach it, fall back to
-the connector's `fetch` and write the JSON to `/tmp/label.json` yourself; templates are under 2 KB.
+A Dropbox `download_link` is single-use and short-lived; get a fresh one per run. If `curl` can't reach
+it, fall back to the connector's `fetch` and write the JSON yourself; templates are under 2 KB.
 
 `\n` in a value is a line break. A `warning: {{X}} not filled` on stderr means you missed a field.
 

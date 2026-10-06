@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Usage: make_link.py TEMPLATE.json [Field=value ...]  ->  prints a Phomymo design link.
+"""Usage: make_link.py DESIGN.json [Field=value ...]  ->  prints a Phomymo design link.
 
-Each Field=value replaces {{Field}} in the template. Use \\n in a value for a line break.
+Each Field=value replaces {{Field}} in the design. Use \\n in a value for a line break.
 """
 import base64
 import json

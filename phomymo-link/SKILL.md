@@ -11,16 +11,14 @@ design into Phomymo, his fork of the browser label designer. He taps Print. Noth
 ## The design
 
 A label is a JSON design: label size plus a list of text, shape, barcode, QR and image elements. Before
-editing or composing one, read the format doc, which is deployed with the code it describes:
+editing or composing one, read the format doc:
 
 ```bash
 curl -fsSL https://phomymo.louietyj.me/docs/design-format.md
 ```
 
-Phomymo has no official format docs; that page was reverse-engineered from the fork's source and says
-which files to read when it isn't enough. If a field behaves differently from the doc, or you need one it
-doesn't cover, read the code it points to (same host, e.g. `curl https://phomymo.louietyj.me/canvas.js`)
-rather than guessing, and trust the preview over both. You can:
+It's reverse-engineered, so when it's silent or wrong, read the source files it names (same host, e.g.
+`curl https://phomymo.louietyj.me/canvas.js`) instead of guessing; the preview overrules both. You can:
 
 - **Start from one of his templates** when one fits. They live in his main Dropbox, not the durable
   filesystem, in `/Phomymo Templates/`, one Phomymo JSON export each. Use the Dropbox connector:

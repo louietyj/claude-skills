@@ -10,11 +10,9 @@ make_link.py  design JSON (+ optional Field=value pairs) -> link (stdlib only)
 preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
 ```
 
-The design JSON reference lives in the fork, at
-[`src/web/docs/design-format.md`](https://github.com/louietyj/phomymo/blob/master/src/web/docs/design-format.md),
-deployed as https://phomymo.louietyj.me/docs/design-format.md, so it changes in the same commits as the
-code it describes. Phomymo has no format docs of its own; that page is reverse-engineered from the source
-and names the files to read when it falls short.
+The design JSON reference is reverse-engineered from the fork's source and lives beside it, at
+[`src/web/docs/design-format.md`](https://github.com/louietyj/phomymo/blob/master/src/web/docs/design-format.md)
+(deployed as https://phomymo.louietyj.me/docs/design-format.md), so the two change together.
 
 ## Preview
 

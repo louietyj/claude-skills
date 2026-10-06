@@ -7,7 +7,24 @@ Turns a Phomymo label template plus some text into a link that opens the finishe
 ```
 SKILL.md      when to use it, where templates live, how to write label text
 make_link.py  template JSON + Field=value pairs -> link (stdlib only)
+preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
 ```
+
+## Preview
+
+`preview.mjs` opens the link in headless Chromium via `puppeteer-core` and calls
+`window.phomymoPrintPreview()`, a hook in the fork that builds the bitmap through the same
+`buildPrintRaster()` the Print button uses. Nothing about rendering is reimplemented, so the preview can't
+drift from what prints. An earlier prototype rendered in Node with `@napi-rs/canvas` and Phomymo's
+`canvas.js`; it worked, but about half of it re-created browser behaviour (image loading, SVG, fonts) and
+the app's print setup, and one of those gaps silently dropped images.
+
+The bitmap still depends on the browser's text rasteriser: Chrome on Windows (DirectWrite) and on
+Android or Linux (FreeType) differ by edge pixels, so there is no single ground truth, and Linux Chromium
+is closest to his phone. It uses the first plain Chromium it finds (`/usr/bin/chromium`, Playwright's or
+puppeteer's caches), else installs `chrome-headless-shell` into `~/.cache/phomymo-preview`. CloakBrowser
+is never used: its fingerprint patches add noise to canvas reads. Measured in the `dev/sandbox.sh`
+container: 2.3s warm, 8s first run, 14s when it has to download Chromium.
 
 ## The link format
 

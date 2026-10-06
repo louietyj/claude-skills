@@ -7,7 +7,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "phomymo-link"
-MEMBERS = ["SKILL.md", "make_link.py"]
+MEMBERS = ["SKILL.md", "make_link.py", "preview.mjs"]
 
 
 def main() -> int:

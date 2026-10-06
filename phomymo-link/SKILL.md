@@ -26,13 +26,25 @@ With the template's `download_link` URL in hand, one bash call, since shell vari
 ```bash
 SKILL_DIR="$(ls -1dt /mnt/skills/*/phomymo-link ~/.claude/skills/synced/*/phomymo-link 2>/dev/null | head -1)"
 curl -fsSL -o /tmp/label.json '<download_link URL>'
-python3 "$SKILL_DIR/make_link.py" /tmp/label.json "Content=Jasmine rice, broccoli, braised tofu, bulgogi"
+python3 "$SKILL_DIR/make_link.py" /tmp/label.json "Content=Jasmine rice, broccoli, braised tofu, bulgogi" > /tmp/link.txt
+node "$SKILL_DIR/preview.mjs" "$(cat /tmp/link.txt)" /tmp/preview.png && cat /tmp/link.txt
 ```
 
 The link is single-use and short-lived; get a fresh one per run. If `curl` can't reach it, fall back to
 the connector's `fetch` and write the JSON to `/tmp/label.json` yourself; templates are under 2 KB.
 
 `\n` in a value is a line break. A `warning: {{X}} not filled` on stderr means you missed a field.
+
+## Look at the preview before sending
+
+`preview.mjs` opens the link in headless Chromium and saves exactly the bitmap Print would send, 3x size,
+with `[[dt|...]]` dates filled in Louie's timezone. Look at `/tmp/preview.png` every time: it is how you
+catch text running off the label, awkward line breaks or a field you missed. Fix the text and rerun until
+it looks right. A few seconds once warm; the first run in a sandbox also installs `puppeteer-core` and,
+if no Chromium is present, `chrome-headless-shell` (~100 MB).
+
+It uses a plain Chromium only, never headless-browser's CloakBrowser, whose fingerprint patches perturb
+canvas pixels. If it fails, say so and still give him the link; the preview is a check, not a gate.
 
 ## Writing the text
 
@@ -44,5 +56,6 @@ doesn't fit runs off the label. Write what he'd say, not what the source says: "
 
 Reply with a markdown link whose text is the label content, e.g.
 `[Print: Jasmine rice, broccoli, braised tofu, bulgogi](https://phomymo.louietyj.me/#design=v1.…)`.
-The link contains everything in the template, his phone number included on some, so it goes to him,
-not anywhere public. Avoid images in templates: they make the link tens of KB long.
+Show him the preview image with it. The link contains everything in the template, his phone number
+included on some, so it goes to him, not anywhere public. Avoid images in templates: they make the link
+tens of KB long.

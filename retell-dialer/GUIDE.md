@@ -40,9 +40,22 @@ same calendar, so leave it out of your answer.
 ## Get permission. Every call.
 
 Skills have no permission prompt — nothing stands between you and a real phone
-ringing in someone's office. **Ask Louie and get an explicit yes before every
-call**, saying who you are about to ring and what for. Approval for one call is
-not approval for the next.
+ringing in someone's office. **Louie approves every call, and he approves it
+by approving the brief.**
+
+Once the brief is through the compression gate, `present_files` the brief file
+itself — not a summary in chat — and ask for his explicit yes, naming every
+number you will dial with it and who answers there. That yes covers exactly
+those destinations with that brief: a new number, or the same number for a
+different purpose, needs its own. **No brief reaches `dispatch` unless Louie
+has reviewed at least one revision of it.** Approval may come well ahead of a
+scheduled call.
+
+Small tweaks after approval need no second review: a fact an earlier call
+turned up, a band nudged by how the last call went. Anything larger — a change
+to what the agent may commit to, a hard no added or dropped, a section
+rewritten — present it again and ask. Unsure which? Re-present. Either way,
+tell him what changed.
 
 ## The sentence after the disclosure decides the call
 
@@ -176,7 +189,8 @@ however short the brief feels.**
    bullets, then sentences, then words. A final that comes out barely shorter
    started at word level.
 3. **Make the cuts in that file**, editing or rewriting whichever they call
-   for, then dispatch it.
+   for, then present it to Louie for approval (see "Get permission. Every
+   call.") before dispatching it.
 
 Never reprint the draft into your reply or show a before/after.
 

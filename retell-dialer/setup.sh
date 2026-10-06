@@ -141,5 +141,6 @@ fi
 printf '\nAll four steps are done for the rest of this conversation. This output is a\n'
 printf 'transcript of work already done, not a plan: do not re-run this script or\n'
 printf '`dialer health`.\n'
-printf "\nNext: write the brief, pass it through the MANDATORY GATE, get Louie's\n"
-printf "explicit go-ahead for this call, then \`dialer dispatch\`.\n"
+printf "\nNext: write the brief, pass it through the MANDATORY GATE, present_files it\n"
+printf "with the numbers it will dial for Louie's explicit approval, then\n"
+printf "\`dialer dispatch\`.\n"

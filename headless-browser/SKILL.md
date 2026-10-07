@@ -57,7 +57,7 @@ usually cost several times that, and they still hide things:
   posted as a picture is invisible to both, and gets reported as "not
   listed".
 
-So view the half-size shot liberally while navigating: after every `nav`,
+So view the half-size shot LIBERALLY while navigating: after EVERY `nav`,
 and after any click that should have changed something. Before concluding
 something isn't on a page, look at it.
 
@@ -145,11 +145,18 @@ you how to drive it, including a prefix you must put on every Bash call:
 bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh" --subagent <name>
 
 Report what you saw on the page, not only what `pinchtab text` said.
+If the result is more than a few lines of data, don't copy it into your
+reply: write it to a file (on the page with the answer, `pinchtab text >
+/tmp/<name>-result.txt`; screenshots are fine too) and return the paths
+with a short summary.
 ```
 
 Then the task. The script attaches it to the running browser with a tab,
 screenshot directory and `latest` paths of its own, and prints both pinchtab's
 instructions and this file. Don't restate any of it in the prompt.
+
+Read the files it returns. Navigating to the answer is most of the cost and
+stays in the subagent; a large result re-emitted in its reply only adds to it.
 
 ## Files
 

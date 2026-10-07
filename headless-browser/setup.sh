@@ -58,7 +58,21 @@ finish() {
   printf 'any step above; this output is a transcript of work already done, not a\n'
   printf 'plan. The session exists: never create or export PINCHTAB_SESSION\n'
   printf 'yourself, whatever that SKILL.md says.\n'
-  printf '\nNext: pinchtab nav <url> --block-images\n'
+
+  if [ -n "$AGENT" ]; then
+    printf '\n%s YOU ARE BROWSER AGENT %s %s\n' "$RULE_H" "$AGENT" "$RULE_H"
+    printf 'Other agents share this browser. Start EVERY Bash call with\n\n'
+    printf '  export PINCHTAB_AGENT=%s;\n\n' "$AGENT"
+    printf 'Shell state does not carry over between calls, and a pinchtab command\n'
+    printf 'without it drives another agent'"'"'s tab, silently. The examples above\n'
+    printf 'all omit it; add it anyway. Your latest screenshot:\n'
+    printf '  %s/latest-scale-0.5.jpg\n' "$SHOT_DIR"
+    printf 'If you re-run setup.sh, pass --subagent %s again: without it, it\n' "$AGENT"
+    printf 'takes over the tab of the agent that spawned you.\n'
+    printf '\nNext: export PINCHTAB_AGENT=%s; pinchtab nav <url> --block-images\n' "$AGENT"
+  else
+    printf '\nNext: pinchtab nav <url> --block-images\n'
+  fi
 
   if [ $failed -ne 0 ]; then
     printf '\nSome steps did not complete -- the summary above is the authority on\n'
@@ -67,14 +81,32 @@ finish() {
   exit 0
 }
 
+usage() {
+  printf 'usage: setup.sh [--cloak|--no-cloak] [--subagent <name>]\n' >&2
+  exit 2
+}
+
+# Simultaneous runs take turns, so the second attaches to what the first set up.
+# -o, because the server daemon this starts would otherwise inherit the lock and
+# hold it forever.
+if [ -z "${HEADLESS_BROWSER_LOCKED:-}" ] && command -v flock >/dev/null; then
+  HEADLESS_BROWSER_LOCKED=1 exec flock -o /tmp/.headless-browser-lock bash "$0" "$@"
+fi
+
 CLOAK=${HEADLESS_BROWSER_CLOAK:-1}
-for arg in "$@"; do
-  case "$arg" in
-    --cloak)    CLOAK=1 ;;
-    --no-cloak) CLOAK=0 ;;
-    *) printf 'usage: setup.sh [--cloak|--no-cloak]\n' >&2; exit 2 ;;
+RECONFIGURE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cloak)       CLOAK=1 RECONFIGURE=1 ;;
+    --no-cloak)    CLOAK=0 RECONFIGURE=1 ;;
+    --subagent=?*) PINCHTAB_AGENT=${1#*=} ;;
+    --subagent)    [ -n "${2:-}" ] || usage; PINCHTAB_AGENT=$2; shift ;;
+    *)             usage ;;
   esac
+  shift
 done
+# The test nav goes through the shim, which reads the name from the environment.
+[ -n "${PINCHTAB_AGENT:-}" ] && export PINCHTAB_AGENT
 
 printf '%s HEADLESS BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
@@ -102,7 +134,7 @@ SHOT_BASE=${PINCHTAB_SHOT_DIR:-$SHOT_BASE}
 # shot directory and ledger each. The shim derives the same paths.
 AGENT=${PINCHTAB_AGENT:-}
 case "$AGENT" in
-  *[!A-Za-z0-9_-]*) printf 'PINCHTAB_AGENT may hold only letters, digits, - and _\n' >&2; exit 2 ;;
+  *[!A-Za-z0-9_-]*) printf 'a subagent name may hold only letters, digits, - and _\n' >&2; exit 2 ;;
 esac
 SESSION_FILE=$SESSION_BASE${AGENT:+-$AGENT}
 SHOT_LEDGER=$SHOT_LEDGER_BASE${AGENT:+-$AGENT}
@@ -181,6 +213,14 @@ print_docs() {
   printf 'view it in the same message as the command that took it:\n'
   printf '  %s/latest-scale-0.5.jpg   (half size)\n' "$SHOT_DIR"
   printf '  %s/latest.jpg             (full size)\n' "$SHOT_DIR"
+
+  # A subagent never loaded this skill, so it gets the skill's own SKILL.md too:
+  # from "## Then" on, minus the section addressed to whoever spawns subagents.
+  if [ -n "$AGENT" ] && [ $docs_repeat -eq 0 ]; then
+    printf '\n%s THIS SKILL'"'"'S OWN SKILL.md (headless-browser) %s\n' "$RULE_H" "$RULE_H"
+    printf 'Where it and the file above disagree, this one wins.\n\n'
+    awk '/^## /{keep = !/^## Subagents/} /^## Then/{on = 1} on && keep' "$SKILL_DIR/SKILL.md"
+  fi
 }
 
 open_session() {
@@ -213,17 +253,22 @@ open_session() {
   fi
 }
 
-# --- attach: another agent joining a browser this sandbox already runs --------
-# The full setup restarts the server, which would close every other agent's tab
-# mid-flow. Once a setup has passed its test nav, a named agent only needs a
-# session of its own.
-if [ -n "$AGENT" ] && [ -f "$READY_MARK" ] && grep -qs 'installed by headless-browser' "$SHIM"; then
+# --- attach: joining a browser this sandbox already runs ----------------------
+# The full setup restarts the server, closing every other agent's tab mid-flow,
+# so once one has passed its test nav, later runs only open their own session.
+if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && grep -qs 'installed by headless-browser' "$SHIM"; then
   TOTAL=2
-  begin "open a session for agent $AGENT in the running browser"
+  begin "open a session${AGENT:+ for agent $AGENT} in the running browser"
   open_session
-  print_docs
-  finish
+  if [ $fatal -eq 0 ]; then
+    print_docs
+    finish
+  fi
+  # A browser that can't load a page has no tabs worth keeping.
+  printf '\nThe running browser failed its test nav; setting it up from scratch.\n'
+  summary=() step=0 failed=0 fatal=0 TOTAL=4
 fi
+rm -f "$READY_MARK"
 
 # --- 1. the package ----------------------------------------------------------
 begin 'install pinchtab'

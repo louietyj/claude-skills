@@ -132,18 +132,24 @@ consider handing the browsing to a subagent, so the screenshots and page dumps
 stay out of your context and only its findings come back. Prefer Sonnet 5.5
 for browsing (`model: "sonnet"`).
 
-Agents share the browser, so each needs a name of its own, or they all drive
-one tab:
+Spawn them whenever the need shows up, before or after you have browsed
+yourself. Give each a name no other subagent in this conversation has had
+(letters, digits, `-`, `_`), and start its prompt with this, verbatim apart
+from the name:
 
-1. Run setup.sh yourself first, before spawning any. A setup run without a
-   name restarts the browser, closing every tab in use.
-2. Give each subagent a name (letters, digits, `-`, `_`). It starts with none
-   of your context, so tell it to read this SKILL.md first, and then to begin
-   EVERY Bash call with `export PINCHTAB_AGENT=<name>;`, setup.sh included.
-   Shell state does not carry over between calls, and a call without the
-   prefix drives your tab. Its setup run attaches to the running browser with
-   a tab and `latest` paths of its own.
-3. Ask it to report what it saw on the page, not only what `text` said.
+```
+Before anything else, run this and read ALL of its output -- do not head,
+tail or grep it. It sets up your own tab in a shared browser and teaches
+you how to drive it, including a prefix you must put on every Bash call:
+
+bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh" --subagent <name>
+
+Report what you saw on the page, not only what `pinchtab text` said.
+```
+
+Then the task. The script attaches it to the running browser with a tab,
+screenshot directory and `latest` paths of its own, and prints both pinchtab's
+instructions and this file. Don't restate any of it in the prompt.
 
 ## Files
 

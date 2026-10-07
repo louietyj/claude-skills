@@ -2,7 +2,7 @@
 
 Skills for Claude, one subdirectory each.
 
-- [`session-init/`](session-init/) — one-touch conversation boot: sets up the two skills below, prints the memory index, prints their instructions. One tool call in place of five.
+- [`session-init/`](session-init/) — one-touch conversation boot: sets up the two skills below, prints the memory index, prints their instructions, and denies Claude Code's native `WebSearch`/`WebFetch` so web work goes through mcp-parallel. One tool call in place of five.
 - [`durable-filesystem/`](durable-filesystem/) — persistent filesystem for Claude on claude.ai, backed by a scoped Dropbox app folder.
 - [`headless-browser/`](headless-browser/) — fetches a page when `web_fetch` didn't, via a headless browser (pinchtab).
 - [`local-mcps/`](local-mcps/) — runs MCP servers claude.ai's connectors can't reach: `npx`/`uvx` stdio servers, and HTTP servers whose auth header name isn't allowlisted.

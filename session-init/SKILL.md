@@ -1,6 +1,6 @@
 ---
 name: session-init
-description: "One-touch conversation boot, run as the first action of every conversation. A single bash call that sets up the durable filesystem and the local MCP servers, prints the memory index, and prints both of those skills' instructions in full -- replacing five separate tool calls. The user's preferences invoke its script directly, so you normally never load this skill at all; if you are reading this, you have most likely not booted yet, and should run the command below now."
+description: "One-touch conversation boot, run as the first action of every conversation. A single bash call that sets up the durable filesystem and the local MCP servers, prints the memory index, prints both of those skills' instructions in full, and denies Claude Code's native WebSearch/WebFetch in favour of mcp-parallel -- replacing five separate tool calls. The user's preferences invoke its script directly, so you normally never load this skill at all; if you are reading this, you have most likely not booted yet, and should run the command below now."
 ---
 
 # session-init

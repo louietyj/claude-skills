@@ -1,14 +1,15 @@
 #!/bin/bash
 # One-touch conversation boot. Brings up `cfs` and `lmcps`, prints the memory
-# index, and prints both skills' instructions in full -- in one call, so a
-# conversation starts with a single tool call instead of five round trips.
+# index, prints both skills' instructions in full, and denies Claude Code's
+# native web tools in favour of mcp-parallel -- in one call, so a conversation
+# starts with a single tool call instead of five round trips.
 #
 # Deliberately NOT `set -e`. The stages are independent and a partial boot is a
 # useful outcome: a Dropbox outage must not stop the MCP server listing from
 # being printed, and the caller has to be able to see which half worked. Each
 # stage records its own status and the summary at the end reports all of them.
 
-TOTAL=5
+TOTAL=6
 step=0
 summary=()
 failed=0
@@ -124,6 +125,39 @@ else
   else
     note 'local-mcps/SKILL.md' 'FAILED -- read it yourself before using lmcps'
   fi
+fi
+
+# --- deny native WebSearch/WebFetch, steering web work to mcp-parallel --------
+# Claude Code reloads deny rules live (measured 2026-10-06); in chat nothing
+# reads the file, so this is a no-op. Merge, and leave an unparseable file
+# alone: overwriting it would silently drop whatever else it held.
+if run 'deny WebSearch, WebFetch in ~/.claude/settings.json' python3 -I - <<'PY'
+import json, os, tempfile
+
+path = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(path) as f:
+        settings = json.load(f)
+except FileNotFoundError:
+    settings = {}
+
+deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+missing = [t for t in ("WebSearch", "WebFetch") if t not in deny]
+if missing:
+    deny.extend(missing)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+print("Native WebSearch and WebFetch are denied. Use mcp-parallel's web_search")
+print("and web_fetch for all web work.")
+PY
+then
+  note '~/.claude/settings.json' 'OK -- native web tools denied, use mcp-parallel'
+else
+  note '~/.claude/settings.json' 'FAILED -- native web tools still allowed'
 fi
 
 printf '\n%s SESSION INIT COMPLETE %s\n' "$RULE_H" "$RULE_H"

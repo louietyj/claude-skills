@@ -5,7 +5,8 @@ description: "Fetches a page when web_fetch didn't -- through a browser that ord
 
 # Headless Browser (pinchtab)
 
-There is nothing else to read here. The skill is one script:
+Setup is one script, and there are no other files to read. Run it first; the
+rest of this file is how to use the browser it leaves you:
 
 ```bash
 bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh"

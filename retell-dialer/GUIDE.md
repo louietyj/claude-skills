@@ -241,7 +241,7 @@ dialer dispatch --to +16695550142 --other-party "…" --opening "…" --purpose 
     it. None of them? It is another conversation's: leave it alone and
     dispatch again with --force.
 
-dialer watch CALL_ID [--interval 15] [--budget 200] [--since N]
+dialer watch CALL_ID [--interval 10] [--budget 200] [--since N]
     Defaults as shown. Blocks, then prints one JSON object whose "event" is
     the first of:
       consult       Immediately, whatever the timers say. "question" is what
@@ -265,7 +265,7 @@ dialer watch CALL_ID [--interval 15] [--budget 200] [--since N]
                   it just stops watch returning once per word. Set it for
                   what the call is doing right now, and judge it afresh on
                   every watch, answer and steer:
-                    15  negotiating, scheduling, anything you must follow
+                    10  negotiating, scheduling, anything you must follow
                         closely and react to fast.
                     30  the agent is working through its brief, a phone
                         menu, hold: slow going that needs little attention.

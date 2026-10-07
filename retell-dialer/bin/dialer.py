@@ -44,7 +44,7 @@ RETELL = "https://api.retellai.com"
 # Nests inside the claude.ai sandbox's 300s hard kill, which discards all output
 # when it fires -- an overrun loses the question, not just the tail of it.
 POLL_BUDGET = 200
-WATCH_INTERVAL = 15       # batching floor; GUIDE.md says when to raise it
+WATCH_INTERVAL = 10     # batching floor; GUIDE.md says when to raise it
 POLL_WINDOW = 20          # per HTTP request; also the call-status check interval
 STATUS_COST = 6           # headroom for the Retell round trip after each window
 DYNAMIC_VARS = ("opening", "brief", "call_purpose", "other_party")
@@ -1010,7 +1010,7 @@ def main():
         parser.add_argument("--budget", type=int, default=POLL_BUDGET)
         parser.add_argument("--interval", type=int, default=WATCH_INTERVAL,
                             help="seconds of new dialogue to accumulate before "
-                                 "returning: 15 for anything you must react to fast, "
+                                 "returning: 10 for anything you must react to fast, "
                                  "30 while the call is slow or scripted. A consult "
                                  f"returns immediately either way (default {WATCH_INTERVAL})")
         parser.add_argument("--since", type=int, default=0,

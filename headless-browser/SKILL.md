@@ -43,26 +43,57 @@ and typed form values all persist; you never replay earlier steps. If the
 session goes stale the shim recreates it, but that gives you a fresh tab with
 no page loaded, so re-`nav` after seeing `no_current_tab`.
 
-## Screenshots: NEVER THROW AWAY THE `screenshot:` LINE
+## Look at the page, not just its text
+
+A half-size screenshot costs ~370 tokens. `text` and `snap` on a real page
+usually cost several times that, and they still hide things:
+
+- `text` drops everything that isn't prose. A page whose text reads like the
+  answer often has the rest of it behind a tab, a "show more", an
+  accordion or a dropdown. `snap` lists those controls, but agents stop at
+  `text`, never notice them, and report as missing data that was one click
+  away.
+- Neither sees inside images. A restaurant menu, a price list or a timetable
+  posted as a picture is invisible to both, and gets reported as "not
+  listed".
+
+So view the half-size shot liberally while navigating: after every `nav`,
+and after any click that should have changed something. Before concluding
+something isn't on a page, look at it.
 
 Every command that can change the page (`nav`, `click`, `fill`, `press`,
-`scroll`, ...) has ALREADY saved a screenshot at two sizes, and first prints
-one line naming both:
+`scroll`, ...) has ALREADY saved a screenshot at two sizes, and copied both
+to fixed paths, which setup.sh's output names:
+
+```
+<shot dir>/latest-scale-0.5.jpg    half size: view this by default
+<shot dir>/latest.jpg              full size
+```
+
+Because the path is known in advance, view it in the same message as the
+command: issue the Bash call and the image read as parallel tool calls.
+Claude Code and Cowork run the Bash call to completion before the read, so the
+image is this command's shot and costs no extra round trip. If the shot
+failed, the file is missing rather than stale.
+
+The half-size one is still readable. Open the full-size one for small print,
+or when a click has to be exact. Click what you see with `click --x --y`: the
+full-size image's pixels are click coordinates, so double what you read off
+the half-size one.
+
+## NEVER THROW AWAY THE `screenshot:` LINE
+
+Each of those commands also prints one line naming its numbered shot:
 
 ```
 screenshot: /home/claude/pinchtab-shots/0017-reload.jpg (1440x779), half: 0017-reload-scale-0.5.jpg (720x389)
 ```
 
-The half-size file sits in the same directory. When text or a snap comes back
-empty, half-loaded, or doesn't add up -- a canvas, a map, refs pointing at the
-wrong thing -- VIEW THE IMAGE FIRST. One look answers what ten calls of
-debugging in text won't.
-
-View the half-size `-scale-0.5.jpg` by default: it costs a quarter of the
-tokens and is still readable. Open the full-size one for small print, or when
-a click has to be exact. Click what you see with `click --x --y`: the
-full-size image's pixels are click coordinates, so double what you read off
-the half-size one.
+The half-size file sits in the same directory. `latest` is overwritten by the
+next command, so this line is how you find a shot from earlier in a batch.
+When text or a snap comes back empty, half-loaded, or doesn't add up -- a
+canvas, a map, refs pointing at the wrong thing -- VIEW THE IMAGE FIRST. One
+look answers what ten calls of debugging in text won't.
 
 **If you discard the line, you won't know the image exists, and you will end up
 debugging the page blind.** So batch, loop, grep and save tokens as much as you
@@ -92,6 +123,27 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 `pinchtab shots` lists every screenshot since the last `shots` (the last 10,
 newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
+
+## Subagents for involved navigation
+
+If the task means clicking through many pages -- comparing listings, walking
+a multi-step flow, paging through results -- and you have a subagent tool,
+consider handing the browsing to a subagent, so the screenshots and page dumps
+stay out of your context and only its findings come back. Prefer Sonnet 5.5
+for browsing (`model: "sonnet"`).
+
+Agents share the browser, so each needs a name of its own, or they all drive
+one tab:
+
+1. Run setup.sh yourself first, before spawning any. A setup run without a
+   name restarts the browser, closing every tab in use.
+2. Give each subagent a name (letters, digits, `-`, `_`). It starts with none
+   of your context, so tell it to read this SKILL.md first, and then to begin
+   EVERY Bash call with `export PINCHTAB_AGENT=<name>;`, setup.sh included.
+   Shell state does not carry over between calls, and a call without the
+   prefix drives your tab. Its setup run attaches to the running browser with
+   a tab and `latest` paths of its own.
+3. Ask it to report what it saw on the page, not only what `text` said.
 
 ## Files
 

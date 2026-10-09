@@ -11,7 +11,8 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "voice-mode-guide"
-MEMBERS = ["SKILL.md", "voice-mode-guide.sh", "voice-brief.md", "catalog.py"]
+MEMBERS = ["SKILL.md", "voice-mode-guide.sh", "voice-brief.md", "text-brief.md",
+           "catalog.py"]
 
 
 def main() -> int:

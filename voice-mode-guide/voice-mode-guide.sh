@@ -6,9 +6,9 @@
 # output included. So everything voice-Claude needs goes to stdout here.
 #
 # It must arrive as ONE SMALL tool result. Past a size threshold the harness
-# swaps a result for a 2 KB preview plus a file path, and voice-Claude would get
-# the preview. Hence session-init is never run inline: its ~60 KB would take the
-# briefing down with it.
+# swaps a result for a 2 KB preview plus a file path, and voice-Claude may get
+# only the preview. Hence session-init is never run inline: its ~60 KB would
+# take the briefing down with it.
 #
 # Deliberately NOT `set -e` -- a failed catalog must not cost the briefing.
 
@@ -37,18 +37,21 @@ if [ ! -f "$SENTINEL" ]; then
   printf '  bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"\n\n'
   printf 'Not inside this call: its output would push this briefing past the size\n'
   printf 'at which the harness replaces a tool result with a preview, and the\n'
-  printf 'preview is all voice-Claude would see.\n'
+  printf 'preview may be all voice-Claude sees.\n'
   exit 2
 fi
 
+# The catalog sits inside the voice-Claude section, so it goes between the two.
 if ! cat "$HERE/voice-brief.md"; then
   printf 'FAILED to read voice-brief.md. Tell the user the voice briefing is\n'
   printf 'missing; voice-Claude will not know how to hand off without it.\n'
 fi
 
-printf '\n'
 python3 "$HERE/catalog.py" ||
   printf '\nFAILED to build the catalog. The briefing above still stands.\n'
+
+cat "$HERE/text-brief.md" ||
+  printf '\nFAILED to read text-brief.md.\n'
 
 printf 'voice-mode-guide ran at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   >"$GUIDE_SENTINEL" 2>/dev/null

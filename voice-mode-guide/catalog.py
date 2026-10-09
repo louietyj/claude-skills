@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Print what text-Claude can do, so voice-Claude knows what to hand off.
 
-One line per entry: voice only routes, never runs, and the guide's output must
-stay small enough to land in the transcript whole. Each list fails soft.
+Kept terse: voice only routes, never runs, and the guide's output must stay
+small enough to land in the transcript whole. Each list fails soft.
 """
 
 import glob
@@ -14,9 +14,9 @@ import sys
 
 SKILLS_ROOT = os.environ.get("SKILLS_ROOT", "/mnt/skills")
 SYNCED_ROOT = os.path.expanduser("~/.claude/skills/synced")
-LMCPS_CONFIG = os.path.join(
-    os.environ.get("LMCPS_HOME", os.path.expanduser("~/.lmcps")), "config.json")
+LMCPS_HOME = os.environ.get("LMCPS_HOME", os.path.expanduser("~/.lmcps"))
 BLURB = 150
+MAX_TOOL_NAMES = 30  # Alpha Vantage alone has 133
 
 
 def parse_frontmatter(path):
@@ -98,9 +98,17 @@ def skills():
 
 
 def servers():
-    with open(LMCPS_CONFIG, encoding="utf-8") as fh:
-        return {name: cfg.get("description")
-                for name, cfg in json.load(fh)["mcpServers"].items()}
+    with open(os.path.join(LMCPS_HOME, "config.json"), encoding="utf-8") as fh:
+        configured = json.load(fh)["mcpServers"]
+    # Cached by session-init's `lmcps servers`. Without it, no tool names.
+    try:
+        with open(os.path.join(LMCPS_HOME, "catalog.json"), encoding="utf-8") as fh:
+            indexed = json.load(fh)["servers"]
+    except (OSError, ValueError, KeyError):
+        indexed = {}
+    return {name: (cfg.get("description"),
+                   [t.get("name", "") for t in (indexed.get(name) or {}).get("tools") or []])
+            for name, cfg in configured.items()}
 
 
 def memory_topics():
@@ -111,19 +119,33 @@ def memory_topics():
 
 
 def section(title, fetch, render):
-    print(f"\n## {title}\n")
+    print(f"\n#### {title}\n")
     try:
         render(fetch())
     except Exception as exc:  # noqa: BLE001
-        print(f"  (unavailable: {exc}. Text-Claude can still list these.)")
+        print(f"(unavailable: {exc}. Text-Claude can still list these.)")
 
 
-def render_entries(entries):
+def render_entry(name, description):
+    said = blurb(description)
+    print(f"- {name} -- {said}" if said else f"- {name}")
+
+
+def render_skills(entries):
     if not entries:
-        print("  (none)")
+        print("(none)")
     for name in sorted(entries):
-        said = blurb(entries[name])
-        print(f"- {name} -- {said}" if said else f"- {name}")
+        render_entry(name, entries[name])
+
+
+def render_servers(entries):
+    for name in sorted(entries):
+        description, tools = entries[name]
+        render_entry(name, description)
+        if tools:
+            more = len(tools) - MAX_TOOL_NAMES
+            tail = f" (+{more} more)" if more > 0 else ""
+            print(f"  tools: {', '.join(tools[:MAX_TOOL_NAMES])}{tail}")
 
 
 def render_topics(topics):
@@ -132,11 +154,11 @@ def render_topics(topics):
 
 
 def main():
-    print("════════ WHAT TEXT-CLAUDE CAN DO ════════")
-    print("Not runnable by voice-Claude. A request that matches a line below,")
-    print("or touches the user's own information, goes through the handoff.")
-    section("Skills", skills, render_entries)
-    section("Local MCP servers (via `lmcps`)", servers, render_entries)
+    print("\n### What text-Claude can do\n")
+    print("Not runnable by you. A request that matches a line below, or touches")
+    print("the user's own information, goes through the handoff.")
+    section("Skills", skills, render_skills)
+    section("Local MCP servers (via `lmcps`)", servers, render_servers)
     section("Durable memory (via `cfs`)", memory_topics, render_topics)
     return 0
 

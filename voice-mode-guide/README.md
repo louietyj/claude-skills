@@ -5,9 +5,12 @@ Run in chat, in the turn before switching the Claude mobile app to voice. Prints
 ```
 SKILL.md             a shim; all it says is to run the script
 voice-mode-guide.sh  refuses until session-init has run, then prints the rest
-voice-brief.md       the briefing, cat'd to stdout
-catalog.py           skills, lmcps servers and memory topics, one line each
+voice-brief.md       the shared model, then the voice-Claude section
+catalog.py           what text-Claude can do; ends the voice-Claude section
+text-brief.md        the text-Claude section
 ```
+
+The printout reads as one markdown document: a shared `## Two agents, one conversation`, then `## For voice-Claude` (with the catalog as its last `###`), then `## For text-Claude`. Each agent reads the shared section and its own; nothing for one is interleaved with the other's.
 
 ## The problem
 
@@ -36,11 +39,16 @@ What text-Claude sees of voice-Claude:
 
 ## Design
 
-**One small tool result.** Past a size threshold the harness replaces a tool result with a 2 KB preview and a file path. That happened to session-init's 62.5 KB. Voice-Claude would get only the preview, so the guide's output has to stay well under the threshold. In a real container it was 12.6 KB and arrived whole (2026-10-09). The chat UI collapses it as "output truncated", but that is display only.
+**One small tool result.** Past a size threshold the harness replaces a tool result with a 2 KB preview and a file path. That happened to session-init's 62.5 KB. Text-Claude then reads the saved file in full, as the preferences demand, and voice-Claude probably sees that read too, since it is tool output from before the switch. That is untested, so the guide stays small enough not to depend on it: 16.6 KB arrived whole in a real container (2026-10-09). The chat UI collapses it as "output truncated", but that is display only.
 
 **session-init is never run inline.** The previous version ran it inside the guide's own call when the conversation hadn't booted, which would push the whole result behind a preview. The guide now checks session-init's sentinel and, if it is missing, prints the session-init command and exits 2. The model then runs that command as its own call and the guide again as another.
 
-**The catalog is one line per entry, for routing.** Voice-Claude can run none of what it lists. It only needs to recognise that a request belongs on the other side. Full trigger descriptions would cost the size budget for nothing. It lists every skill tier except `examples/`, deduped by name, because a Cowork container has the same skill under `organization/`, `private/` and `user/`. It also lists the lmcps servers from the config session-init cached, and memory topics from `/memory/INDEX.md`. Each list fails soft to one line.
+**The catalog is terse, for routing.** Voice-Claude can run none of what it lists. It only needs to recognise that a request belongs on the other side. Full trigger descriptions would cost the size budget for nothing. Its three lists:
+- **Skills,** one line each. Every skill tier except `examples/`, deduped by name, because a Cowork container has the same skill under `organization/`, `private/` and `user/`.
+- **lmcps servers,** one line each from the config session-init cached, plus their tool names from the cached tool index, capped at 30 per server. A tool name like `GLOBAL_QUOTE` says more about what a server can answer than its marketing blurb does.
+- **Memory topics** from `/memory/INDEX.md`.
+
+Each list fails soft to one line.
 
 **Voice-Claude is told to hand off on its own initiative.** The handoff tool's own description tells it to relay only what the user explicitly asks to send. Voice-Claude also screened a handoff on its own judgement: it refused "echo a password" until the request was reworded as "a random word". The briefing overrides both.
 
@@ -68,7 +76,7 @@ dev/sandbox.sh up
 dev/sandbox.sh sh 'bash /mnt/skills/*/session-init/session-init.sh >/dev/null; bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh --force | wc -c'
 ```
 
-Keep that byte count small. The exact threshold is unknown: 12.6 KB arrived whole, 62.5 KB was replaced by a preview.
+Keep that byte count small. The exact threshold is unknown: 16.6 KB arrived whole, 62.5 KB was replaced by a preview. A real container prints about 3 KB more than the dev sandbox.
 
 `SKILLS_ROOT` points `catalog.py` at another skills tree. `LMCPS_HOME` points it at another lmcps cache. `SESSION_INIT_SENTINEL` and `VOICE_MODE_GUIDE_SENTINEL` override the sentinel paths.
 

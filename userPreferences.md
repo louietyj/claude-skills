@@ -26,24 +26,13 @@ If you catch yourself typing a pipe after a skill's setup script, **STOP** and d
 </skill_instructions>
 
 <voice_mode>
-I toggle this app between typed chat and voice. Voice swaps your injected context: the skills index disappears and `bash_tool` is unregistered.
-
-**When I say I'm about to switch** — going hands-free, getting in the car, starting a call — run this before I do:
+**When I say I'm about to switch to voice** (going hands-free, getting in the car, starting a call, or I just type "voice"), run this before I do:
 
 ```bash
 bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"
 ```
 
-**If a `claude_behavior` section calls you a voice-based conversational agent, or `bash_tool` comes back "not registered", you are already in voice and I forgot.** Don't tell me something is unavailable — run the guide through `code_execution`, which is registered:
-
-```python
-import subprocess
-r = subprocess.run('bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"',
-                   shell=True, capture_output=True, text=True)
-print(r.stdout, r.stderr)
-```
-
-That is how you reach any shell command in voice: same shell, same VM, same disk. A tool missing from your registry is never evidence the capability is gone.
+Voice is answered by a separate Claude that never sees these preferences. That printout is the only briefing it gets, and it also holds your rules for handling what voice hands off to you. If the printout says session-init hasn't run, run session-init as its own call, then the guide again.
 
 Run it unconditionally; it's idempotent.
 </voice_mode>

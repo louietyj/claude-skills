@@ -1,6 +1,6 @@
 ---
 name: voice-mode-guide
-description: "Briefing to run in CHAT, in the turn before the user switches the Claude mobile app to voice. Voice replaces the injected context -- the skills index and bash_tool both disappear -- so this prints, into the transcript where it survives the toggle, what changes, how to reach each capability anyway, and the full skill index with triggers and paths. It boots the conversation too if that has not happened yet. Invoke it when the user says they are about to switch to voice, go hands-free, or start a call."
+description: "Briefing to run in CHAT, in the turn before the user switches the Claude mobile app to voice. Voice is answered by a separate Claude with no preferences, skills, shell or durable memory, whose only bridge back is a handoff tool to the text side; it does read this conversation as it stood at the switch. So this prints, into the transcript, how the two agents work together, when and how voice should hand off, and a catalog of what the text side can do. Invoke it when the user says they are about to switch to voice, go hands-free or start a call, or just types \"voice\"."
 ---
 
 # voice-mode-guide
@@ -11,18 +11,16 @@ There is nothing to read here. The skill is one script:
 bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"
 ```
 
-**DO NOT head/tail/grep this command's output.** Its entire purpose is to put
-text into your context before the mode switch takes your context away;
-truncating it defeats the skill.
+**DO NOT head/tail/grep this command's output.** Its whole purpose is to put
+text into the transcript for voice-Claude to read after the switch.
 
-Run it now, then answer. It prints the briefing and the skill index, and boots
-the conversation first if `session-init` has not already run. It is idempotent:
-a second run says so in a few lines rather than repeating itself.
+If session-init has not run in this conversation, the script says so and stops.
+Run session-init as its own call, then this script again. Never both in one
+call: the combined output would be replaced by a preview, and the preview is
+all voice-Claude would see.
 
-The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
-or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
-`~/.claude/skills/synced/<bucket>/`, and hardcoding any one breaks the others.
+It is idempotent: a second run says so in a few lines.
 
-Best run from chat, before the switch. If the user asks for it from inside
-voice, run it anyway -- through `code_execution` and `subprocess`, since
-`bash_tool` is not registered there.
+**From inside voice it is useless.** Voice-Claude has no shell to run it, and
+anything text-Claude prints during a handoff never reaches voice. If the user
+asks for it while in voice, tell them to type "voice" in chat, then switch back.

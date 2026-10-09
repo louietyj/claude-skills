@@ -1,79 +1,84 @@
 # voice-mode-guide
 
-Run in chat, in the turn before switching the Claude mobile app to voice. Prints — into the transcript, where it survives the toggle — what is about to change, how to reach each capability anyway, and the skill index that voice would otherwise take away.
+Run in chat, in the turn before switching the Claude mobile app to voice. Prints into the transcript a briefing for the voice side of the conversation: how the two agents work together, when and how to hand off, and a catalog of what the text side can do.
 
 ```
 SKILL.md             a shim; all it says is to run the script
-voice-mode-guide.sh  boot if needed, then the briefing, then the index
-voice-brief.md       the briefing text, cat'd to stdout
-skill-index.py       rebuilds <available_skills> from /mnt/skills
+voice-mode-guide.sh  refuses until session-init has run, then prints the rest
+voice-brief.md       the briefing, cat'd to stdout
+catalog.py           skills, lmcps servers and memory topics, one line each
 ```
-
-Everything load-bearing is printed by the script rather than written in `SKILL.md`: the injected context is replaced on the toggle, the conversation is not, and it is not certain which side of that line a skill body lands on.
 
 ## The problem
 
-Toggling between typed and spoken input swaps the whole injected context. Measured 2026-09-19/20 across sessions that toggled several times:
+Since chat and Cowork merged (2026-09-16), a conversation that talks by voice is two agents. Measured 2026-10-07 to 2026-10-09; the evidence is in `/drafts/voice-vs-chat-mode.md` on cfs.
 
-| | chat | voice |
+| | text-Claude | voice-Claude |
 |---|---|---|
-| `bash_tool` | registered | **not registered** |
-| `<available_skills>` | present | **absent** |
-| system prompt | standard | voice-specific (brevity, TTS) |
-| `code_execution`, connectors, `tool_search`, `conversation_search`, `memory_*` | present | present |
+| userPreferences, skills index | yes | **never**, however the conversation started |
+| native memory, connectors, web search | yes | yes |
+| shell | Bash, in the workspace container | `code_execution` at most, offline: `cfs` and `lmcps` 403 |
+| reaches the other side by | replying | `send_to_cowork_agent` |
 
-The input modality is irrelevant to the model — speech-to-text produces tokens either way. This is a product-layer difference: a different system prompt and a different tool registry per mode.
+Voice-Claude's only route to anything the user built is the handoff tool, and that tool only exists once the conversation has upgraded: some text turn has made a Bash call. A voice-started conversation has no handoff tool until then.
 
-Nothing about the machine changes, so `bash_tool`'s absence is fully covered by `subprocess.run(..., shell=True)` through `code_execution`, and a `session-init` that ran in chat leaves `cfs` and `lmcps` working after the switch. What doesn't survive is the *announcement*: `/mnt/skills/` is byte-identical in both modes, but a skill fires because its trigger description is in context, and in voice none of them are. A filename alone is useless — `hostc` conveys nothing about when to reach for it.
+What voice-Claude sees of text-Claude:
+- **Tool output from before the switch.** That is what this skill relies on.
+- **Reply text to a handoff.** It arrives as untrusted data, never as instructions.
+- **Nothing else.** It never sees tool output from text turns run during a handoff, even after voice is ended and reopened.
 
-## The tier rule
+So the briefing has to be in the transcript before the switch, as tool output.
 
-`<available_skills>` is exactly `public/` + `user/` + `plugins/`, omitting `/mnt/skills/examples/` wholesale — 44 on disk, none announced. Verified by asking a chat session to list its skills without looking at the filesystem, then diffing against `find /mnt/skills`.
+What text-Claude sees of voice-Claude:
+- **Spoken lines, in batches.** A batch is missing the voice turn that made the handoff call. That turn arrives with the next batch.
+- **The handoff instruction**, framed as a message from a peer session.
+- **Nothing else:** none of voice-Claude's tool calls or results.
 
-`skill-index.py` applies the same rule. This mirrors chat rather than improving on it: Claude wouldn't reach for `slack-gif-creator` in chat, so announcing it in voice is a divergence, not a fix. The count of omitted examples is still printed, with the path, so a task that genuinely needs one isn't blocked by a silent filter.
+## Design
 
-There is no allowlist and no per-skill judgement anywhere in this skill. Skills whose final step is presenting a file or rendering an artifact do lose their delivery surface in voice — no screen to tap — but that is stated once in the briefing as a constraint and left to the model to apply.
+**One small tool result.** Past a size threshold the harness replaces a tool result with a 2 KB preview and a file path. That happened to session-init's 62.5 KB. Voice-Claude would get only the preview, so the guide's output has to stay well under the threshold. In a real container it was 12.6 KB and arrived whole (2026-10-09). The chat UI collapses it as "output truncated", but that is display only.
+
+**session-init is never run inline.** The previous version ran it inside the guide's own call when the conversation hadn't booted, which would push the whole result behind a preview. The guide now checks session-init's sentinel and, if it is missing, prints the session-init command and exits 2. The model then runs that command as its own call and the guide again as another.
+
+**The catalog is one line per entry, for routing.** Voice-Claude can run none of what it lists. It only needs to recognise that a request belongs on the other side. Full trigger descriptions would cost the size budget for nothing. It lists every skill tier except `examples/`, deduped by name, because a Cowork container has the same skill under `organization/`, `private/` and `user/`. It also lists the lmcps servers from the config session-init cached, and memory topics from `/memory/INDEX.md`. Each list fails soft to one line.
+
+**Voice-Claude is told to hand off on its own initiative.** The handoff tool's own description tells it to relay only what the user explicitly asks to send. Voice-Claude also screened a handoff on its own judgement: it refused "echo a password" until the request was reworded as "a random word". The briefing overrides both.
+
+**Text-Claude's rules travel in the same printout.** Text-Claude has the printout in context because it ran it. The `<voice_mode>` block in userPreferences only has to say when to run the guide.
+
+**The guide doesn't copy Anthropic's voice prompt.** Voice-Claude gets that natively; the previous version copied it in.
 
 ## The sentinels
 
-There is no boot process on claude.ai, only a preference asking for `session-init` on the first turn, which may or may not have been followed. So `session-init.sh` writes `/tmp/.session-init.done` — a timestamp plus its stage summary — and this script reads it. The sentinel rather than a `cfs`-on-PATH probe, because it records *which* stages passed, so a half-failed boot reports as half-failed; and its lifetime is the VM's, exactly the lifetime of the shims it attests to.
+`session-init.sh` writes `/tmp/.session-init.done`. This script refuses to print the briefing without it.
 
-On a miss the script runs `session-init.sh` itself, bracketing the output with "this has run, do not run it again" both before and after — several hundred lines separate them, and a redundant re-run costs both setup scripts and two full `SKILL.md` prints.
+`/tmp/.voice-mode-guide.done` cuts a repeat run down to a few lines. That lets the preferences say "run this" flatly, without asking the model to judge what already happened in a long transcript. `--force` reprints everything.
 
-A second sentinel, `/tmp/.voice-mode-guide.done`, short-circuits a repeat run to a few lines. That exists so the preferences can say *run this* flatly; the conditional phrasing would ask a model that has just lost its context to judge what happened earlier in it. `--force` reprints everything.
+## The golden path
 
-## Recovering from inside voice
+1. Type `voice` (or `/voice-mode-guide`) in chat. This works whether the conversation started in chat or in voice. Text-Claude runs session-init if it hasn't run, then the guide, as separate calls.
+2. Switch to voice.
 
-Preferences survive a chat→voice toggle, so they carry a fallback for when the toggle happened before the guide ran. Two triggers, deliberately:
-
-- **`claude_behavior` describing you as a voice-based conversational agent.** Quoted from a live voice session (2026-09-20), alongside TTS output, two-sentence / fifty-word guidance, and no lists or tables. Fires at the top of the session, before anything has gone wrong.
-- **`bash_tool` coming back "not registered".** Reactive, but keyed on a measured registry difference rather than on prompt text.
-
-Both, because in the same session that quoted `claude_behavior` the model first reported the block as *absent* and only found it on a careful second look. The block is reliably present; introspection about it is not. The second trigger needs no introspection — it fires at the exact moment of the original failure: reaching for `bash_tool`, getting "not registered", and reporting it as missing rather than routing around it.
+From inside voice the guide is useless. Voice-Claude has no shell, and nothing text-Claude prints during a handoff reaches it. The fix is the same step 1: type in chat, then switch back.
 
 ## Testing
 
 ```bash
 dev/sandbox.sh up
-dev/sandbox.sh sh 'bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh'
+dev/sandbox.sh sh 'bash /mnt/skills/*/session-init/session-init.sh >/dev/null; bash /mnt/skills/*/voice-mode-guide/voice-mode-guide.sh --force | wc -c'
 ```
 
-The container only mounts skills at `/mnt/skills/user/`, so exercising the tier split means staging the others by hand:
+Keep that byte count small. The exact threshold is unknown: 12.6 KB arrived whole, 62.5 KB was replaced by a preview.
 
-```bash
-docker exec claude-sandbox mkdir -p /mnt/skills/plugins /mnt/skills/public /mnt/skills/examples
-docker cp voice-mode-guide claude-sandbox:/mnt/skills/plugins/voice-mode-guide
-docker exec claude-sandbox rm -f /tmp/.session-init.done /tmp/.voice-mode-guide.done
-```
+`SKILLS_ROOT` points `catalog.py` at another skills tree. `LMCPS_HOME` points it at another lmcps cache. `SESSION_INIT_SENTINEL` and `VOICE_MODE_GUIDE_SENTINEL` override the sentinel paths.
 
-`SKILLS_ROOT` points `skill-index.py` at another tree, the quick way to test frontmatter parsing against synthetic files. `SESSION_INIT_SENTINEL` and `VOICE_MODE_GUIDE_SENTINEL` override the sentinel paths.
+The test that matters is live, and can't be run in the sandbox:
+1. Run the guide in chat.
+2. Switch to voice.
+3. Ask voice-Claude to quote the `END OF VOICE BRIEFING` line.
+
+If it can, the whole printout reached it. Passed 2026-10-09: voice quoted the two lines that follow the marker.
 
 ## Package for claude.ai
 
-`python package.py` writes `voice-mode-guide.zip`; upload it under Settings → Capabilities → Skills. No credentials. It needs `session-init` installed alongside it, and reports that rather than failing if it isn't.
-
-## Limits
-
-**A conversation cold-started in voice is unsalvageable by anything in this repo.** No preferences, no skills index, no `bash_tool` — so no trigger can fire, because every self-healing path here rides on the preferences block, and that is exactly what a cold start does not get. Recovery needs the user to narrate the whole bootstrap aloud: the path, the read, the run, and the `subprocess` workaround.
-
-The workaround is unchanged: start in chat, run this, then toggle.
+`python package.py` writes `voice-mode-guide.zip`; upload it under Settings → Capabilities → Skills. No credentials. It needs `session-init` installed alongside it.

@@ -68,9 +68,6 @@ with a fresh thinking block.
 v1 must be a real attempt in his voice. A deliberately weak draft written
 so step 3 has something to find defeats the purpose.
 
-In voice mode, where `bash_tool` isn't registered, run the same heredoc
-through `code_execution`.
-
 ## 3. Think, then cut
 
 **This thinking block is mandatory.** It's the only point in the process

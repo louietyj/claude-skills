@@ -127,11 +127,11 @@ doubt, end with it: it costs a few lines.
 
 ## Subagents for involved navigation
 
-If the task means clicking through many pages -- comparing listings, walking
-a multi-step flow, paging through results -- and you have a subagent tool,
-consider handing the browsing to a subagent, so the screenshots and page dumps
-stay out of your context and only its findings come back. Prefer Sonnet 5.5
-for browsing (`model: "sonnet"`).
+If you have a subagent tool, hand the navigation to a Sonnet subagent
+(`model: "sonnet"`). Strongly recommended: treat it as the default. Clicking
+through an SPA -- shop search results, filters, product listings, multi-step
+flows -- is where an agent burns 30 tool calls and fills its context with
+screenshots and snaps. Delegated, only the findings come back.
 
 Spawn them whenever the need shows up, before or after you have browsed
 yourself. Give each a name no other subagent in this conversation has had
@@ -152,12 +152,26 @@ reply: write it to a file (on the page with the answer, `pinchtab text >
 with a short summary.
 ```
 
-Then the task. The script attaches it to the running browser with a tab,
-screenshot directory and `latest` paths of its own, and prints both pinchtab's
+Then one clear navigation task, and which of these to come back with:
+
+1. **The answer**, when it's simple (a price, a yes/no, whether it's in stock).
+2. **Files**: `text`, `snap` or screenshots of the right page(s), as paths
+   plus a short summary.
+3. **The browser**: navigate to the right page and stop. You drive its tab
+   for the last bit by starting your own Bash calls with
+   `export PINCHTAB_AGENT=<its name>;`.
+
+The script attaches it to the running browser with a tab, screenshot
+directory and `latest` paths of its own, and prints both pinchtab's
 instructions and this file. Don't restate any of it in the prompt.
 
 Read the files it returns. Navigating to the answer is most of the cost and
 stays in the subagent; a large result re-emitted in its reply only adds to it.
+
+Need more afterwards? Send the same subagent a continuation task (SendMessage
+in Claude Code) rather than browsing yourself or spawning a fresh one: it
+still has its tab, its page state and what it learned about the site. Take
+over directly only for short, precise finishing work (option 3).
 
 ## Files
 

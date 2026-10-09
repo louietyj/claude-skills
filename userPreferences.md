@@ -65,6 +65,17 @@ Run it unconditionally; it's idempotent.
 - General fetches: web_fetch → headless-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
 </web_research>
 
+<browser_delegation>
+**If you have a subagent tool, delegate headless-browser navigation to a Sonnet subagent (`model: "sonnet"`). Strongly recommended — treat it as the default, not an option.** Clicking through an SPA (shop search results, filters, product listings) is where you burn 30 tool calls and fill your context with screenshots and snaps.
+
+Spawn it with the preamble from headless-browser's SKILL.md ("Subagents for involved navigation"), then give it **one clear navigation task** and say which of these to come back with:
+1. **The answer**, when it's simple (a price, a yes/no, whether something is in stock).
+2. **Files**: `text`, `snap` or screenshots of the right page(s), as paths plus a short summary.
+3. **The browser**: navigate to the right page and stop. You drive its tab for the last bit by prefixing your own calls with `export PINCHTAB_AGENT=<its name>;`.
+
+**Want more afterwards? Send the same subagent a continuation task** (SendMessage in Claude Code) rather than browsing yourself or spawning a fresh one — it still has its tab, its page state and what it learned about the site. Only take over directly for short, precise finishing work (option 3).
+</browser_delegation>
+
 <apify_actors>
 Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
 

@@ -68,7 +68,15 @@ def read_windows() -> dict:
     return cfg
 
 
+def check_description() -> None:
+    with open(os.path.join(HERE, "SKILL.md"), encoding="utf-8") as fh:
+        m = re.search(r'^description: "(.*)"$', fh.read(), re.M)
+    if not m or len(m.group(1)) > 1024:
+        raise SystemExit(f"SKILL.md's description is {len(m.group(1)) if m else '?'} characters; claude.ai allows 1024.")
+
+
 def main() -> int:
+    check_description()
     with_key = "--no-key" not in sys.argv[1:]
     two_key = ""
     if with_key:

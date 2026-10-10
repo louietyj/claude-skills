@@ -19,4 +19,4 @@ if [ "$before" = "$after" ]; then
 fi
 
 echo "pin updated to cloakbrowser $(node -p "require('./package-lock.json').packages['node_modules/cloakbrowser'].version")"
-echo "review with: git diff -- headless-browser/cloak/"
+echo "review with: git diff -- web-browser/cloak/"

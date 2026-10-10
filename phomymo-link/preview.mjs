@@ -26,7 +26,7 @@ mkdirSync(CACHE, { recursive: true });
 const run = (cmd, cmdArgs) =>
   execFileSync(cmd, cmdArgs, { cwd: CACHE, encoding: 'utf8', shell: process.platform === 'win32' });
 
-// A plain Chromium only: CloakBrowser (headless-browser's default) adds noise to canvas reads.
+// A plain Chromium only: CloakBrowser (web-browser's default) adds noise to canvas reads.
 function findChromium() {
   const candidates = [
     process.env.PHOMYMO_CHROME,

@@ -1,4 +1,4 @@
-# headless-browser
+# web-browser
 
 Fetches a page when `web_fetch` didn't — a thin JS-rendering fallback for claude.ai's code-execution sandbox, backed by [pinchtab](https://www.npmjs.com/package/pinchtab) driving a real headless Chrome.
 
@@ -159,7 +159,7 @@ Reproduce in the local sandbox ([`../dev/sandbox.sh`](../dev/sandbox.sh), see th
 
 ```bash
 (cd ~/pinchtab && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ~/claude-skills/dev/work/pinchtab-linux-amd64 ./cmd/pinchtab)
-dev/sandbox.sh sh 'PINCHTAB_FORK_BIN_URL=file:///work/pinchtab-linux-amd64 bash /mnt/skills/user/headless-browser/setup.sh'
+dev/sandbox.sh sh 'PINCHTAB_FORK_BIN_URL=file:///work/pinchtab-linux-amd64 bash /mnt/skills/user/web-browser/setup.sh'
 ```
 
 The solver's log lines (`autosolver_start`, `autosolver_attempt`, `autosolver_failure`, …) are not in `/root/.pinchtab/server.log`; they belong to the browser instance. `pinchtab config get server.token` prints a redacted value, so read the token from the file:
@@ -207,7 +207,7 @@ AliExpress only challenges claude.ai's egress IPs. The local sandbox gets no sli
 
 ## Package for claude.ai
 
-`python package.py` writes `headless-browser.zip`; upload it under Settings → Capabilities → Skills. It ships an explicit member list rather than globbing the directory, so scratch files and the README never reach the sandbox, and it refuses to build against a `capsolver.key` still holding the placeholder — that combination installs cleanly and then fails every captcha. `--no-key` builds a keyless zip deliberately.
+`python package.py` writes `web-browser.zip`; upload it under Settings → Capabilities → Skills. It ships an explicit member list rather than globbing the directory, so scratch files and the README never reach the sandbox, and it refuses to build against a `capsolver.key` still holding the placeholder — that combination installs cleanly and then fails every captcha. `--no-key` builds a keyless zip deliberately.
 
 There is now a credentials file:
 
@@ -235,7 +235,7 @@ That instruction is wrong for this environment and the shim exists to route arou
 
 Subagents browsing at the same time share the sandbox, and so share the shim's single session file: they would drive one tab. `PINCHTAB_AGENT=<name>` gives an agent its own session file (`.pinchtab-session-<name>`), shot directory (`pinchtab-shots/<name>/`, with its own `latest` files), shot counter and `shots` ledger. Bash state doesn't persist between tool calls, so the agent sets it at the start of every one.
 
-No script can set a variable in another agent's later shells, which start fresh from the same profile, so the name has to come with every call; the shim can't tell callers apart otherwise. Once a setup has passed its test nav (`/tmp/.headless-browser-ready`), any later run attaches rather than setting up: it only mints that agent's session and test-navs in its tab. A full run would restart the server and close every other agent's tab. So agents can be spawned in any order, before or after the main agent first browses. Runs are serialized by `flock -o` (the script re-execs itself under it), so simultaneous first runs take turns and the second attaches. `-o` matters: with a plain `flock`, the server daemon inherits the lock fd and holds the lock forever. A run whose attach test nav fails falls through to the full setup, and `--cloak`/`--no-cloak` always do the full one.
+No script can set a variable in another agent's later shells, which start fresh from the same profile, so the name has to come with every call; the shim can't tell callers apart otherwise. Once a setup has passed its test nav (`/tmp/.web-browser-ready`), any later run attaches rather than setting up: it only mints that agent's session and test-navs in its tab. A full run would restart the server and close every other agent's tab. So agents can be spawned in any order, before or after the main agent first browses. Runs are serialized by `flock -o` (the script re-execs itself under it), so simultaneous first runs take turns and the second attaches. `-o` matters: with a plain `flock`, the server daemon inherits the lock fd and holds the lock forever. A run whose attach test nav fails falls through to the full setup, and `--cloak`/`--no-cloak` always do the full one.
 
 `setup.sh --subagent <name>` runs as that agent, and prints the whole briefing, so the spawning agent's prompt is a fixed paragraph (in SKILL.md) instead of a paraphrase: pinchtab's docs, this skill's SKILL.md from "Then" on (minus the section for spawners), and a closing block with the prefix and the agent's `latest` path.
 

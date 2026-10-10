@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-touch headless-browser boot. Installs and configures pinchtab (real Chrome
+# One-touch web-browser boot. Installs and configures pinchtab (real Chrome
 # via CLI/HTTP), starts the server, mints a session -- and then prints pinchtab's
 # own bundled instructions in full, so the caller's next tool call is a real
 # browser command rather than another `cat`. Idempotent.
@@ -15,7 +15,7 @@ summary=()
 failed=0
 fatal=0
 docs_repeat=0
-DOCS_MARK=/tmp/.headless-browser-docs-printed
+DOCS_MARK=/tmp/.web-browser-docs-printed
 SHOT_LEDGER_BASE=/tmp/pinchtab-shots-unseen
 DOTS='.........................................'
 RULE_H='════════'
@@ -37,7 +37,7 @@ end() {  # $1 = exit status of the step body
 
 # Every exit path runs this, so a boot that dies at step 1 still prints a summary.
 finish() {
-  printf '\n%s HEADLESS BROWSER READY %s\n' "$RULE_H" "$RULE_H"
+  printf '\n%s WEB BROWSER READY %s\n' "$RULE_H" "$RULE_H"
   printf '%s\n' "${summary[@]}"
 
   if [ $fatal -ne 0 ]; then
@@ -95,7 +95,7 @@ usage() {
 # -o, because the server daemon this starts would otherwise inherit the lock and
 # hold it forever.
 if [ -z "${HEADLESS_BROWSER_LOCKED:-}" ] && command -v flock >/dev/null; then
-  HEADLESS_BROWSER_LOCKED=1 exec flock -o /tmp/.headless-browser-lock bash "$0" "$@"
+  HEADLESS_BROWSER_LOCKED=1 exec flock -o /tmp/.web-browser-lock bash "$0" "$@"
 fi
 
 CLOAK=${HEADLESS_BROWSER_CLOAK:-1}
@@ -113,7 +113,7 @@ done
 # The test nav goes through the shim, which reads the name from the environment.
 [ -n "${PINCHTAB_AGENT:-}" ] && export PINCHTAB_AGENT
 
-printf '%s HEADLESS BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
+printf '%s WEB BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
 printf 'instructions. Read all of it -- this is the only place those instructions\n'
 printf 'get printed, and the corrections to them that follow the file matter.\n'
@@ -128,7 +128,7 @@ SHIM="$BIN_DIR/pinchtab"
 WORK_DIR=/home/claude; [ -d "$WORK_DIR" ] || WORK_DIR=$HOME
 SESSION_BASE="${PINCHTAB_SESSION_FILE:-$WORK_DIR/.pinchtab-session}"
 PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
-READY_MARK=/tmp/.headless-browser-ready
+READY_MARK=/tmp/.web-browser-ready
 # claude.ai shows the user everything under /mnt/user-data/outputs, so shots
 # live outside it there.
 SHOT_BASE=$HOME/pinchtab-shots
@@ -270,7 +270,7 @@ print_docs() {
   # A subagent never loaded this skill, so it gets the skill's own SKILL.md too:
   # from "## Then" on, minus the section addressed to whoever spawns subagents.
   if [ -n "$AGENT" ] && [ $docs_repeat -eq 0 ]; then
-    printf '\n%s THIS SKILL'"'"'S OWN SKILL.md (headless-browser) %s\n' "$RULE_H" "$RULE_H"
+    printf '\n%s THIS SKILL'"'"'S OWN SKILL.md (web-browser) %s\n' "$RULE_H" "$RULE_H"
     printf 'Where it and the file above disagree, this one wins.\n\n'
     awk '/^## /{keep = !/^## Subagents/} /^## Then/{on = 1} on && keep' "$SKILL_DIR/SKILL.md"
   fi
@@ -309,7 +309,7 @@ open_session() {
 # --- attach: joining a browser this sandbox already runs ----------------------
 # The full setup restarts the server, closing every other agent's tab mid-flow,
 # so once one has passed its test nav, later runs only open their own session.
-if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && grep -qs 'installed by headless-browser' "$SHIM"; then
+if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && grep -qs 'installed by web-browser' "$SHIM"; then
   TOTAL=2
   begin "open a session${AGENT:+ for agent $AGENT} in the running browser"
   open_session
@@ -444,7 +444,7 @@ if [ $CLOAK -eq 1 ]; then
   if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
     # A fixed seed makes every sandbox the same device on a different IP. Random per
     # sandbox, kept across re-runs so one conversation stays one device to a site.
-    SEED_FILE=/tmp/.headless-browser-seed
+    SEED_FILE=/tmp/.web-browser-seed
     CLOAK_SEED=${CLOAK_SEED:-$(cat "$SEED_FILE" 2>/dev/null)}
     CLOAK_SEED=${CLOAK_SEED:-$(( (RANDOM << 15 | RANDOM) % 90000 + 10000 ))}
     printf '%s' "$CLOAK_SEED" > "$SEED_FILE"
@@ -578,7 +578,7 @@ rm -f "$SHIM" "$SESSION_FILE"
 shim_header() {  # $1 tier, $2 command name, $3 shot dir, $4 ledger, $5 counter
   cat <<SHIM_EOF
 #!/bin/sh
-# $2 shim -- installed by headless-browser/setup.sh. Do not edit in place;
+# $2 shim -- installed by web-browser/setup.sh. Do not edit in place;
 # setup.sh rewrites it on every run.
 REAL=$GO_BIN
 TIER=$1

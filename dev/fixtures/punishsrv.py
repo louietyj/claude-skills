@@ -1,4 +1,4 @@
-# Mock of AliExpress's punish overlay (see headless-browser/README.md, Debugging).
+# Mock of AliExpress's punish overlay (see web-browser/README.md, Debugging).
 # Serves on :8766: /item/<n>.html is an item page with the punish iframe, whose
 # inner frame renders a reCAPTCHA Enterprise anchor and a __recaptchaValidateCB__
 # that removes the overlay. /item/4.html's callback then goes on to /item/5.html

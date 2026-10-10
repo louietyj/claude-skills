@@ -13,7 +13,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NAME = "headless-browser"
+NAME = "web-browser"
 MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
            "cloak/package-lock.json", "cloak/refresh.sh"]
 KEY = "capsolver.key"

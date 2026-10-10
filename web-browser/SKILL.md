@@ -1,15 +1,15 @@
 ---
-name: headless-browser
+name: web-browser
 description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- 'show more', flows, forms, pagination. If you are about to call a page inaccessible, or answer from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's accounts, or drives Louie's own logged-in Chrome (pinchtab-windows) once he approves, for a tab he hands over."
 ---
 
-# Headless Browser (pinchtab)
+# Web Browser (pinchtab)
 
 Setup is one script, and there are no other files to read. Run it first; the
 rest of this file is how to use the browser it leaves you:
 
 ```bash
-bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh"
+bash "$(ls -1dt /mnt/skills/*/web-browser ~/.claude/skills/synced/*/web-browser 2>/dev/null | head -1)/setup.sh"
 ```
 
 **DO NOT head/tail/grep this command's output.** It prints instructions into
@@ -157,7 +157,7 @@ Before anything else, run this and read ALL of its output -- do not head,
 tail or grep it. It sets up your own tab in a shared browser and teaches
 you how to drive it, including a prefix you must put on every Bash call:
 
-bash "$(ls -1dt /mnt/skills/*/headless-browser ~/.claude/skills/synced/*/headless-browser 2>/dev/null | head -1)/setup.sh" --subagent <name>
+bash "$(ls -1dt /mnt/skills/*/web-browser ~/.claude/skills/synced/*/web-browser 2>/dev/null | head -1)/setup.sh" --subagent <name>
 
 Report what you saw on the page, not only what `pinchtab text` said.
 If the result is more than a few lines of data, don't copy it into your

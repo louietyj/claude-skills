@@ -4,7 +4,7 @@ Skills for Claude, one subdirectory each.
 
 - [`session-init/`](session-init/) — one-touch conversation boot: sets up the two skills below, prints the memory index, prints their instructions, and denies Claude Code's native `WebSearch`/`WebFetch` so web work goes through mcp-parallel. One tool call in place of five.
 - [`durable-filesystem/`](durable-filesystem/) — persistent filesystem for Claude on claude.ai, backed by a scoped Dropbox app folder.
-- [`headless-browser/`](headless-browser/) — fetches a page when `web_fetch` didn't, via a headless browser (pinchtab).
+- [`web-browser/`](web-browser/) — fetches a page when `web_fetch` didn't, via a headless browser in the sandbox (pinchtab), or drives Louie's own Chrome once he approves (`pinchtab-windows`).
 - [`local-mcps/`](local-mcps/) — runs MCP servers claude.ai's connectors can't reach: `npx`/`uvx` stdio servers, and HTTP servers whose auth header name isn't allowlisted.
 - [`polish-message/`](polish-message/) — drafts emails and messages in Louie's voice: a throwaway first draft in a discarded tool call, a forced rethink, then the final. `voice.md` is his style, distilled from his sent mail.
 - [`request-text/`](request-text/) — asks the user for text through a one-shot link (a form, fine on a phone). The submission lands in the sandbox as JSON, end-to-end encrypted, so secrets stay out of the transcript and long pastes are never re-emitted.

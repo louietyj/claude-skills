@@ -41,23 +41,23 @@ Run it unconditionally; it's idempotent.
 **Research tool ladder** (ranked by priority; choose based on what you need):
 1. **mcp-parallel** — web_search and web_fetch. Your general-purpose workhorse. **Aways start here — do a targeted `tool_search` if a fuzzy match doesn't surface both tools.** Can search Reddit and fetch post bodies, but **not comments**.
 2. **mcp-reddit** — use to fetch full Reddit post/thread content once identified. If you get a `403 Forbidden`, your egress proxy is blocked; move on to the next rung.
-3. **headless-browser** — pinchtab-backed skill for anything that doesn't need my logged-in session. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
+3. **web-browser** — pinchtab-backed skill: its own sandbox browser for anything that doesn't need my logged-in session, and my real Chrome (`pinchtab-windows`) once I approve on my laptop, for what does. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
 4. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
 5. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit comment threads. Remember to fetch the schema first. Don't project nested fields (topComments.body) in get-dataset-items fields; it silently drops them. Use topComments whole or omit fields.
 6. **mcp-jina** — server-side fetch, so it clears both the sandbox egress proxy and web_fetch's URL-provenance rule in one call. No captcha solver. Doesn't support Reddit.
-7. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when headless-browser and firecrawl still can't retrieve the content.
+7. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when web-browser and firecrawl still can't retrieve the content.
 
 *Note: Desktop tools (mcp-brave, mcp-reddit, claude-in-chrome) are available only on Desktop.
 
 **Examples:**
 - Reddit: mcp-parallel for the first-pass search (finding threads, reading post bodies). For comment threads, mcp-reddit → mcp-apify (`thirdwatch/reddit-scraper`) → claude-in-chrome.
-- General fetches: web_fetch → headless-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
+- General fetches: web_fetch → web-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
 </web_research>
 
 <browser_delegation>
-**If you have a subagent tool, delegate headless-browser navigation to a Sonnet subagent (`model: "sonnet"`). Strongly recommended — treat it as the default, not an option.** Clicking through an SPA (shop search results, filters, product listings) is where you burn 30 tool calls and fill your context with screenshots and snaps.
+**If you have a subagent tool, delegate web-browser navigation to a Sonnet subagent (`model: "sonnet"`). Strongly recommended — treat it as the default, not an option.** Clicking through an SPA (shop search results, filters, product listings) is where you burn 30 tool calls and fill your context with screenshots and snaps.
 
-Spawn it with the preamble from headless-browser's SKILL.md ("Subagents for involved navigation"), then give it **one clear navigation task** and say which of these to come back with:
+Spawn it with the preamble from web-browser's SKILL.md ("Subagents for involved navigation"), then give it **one clear navigation task** and say which of these to come back with:
 1. **The answer**, when it's simple (a price, a yes/no, whether something is in stock).
 2. **Files**: `text`, `snap` or screenshots of the right page(s), as paths plus a short summary.
 3. **The browser**: navigate to the right page and stop. You drive its tab for the last bit by prefixing your own calls with `export PINCHTAB_AGENT=<its name>;`.
@@ -66,7 +66,7 @@ Spawn it with the preamble from headless-browser's SKILL.md ("Subagents for invo
 </browser_delegation>
 
 <apify_actors>
-Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve headless-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
+Use pay-per-event Apify actors first when a task needs structured data from a site with a preapproved actor below — cheaper and more reliable than driving a browser by hand. Reserve web-browser (pinchtab) for gaps a preapproved actor's schema misses (e.g. a single listing's ingredients/specs). Repeated pinchtab hits on one site in a session (Walmart especially) risk a "press-and-hold" challenge capsolver can't clear — don't use it for volume browsing.
 
 **AliExpress** — actors, in exactly this shape:
 1. **Search:** one `devcake/aliexpress-products-scraper` call per search query, each with `maxProducts: 50` (the minimum) and `callOptions.maxTotalChargeUsd: 0.003` (overrides the general cap rule below).
@@ -76,7 +76,7 @@ Use pay-per-event Apify actors first when a task needs structured data from a si
 2. **Detail:** pick the listings worth reading from the search results and pass their URLs in one `piotrv1001/aliexpress-product-details-scraper` call (normal cap rule applies).
 3. **Images:** when the description leaves unclear what the product actually is — ambiguous, or you suspect seller shenanigans (misleading title, bait variant, specs that don't match) — download all the listing's images from the detail output, tile them into one mosaic, and read that instead of trusting the text.
 
-headless-browser is only the fallback here: it's clunky per listing and gets blocked after ~40 item pages.
+web-browser is only the fallback here: it's clunky per listing and gets blocked after ~40 item pages.
 
 Preapproved:
 - Reddit: `thirdwatch/reddit-scraper` — full post/thread content (also pointed to from web_research).

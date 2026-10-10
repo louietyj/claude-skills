@@ -15,7 +15,7 @@ setup.sh    the whole boot: installs pinchtab, finds/downloads Chrome, opens cap
 
 `pinchtab` (alias `pinchtab-local`) is the sandbox's own browser, everything below.
 `pinchtab-windows` drives Louie's real Chrome on his laptop, through the pinchtab
-backend of his gate ([louietyj/mcp-windows-gate](https://github.com/louietyj/mcp-windows-gate),
+backend of his gate ([louietyj/windows-gate](https://github.com/louietyj/windows-gate),
 `pinchtab_windows.py`), where he approves each grant. It is installed only when the
 zip carries `windows.json`: the host and that backend's gate key, from the gate's
 tray. Both are the same shim body with a different header (`shim_header` in

@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Copy to windows.json to give the sandbox pinchtab-windows, Louie's own Chrome.",
-    "host: the hostname of the pinchtab backend of his laptop's gate (louietyj/mcp-windows-gate).",
+    "host: the hostname of the pinchtab backend of his laptop's gate (louietyj/windows-gate).",
     "gate_key: that backend's key, from the gate's tray: 'Copy browser gate key'.",
     "Anyone holding it can ask for a grant, never use one: Louie approves each."
   ],

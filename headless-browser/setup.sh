@@ -149,7 +149,7 @@ SHOT_DIR=$SHOT_BASE${AGENT:+/$AGENT}
 # Louie's own Chrome, reached through his laptop's gate; installed only when the
 # skill ships windows.json (host and gate key).
 WINDOWS_JSON=$SKILL_DIR/windows.json
-WINDOWS_PROTOCOL=1   # PROTOCOL in mcp-windows-gate's pinchtab_windows.py
+WINDOWS_PROTOCOL=1   # PROTOCOL in windows-gate's pinchtab_windows.py
 WIN_SHIM=$BIN_DIR/pinchtab-windows
 WIN_CONF=/tmp/.pinchtab-windows.conf
 WIN_HEADERS=/tmp/.pinchtab-windows-headers

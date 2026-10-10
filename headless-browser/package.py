@@ -20,7 +20,7 @@ KEY = "capsolver.key"
 PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
 # Optional: the only provider left for hCaptcha and FunCaptcha.
 TWOCAPTCHA_KEY = "2captcha.key"
-# Optional: the Cloudflare Access service token for pinchtab-windows, Louie's Chrome.
+# Optional: the gate key for pinchtab-windows, Louie's Chrome.
 WINDOWS = "windows.json"
 
 
@@ -60,13 +60,11 @@ def read_windows() -> dict:
         return {}
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
-    for field in ("host", "cf_access_client_id", "cf_access_client_secret"):
+    for field in ("host", "gate_key"):
         if not str(cfg.get(field, "")).strip():
             raise SystemExit(f"{WINDOWS} lacks {field}.")
-    if not cfg["cf_access_client_id"].endswith(".access"):
-        raise SystemExit(f"{WINDOWS}: cf_access_client_id does not look like a service token ID (ends in .access).")
-    if cfg["cf_access_client_secret"].startswith("replace-"):
-        raise SystemExit(f"{WINDOWS} still holds the example secret.")
+    if cfg["gate_key"].startswith("replace-"):
+        raise SystemExit(f"{WINDOWS} still holds the example key.")
     return cfg
 
 
@@ -98,7 +96,7 @@ def main() -> int:
     else:
         print("Built without a key: the browser works, captcha solving is off.")
     if windows:
-        print(f"Contains {WINDOWS} (Access token for {windows['host']}) -- pinchtab-windows is on.")
+        print(f"Contains {WINDOWS} (gate key for {windows['host']}) -- pinchtab-windows is on.")
     else:
         print(f"No {WINDOWS}: pinchtab-windows (Louie's Chrome) is off.")
     return 0

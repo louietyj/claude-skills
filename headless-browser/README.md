@@ -9,18 +9,18 @@ cloak/      pinned package.json + package-lock.json for the cloakbrowser install
 setup.sh    the whole boot: installs pinchtab, finds/downloads Chrome, opens capability
             gates, starts the server, mints a session, smoke-tests it, and prints
             pinchtab's own instructions in full
-windows/    the laptop side of pinchtab-windows (Louie's own Chrome): gatekeeper.py,
-            install.ps1, and its README
 ```
 
 ## Two browsers
 
 `pinchtab` (alias `pinchtab-local`) is the sandbox's own browser, everything below.
-`pinchtab-windows` drives Louie's real Chrome on his laptop through a gatekeeper
-he approves each grant in; it is installed only when the zip carries
-`windows.json`. Both are the same shim body with a different header
-(`shim_header` in setup.sh). [windows/README.md](windows/README.md) has the design
-and the Cloudflare setup.
+`pinchtab-windows` drives Louie's real Chrome on his laptop, through the pinchtab
+backend of his gate ([louietyj/mcp-windows-gate](https://github.com/louietyj/mcp-windows-gate),
+`pinchtab_windows.py`), where he approves each grant. It is installed only when the
+zip carries `windows.json`: the host and that backend's gate key, from the gate's
+tray. Both are the same shim body with a different header (`shim_header` in
+setup.sh). The gate's README has the design, and why only pinchtab's HTTP API
+crosses the tunnel.
 
 `setup.sh` is deliberately one call that leaves nothing to read afterwards — same shape as `session-init/`. Claude runs it and its next tool call is a real browser command; it never has to `cat` pinchtab's bundled SKILL.md itself or be told separately which of that file's instructions to disregard. The script prints the file and the corrections to it in the same output.
 

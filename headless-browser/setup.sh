@@ -146,10 +146,10 @@ SHOT_LEDGER=$SHOT_LEDGER_BASE${AGENT:+-$AGENT}
 DOCS_MARK=$DOCS_MARK${AGENT:+-$AGENT}
 SHOT_DIR=$SHOT_BASE${AGENT:+/$AGENT}
 
-# Louie's own Chrome, reached through his gatekeeper; installed only when the skill
-# ships windows.json (host plus Cloudflare Access service token).
+# Louie's own Chrome, reached through his laptop's gate; installed only when the
+# skill ships windows.json (host and gate key).
 WINDOWS_JSON=$SKILL_DIR/windows.json
-WINDOWS_PROTOCOL=1   # gatekeeper.py's PROTOCOL
+WINDOWS_PROTOCOL=1   # PROTOCOL in mcp-windows-gate's pinchtab_windows.py
 WIN_SHIM=$BIN_DIR/pinchtab-windows
 WIN_CONF=/tmp/.pinchtab-windows.conf
 WIN_HEADERS=/tmp/.pinchtab-windows-headers
@@ -171,7 +171,7 @@ host = c["host"].strip().rstrip("/")
 base = host if host.startswith(("https://", "http://")) else "https://" + host  # http: dev only
 os.umask(0o077)
 with open(headers, "w") as f:
-    f.write(f"CF-Access-Client-Id: {c['cf_access_client_id']}\nCF-Access-Client-Secret: {c['cf_access_client_secret']}\n")
+    f.write(f"X-Gate-Key: {c['gate_key']}\n")
 with open(conf, "w") as f:
     f.write(f"WIN_BASE='{base}'\n")
 PY
@@ -183,9 +183,9 @@ PY
   base=$(. "$WIN_CONF"; printf '%s' "$WIN_BASE")
   status=$(curl -sS -m 15 -H @"$WIN_HEADERS" "$base/gate/status" 2>&1)
   case "$status" in
-    *"\"protocol\": $WINDOWS_PROTOCOL"*) note "Louie's Chrome" 'OK -- pinchtab-windows, his gatekeeper answers' ;;
-    *'"protocol"'*) note "Louie's Chrome" "MISMATCH -- his gatekeeper speaks another protocol: $status" ;;
-    *) note "Louie's Chrome" 'UNREACHABLE now -- laptop asleep or gatekeeper down; pinchtab-windows will say so' ;;
+    *"\"protocol\": $WINDOWS_PROTOCOL"*) note "Louie's Chrome" 'OK -- pinchtab-windows, his laptop answers' ;;
+    *'"protocol"'*) note "Louie's Chrome" "MISMATCH -- his gate speaks another protocol: $status" ;;
+    *) note "Louie's Chrome" 'UNREACHABLE now -- laptop asleep or gate down; pinchtab-windows will say so' ;;
   esac
 }
 
@@ -621,7 +621,7 @@ if [ "${1:-}" = shots ]; then
   exit 0
 fi
 
-# Louie's Chrome: a bridge on his laptop behind a gatekeeper that wants a grant he
+# Louie's Chrome: a bridge on his laptop behind a gate that wants a grant he
 # approved. Bridges have no sessions; the CLI's current-tab file tracks the tab.
 if [ "$TIER" = windows ]; then
   # shellcheck source=/dev/null

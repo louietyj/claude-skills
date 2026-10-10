@@ -1,12 +1,10 @@
 {
   "_comment": [
     "Copy to windows.json to give the sandbox pinchtab-windows, Louie's own Chrome.",
-    "host: the cloudflared hostname in front of windows/gatekeeper.py.",
-    "cf_access_client_id / cf_access_client_secret: a Cloudflare Access service token",
-    "allowed by that hostname's Access application (policy action: Service Auth).",
-    "Anyone holding these can ask for a grant, never use one: Louie approves each."
+    "host: the hostname of the pinchtab backend of his laptop's gate (louietyj/mcp-windows-gate).",
+    "gate_key: that backend's key, from the gate's tray: 'Copy browser gate key'.",
+    "Anyone holding it can ask for a grant, never use one: Louie approves each."
   ],
   "host": "browser.louietyj.me",
-  "cf_access_client_id": "0123456789abcdef0123456789abcdef.access",
-  "cf_access_client_secret": "replace-with-the-service-token-secret"
+  "gate_key": "replace-with-the-browser-gate-key"
 }

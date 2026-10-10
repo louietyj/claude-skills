@@ -1,6 +1,6 @@
 ---
 name: headless-browser
-description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's own accounts when claude-in-chrome is unavailable."
+description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an outright error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- expanding 'show more', clicking through flows, forms, pagination. If you are about to call a page inaccessible, or answer a page-specific question from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's own accounts when claude-in-chrome is unavailable, and can drive Louie's own logged-in Chrome on his laptop (pinchtab-windows) once he approves -- for sites behind his logins, or a tab he wants help with."
 ---
 
 # Headless Browser (pinchtab)
@@ -38,6 +38,11 @@ pinchtab nav <url> --block-images
 pinchtab text
 ```
 
+`pinchtab` is this sandbox's own browser, also callable as `pinchtab-local`.
+If setup.sh's summary lists "Louie's Chrome", there is a second one,
+`pinchtab-windows`: his real Chrome on his laptop, logged in to his accounts.
+It takes the same commands; see "Louie's Chrome" below before touching it.
+
 The session outlives the bash call, so multi-step flows work across calls --
 nav in one, click in the next, read state in a third. The tab, its DOM state
 and typed form values all persist; you never replay earlier steps. If the
@@ -46,7 +51,7 @@ no page loaded, so re-`nav` after seeing `no_current_tab`.
 
 ## Look at the page, not just its text
 
-A half-size screenshot costs ~370 tokens. `text` and `snap` on a real page
+A small screenshot costs ~370 tokens. `text` and `snap` on a real page
 usually cost several times that, and they still hide things:
 
 - `text` drops everything that isn't prose. A page whose text reads like the
@@ -58,7 +63,7 @@ usually cost several times that, and they still hide things:
   posted as a picture is invisible to both, and gets reported as "not
   listed".
 
-So view the half-size shot LIBERALLY while navigating: after EVERY `nav`,
+So view the small shot LIBERALLY while navigating: after EVERY `nav`,
 and after any click that should have changed something. Before concluding
 something isn't on a page, look at it.
 
@@ -67,8 +72,8 @@ Every command that can change the page (`nav`, `click`, `fill`, `press`,
 to fixed paths, which setup.sh's output names:
 
 ```
-<shot dir>/latest-scale-0.5.jpg    half size: view this by default
-<shot dir>/latest.jpg              full size
+<shot dir>/latest-small.jpg    small: view this by default
+<shot dir>/latest.jpg          full size
 ```
 
 Because the path is known in advance, view it in the same message as the
@@ -77,20 +82,29 @@ Claude Code and Cowork run the Bash call to completion before the read, so the
 image is this command's shot and costs no extra round trip. If the shot
 failed, the file is missing rather than stale.
 
-The half-size one is still readable. Open the full-size one for small print,
-or when a click has to be exact. Click what you see with `click --x --y`: the
-full-size image's pixels are click coordinates, so double what you read off
-the half-size one.
+The small one is still readable. Open the full-size one for small print, or
+when a click has to be exact. Click what you see with `click --x --y` plus
+`--unscale`, copying the scale of the image you read the point off from its
+`screenshot:` line. The shim divides; never do that arithmetic yourself:
+
+```bash
+# screenshot: .../0003-nav.jpg (1100x1045, scale 0.8607), small: 0003-nav-small.jpg (543x516, scale 0.4249)
+pinchtab-windows click --x 271 --y 130 --unscale 0.4249    # a point on the small image
+```
+
+`--unscale` works on every command that takes `--x`/`--y` (`click`, `hover`,
+`mouse down|move|up`, ...). Here the full-size scale is 1 and the small one
+0.5; in Louie's Chrome both vary with his window size.
 
 ## NEVER THROW AWAY THE `screenshot:` LINE
 
 Each of those commands also prints one line naming its numbered shot:
 
 ```
-screenshot: /home/claude/pinchtab-shots/0017-reload.jpg (1440x779), half: 0017-reload-scale-0.5.jpg (720x389)
+screenshot: /home/claude/pinchtab-shots/0017-reload.jpg (1440x779, scale 1), small: 0017-reload-small.jpg (720x389, scale 0.5)
 ```
 
-The half-size file sits in the same directory. `latest` is overwritten by the
+The small file sits in the same directory. `latest` is overwritten by the
 next command, so this line is how you find a shot from earlier in a batch.
 When text or a snap comes back empty, half-loaded, or doesn't add up -- a
 canvas, a map, refs pointing at the wrong thing -- VIEW THE IMAGE FIRST. One
@@ -192,7 +206,7 @@ stacked 82 placeholders at one point, and misplaced a whole tier boundary.
 
 But if you are several evals into reverse-engineering the DOM -- guessing
 class names, walking nesting, working out which element is which -- to answer
-something you could see, stop and look. A half-size shot costs ~370 tokens,
+something you could see, stop and look. A small shot costs ~370 tokens,
 less than most eval output. For detail, zoom in on one element:
 
 ```bash
@@ -200,7 +214,8 @@ pinchtab screenshot -s '<selector>' -o /tmp/crop.jpg   # full resolution
 pinchtab screenshot --annotate -o /tmp/refs.jpg          # numbered ref boxes
 ```
 
-A crop's pixels are not click coordinates; the full-size shot's are.
+A crop's pixels are not click coordinates; the full-size shot's, divided by
+its scale, are.
 
 ## The browser
 
@@ -221,7 +236,9 @@ the fingerprint it presents. `--no-cloak` forces plain Chrome.
 
 The window is a fixed 1440x900 (a 1440x779 viewport). Do not enlarge it with
 `pinchtab set viewport`: past ~1.15 megapixels screenshots are shrunk before
-you see them, and coordinates read off them land short of the target.
+you see them, and coordinates read off them land short of the target. (Louie's
+Chrome is whatever size he left it; its shots are shrunk to fit instead, and
+never resize or set the viewport of his browser.)
 
 ## Captchas
 
@@ -309,7 +326,60 @@ This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
 the solver as a stub. Without keys the solvers are absent and nothing else
 changes.
 
+## Louie's Chrome (pinchtab-windows)
+
+`pinchtab-windows` drives Louie's real Chrome on his laptop: his logins, his
+tabs, a browser he is watching. Use it when a page needs his login, when
+`pinchtab` lands on a login wall for a site he uses, or when he asks you to work
+in his browser or in a tab he has open. Everything else stays on `pinchtab`.
+Always name the tier: never let `pinchtab` stand in for it.
+
+**1. Ask for a grant.** Every use needs one, approved by Louie on the laptop:
+
+```bash
+pinchtab-windows grant "read my Chase statements for September"   # prints a 4-character code
+```
+
+Write the code in chat, as the command says, BEFORE the next call -- he checks
+it against the dialog: "Approve code K7QX on your laptop (OK, then Allow in
+Chrome if it asks)". Then:
+
+```bash
+pinchtab-windows grant --wait    # up to 4 minutes
+```
+
+Denied, or left unanswered: stop and say so; don't ask again unless he tells
+you to. "Could not attach to Chrome" or "is Louie's laptop awake?": tell him
+what it said, and go on without his browser.
+
+**2. Work in your own tab.** Your first command is
+`pinchtab-windows nav <url> --new-tab`; later commands follow that tab. A
+bare `nav` without `--new-tab` drives the tab HE is looking at. When he points
+you at one of his ("this tab", "the tab I'm on"), take it:
+
+```bash
+pinchtab-windows active-tab            # his tabs, the one he's focused first
+pinchtab-windows snap --tab <id>       # pass --tab <id> on every command for his tab
+```
+
+He watches it happen, and each screenshot brings your tab to the front. Never
+close or navigate a tab of his he didn't hand you, and close your own when
+done (`pinchtab-windows tab close <id>`). Confirm before anything that acts as
+him: paying, sending, deleting, changing settings.
+
+**3. Release it** with `pinchtab-windows release` when the task is done. A
+grant also lapses after 30 idle minutes; a command then says so, and you ask
+again with a new `grant`.
+
+Screenshots work as for `pinchtab`, in their own directory (setup.sh names the
+`latest` paths). His window can be any size, so take every coordinate through
+`--unscale`. Subagents share the grant; give each a `PINCHTAB_AGENT` as usual
+and it gets its own tab here too.
+
 ## Logged-in accounts
+
+If Louie's Chrome is available and he is already logged in there, use it
+(above) instead of logging in here.
 
 On claude.ai, with no claude-in-chrome, this browser can log in to the user's
 own accounts. That overrides pinchtab's "never enter credentials" default.

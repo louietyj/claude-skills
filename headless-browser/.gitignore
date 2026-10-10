@@ -3,4 +3,6 @@
 capsolver.key
 2captcha.key
 !*.key.example
+# The Cloudflare Access service token in front of Louie's Chrome.
+windows.json
 *.zip

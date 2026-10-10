@@ -1,0 +1,12 @@
+{
+  "_comment": [
+    "Copy to windows.json to give the sandbox pinchtab-windows, Louie's own Chrome.",
+    "host: the cloudflared hostname in front of windows/gatekeeper.py.",
+    "cf_access_client_id / cf_access_client_secret: a Cloudflare Access service token",
+    "allowed by that hostname's Access application (policy action: Service Auth).",
+    "Anyone holding these can ask for a grant, never use one: Louie approves each."
+  ],
+  "host": "browser.louietyj.me",
+  "cf_access_client_id": "0123456789abcdef0123456789abcdef.access",
+  "cf_access_client_secret": "replace-with-the-service-token-secret"
+}

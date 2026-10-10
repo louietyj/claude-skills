@@ -66,12 +66,17 @@ finish() {
     printf 'Shell state does not carry over between calls, and a pinchtab command\n'
     printf 'without it drives another agent'"'"'s tab, silently. The examples above\n'
     printf 'all omit it; add it anyway. Your latest screenshot:\n'
-    printf '  %s/latest-scale-0.5.jpg\n' "$SHOT_DIR"
+    printf '  %s/latest-small.jpg\n' "$SHOT_DIR"
     printf 'If you re-run setup.sh, pass --subagent %s again: without it, it\n' "$AGENT"
     printf 'takes over the tab of the agent that spawned you.\n'
     printf '\nNext: export PINCHTAB_AGENT=%s; pinchtab nav <url> --block-images\n' "$AGENT"
   else
     printf '\nNext: pinchtab nav <url> --block-images\n'
+  fi
+
+  if [ -x "$WIN_SHIM" ]; then
+    printf '\nLouie'"'"'s own logged-in Chrome is `pinchtab-windows`, after he approves a\n'
+    printf 'grant -- see "Louie'"'"'s Chrome" in SKILL.md before using it.\n'
   fi
 
   if [ $failed -ne 0 ]; then
@@ -140,6 +145,49 @@ SESSION_FILE=$SESSION_BASE${AGENT:+-$AGENT}
 SHOT_LEDGER=$SHOT_LEDGER_BASE${AGENT:+-$AGENT}
 DOCS_MARK=$DOCS_MARK${AGENT:+-$AGENT}
 SHOT_DIR=$SHOT_BASE${AGENT:+/$AGENT}
+
+# Louie's own Chrome, reached through his gatekeeper; installed only when the skill
+# ships windows.json (host plus Cloudflare Access service token).
+WINDOWS_JSON=$SKILL_DIR/windows.json
+WINDOWS_PROTOCOL=1   # gatekeeper.py's PROTOCOL
+WIN_SHIM=$BIN_DIR/pinchtab-windows
+WIN_CONF=/tmp/.pinchtab-windows.conf
+WIN_HEADERS=/tmp/.pinchtab-windows-headers
+WIN_SHOT_BASE=$(dirname "$SHOT_BASE")/pinchtab-windows-shots
+WIN_SHOT_LEDGER=/tmp/pinchtab-windows-shots-unseen
+WIN_SHOT_DIR=$WIN_SHOT_BASE${AGENT:+/$AGENT}
+
+setup_windows() {
+  if [ ! -f "$WINDOWS_JSON" ]; then
+    note "Louie's Chrome" 'not configured -- no windows.json in the skill'
+    return
+  fi
+  # The shim reads both files on every call; neither is ever printed.
+  if ! python3 - "$WINDOWS_JSON" "$WIN_CONF" "$WIN_HEADERS" <<'PY'
+import json, os, sys
+src, conf, headers = sys.argv[1:]
+c = json.load(open(src))
+host = c["host"].strip().rstrip("/")
+base = host if host.startswith(("https://", "http://")) else "https://" + host  # http: dev only
+os.umask(0o077)
+with open(headers, "w") as f:
+    f.write(f"CF-Access-Client-Id: {c['cf_access_client_id']}\nCF-Access-Client-Secret: {c['cf_access_client_secret']}\n")
+with open(conf, "w") as f:
+    f.write(f"WIN_BASE='{base}'\n")
+PY
+  then
+    note "Louie's Chrome" 'FAILED -- windows.json is unreadable'
+    return
+  fi
+  local base status
+  base=$(. "$WIN_CONF"; printf '%s' "$WIN_BASE")
+  status=$(curl -sS -m 15 -H @"$WIN_HEADERS" "$base/gate/status" 2>&1)
+  case "$status" in
+    *"\"protocol\": $WINDOWS_PROTOCOL"*) note "Louie's Chrome" 'OK -- pinchtab-windows, his gatekeeper answers' ;;
+    *'"protocol"'*) note "Louie's Chrome" "MISMATCH -- his gatekeeper speaks another protocol: $status" ;;
+    *) note "Louie's Chrome" 'UNREACHABLE now -- laptop asleep or gatekeeper down; pinchtab-windows will say so' ;;
+  esac
+}
 
 # --- 4. pinchtab's own instructions, in full ---------------------------------
 print_docs() {
@@ -211,8 +259,13 @@ print_docs() {
   done
   printf '\nThe latest screenshot is also always at these fixed paths, so you can\n'
   printf 'view it in the same message as the command that took it:\n'
-  printf '  %s/latest-scale-0.5.jpg   (half size)\n' "$SHOT_DIR"
-  printf '  %s/latest.jpg             (full size)\n' "$SHOT_DIR"
+  printf '  %s/latest-small.jpg   (small)\n' "$SHOT_DIR"
+  printf '  %s/latest.jpg         (full size)\n' "$SHOT_DIR"
+  if [ -f "$WINDOWS_JSON" ]; then
+    printf 'and for pinchtab-windows, Louie'"'"'s Chrome:\n'
+    printf '  %s/latest-small.jpg\n' "$WIN_SHOT_DIR"
+    printf '  %s/latest.jpg\n' "$WIN_SHOT_DIR"
+  fi
 
   # A subagent never loaded this skill, so it gets the skill's own SKILL.md too:
   # from "## Then" on, minus the section addressed to whoever spawns subagents.
@@ -518,18 +571,28 @@ GO_BIN=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-am
 # symlink and would otherwise wipe it. The `rm -f` is load-bearing: that entry is
 # a SYMLINK into the package, so writing through it overwrites pinchtab's own
 # entry point and bricks the install with no backup.
+#
+# One body, two headers: `pinchtab` (alias `pinchtab-local`) and `pinchtab-windows`,
+# each with its own shot directory, ledger and counter.
 rm -f "$SHIM" "$SESSION_FILE"
-cat > "$SHIM" <<SHIM_EOF
+shim_header() {  # $1 tier, $2 command name, $3 shot dir, $4 ledger, $5 counter
+  cat <<SHIM_EOF
 #!/bin/sh
-# pinchtab shim -- installed by headless-browser/setup.sh. Do not edit in place;
+# $2 shim -- installed by headless-browser/setup.sh. Do not edit in place;
 # setup.sh rewrites it on every run.
 REAL=$GO_BIN
+TIER=$1
+NAME=$2
 SESSION_BASE_DEFAULT=$SESSION_BASE
-SHOT_BASE_DEFAULT=$SHOT_BASE
-L=$SHOT_LEDGER_BASE
-N=/tmp/pinchtab-shot-count
+SHOT_BASE_DEFAULT=$3
+L=$4
+N=$5
+WIN_CONF=$WIN_CONF
+WIN_HEADERS=$WIN_HEADERS
 SHIM_EOF
-cat >> "$SHIM" <<'SHIM_EOF'
+}
+SHIM_BODY=$(mktemp)
+cat > "$SHIM_BODY" <<'SHIM_EOF'
 SELF=$(readlink -f "$0" 2>/dev/null)
 if [ ! -x "$REAL" ] || [ "$(readlink -f "$REAL" 2>/dev/null)" = "$SELF" ]; then
   echo "pinchtab: shim resolves to itself; run: npm install -g pinchtab --force" >&2
@@ -547,15 +610,105 @@ N=$N${A:+-$A}
 # It can't tell which of those lines were seen, so it repeats them all.
 if [ "${1:-}" = shots ]; then
   if [ ! -s "$L" ]; then
-    echo 'screenshots: none since the last `pinchtab shots`'
+    echo "screenshots: none since the last \`$NAME shots\`"
     exit 0
   fi
   n=$(wc -l < "$L")
-  echo 'screenshots since the last `pinchtab shots`, newest last:'
+  echo "screenshots since the last \`$NAME shots\`, newest last:"
   [ "$n" -gt 10 ] && echo "  ... $((n - 10)) older not shown, numbered just before the first below"
   tail -n 10 "$L" | sed 's/^/  /'
   : > "$L"
   exit 0
+fi
+
+# Louie's Chrome: a bridge on his laptop behind a gatekeeper that wants a grant he
+# approved. Bridges have no sessions; the CLI's current-tab file tracks the tab.
+if [ "$TIER" = windows ]; then
+  # shellcheck source=/dev/null
+  . "$WIN_CONF" 2>/dev/null || { echo "$NAME: not set up -- the skill has no windows.json" >&2; exit 1; }
+  G=/tmp/.pinchtab-windows-grant
+  RQ=/tmp/.pinchtab-windows-request
+  json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
+  gate() { curl -sS -m 75 -H @"$WIN_HEADERS" "$@"; }
+  case "${1:-}" in
+    grant)
+      case "${2:-}" in
+        --wait)
+          rid=$(cat "$RQ" 2>/dev/null)
+          [ -n "$rid" ] || { echo "$NAME: no request pending; run: $NAME grant \"<purpose>\"" >&2; exit 1; }
+          # Under claude.ai's 300 s cap on one bash call, in polls under
+          # Cloudflare's 100 s limit on one request.
+          end=$(( $(date +%s) + 240 ))
+          while :; do
+            resp=$(gate "$WIN_BASE/grant/$rid?wait=55")
+            case "$(printf '%s' "$resp" | json state)" in
+              pending)
+                [ "$(date +%s)" -lt "$end" ] && continue
+                echo "$NAME: still waiting for Louie after 4 minutes. Ask him, then run $NAME grant --wait again." >&2
+                exit 1 ;;
+              approved)
+                printf '%s' "$resp" | json token > "$G"; chmod 600 "$G"; rm -f "$RQ"
+                bridge=$(printf '%s' "$resp" | json bridge_version)
+                mine=$("$REAL" --version 2>/dev/null | awk '{print $NF}')
+                echo "Approved. $NAME now drives Louie's Chrome until the grant goes idle for 30 minutes."
+                [ "$bridge" = "$mine" ] || echo "WARNING: his bridge runs pinchtab $bridge, this sandbox $mine; commands may misbehave. Tell Louie."
+                exit 0 ;;
+              denied)
+                rm -f "$RQ"
+                echo "$NAME: Louie denied the request, or left it unanswered for 2 minutes. Don't ask again unless he says to." >&2
+                exit 1 ;;
+              error)
+                rm -f "$RQ"
+                echo "$NAME: approved, but his laptop could not attach to Chrome: $(printf '%s' "$resp" | json message)" >&2
+                exit 1 ;;
+              *)
+                echo "$NAME: unexpected answer from the gate: $resp" >&2
+                exit 1 ;;
+            esac
+          done ;;
+        ''|-*)
+          echo "usage: $NAME grant \"<what you need Louie's browser for>\" | $NAME grant --wait" >&2
+          exit 2 ;;
+        *)
+          code=$(python3 -c 'import secrets; print("".join(secrets.choice("ACDEFHJKLMNPRTUVWXY34679") for _ in range(4)))')
+          body=$(python3 -c 'import json,sys; print(json.dumps({"purpose": sys.argv[1], "code": sys.argv[2], "agent": sys.argv[3]}))' \
+            "$2" "$code" "${PINCHTAB_AGENT:-claude}")
+          resp=$(gate -H 'Content-Type: application/json' --data "$body" "$WIN_BASE/grant")
+          rid=$(printf '%s' "$resp" | json request_id)
+          if [ -z "$rid" ]; then
+            echo "$NAME: the request was refused: ${resp:-no answer -- is Louie's laptop awake?}" >&2
+            exit 1
+          fi
+          printf '%s' "$rid" > "$RQ"
+          echo "Requested. Approval code: $code"
+          echo "Tell Louie now, in chat: \"approve code $code on your laptop\"."
+          echo "Then run: $NAME grant --wait"
+          exit 0 ;;
+      esac ;;
+    release)
+      [ -s "$G" ] && gate -X DELETE -H "Authorization: Bearer $(cat "$G")" "$WIN_BASE/grant" >/dev/null
+      rm -f "$G"
+      echo "Released; $NAME needs a new grant from here on."
+      exit 0 ;;
+    active-tab)
+      [ -s "$G" ] || { echo "$NAME: no grant; run: $NAME grant \"<purpose>\"" >&2; exit 1; }
+      gate -H "Authorization: Bearer $(cat "$G")" "$WIN_BASE/active-tab" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if "tabs" not in d:
+    sys.exit(d.get("message") or str(d))
+for t in d["tabs"]:
+    mark = "FOCUSED" if t["focused"] else "visible" if t["visible"] else "-"
+    print("%-8s %s  %s  %s" % (mark, t["id"], t["title"][:60], t["url"][:80]))'
+      exit $? ;;
+  esac
+  [ -s "$G" ] || { echo "$NAME: no grant. Run: $NAME grant \"<what you need Louie's browser for>\"" >&2; exit 1; }
+  unset PINCHTAB_SESSION
+  PINCHTAB_SERVER=$WIN_BASE PINCHTAB_TOKEN=$(cat "$G")
+  PINCHTAB_HEADERS=$(cat "$WIN_HEADERS")
+  # The CLI's current-tab cache, one per agent so subagents don't share a tab.
+  XDG_STATE_HOME=/tmp/pinchtab-windows-state${A:+-$A}
+  export PINCHTAB_SERVER PINCHTAB_TOKEN PINCHTAB_HEADERS XDG_STATE_HOME
 fi
 
 resolve() {
@@ -573,20 +726,45 @@ resolve() {
 # `session create` must run unscoped -- a session-scoped caller gets 403, which
 # makes a hand-rolled `export PINCHTAB_SESSION=$(pinchtab session create ...)`
 # capture an empty string and silently look like it worked.
-case "${1:-}" in
-  session) unset PINCHTAB_SESSION ;;
-  *)       [ -n "${PINCHTAB_SESSION:-}" ] || resolve ;;
-esac
+if [ "$TIER" = local ]; then
+  case "${1:-}" in
+    session) unset PINCHTAB_SESSION ;;
+    *)       [ -n "${PINCHTAB_SESSION:-}" ] || resolve ;;
+  esac
 
-# A caller may export a session by hand -- pinchtab's own bundled docs tell them
-# to. Adopt it as the persistent one, so the NEXT bash call (which has no export)
-# attaches to that same tab instead of minting a fresh, empty one. Without this,
-# mixing the two styles silently queries a blank tab.
-case "${PINCHTAB_SESSION:-}" in
-  ses_*)
-    [ "$(cat "$F" 2>/dev/null)" = "$PINCHTAB_SESSION" ] \
-      || printf '%s' "$PINCHTAB_SESSION" > "$F"
-    ;;
+  # A caller may export a session by hand -- pinchtab's own bundled docs tell them
+  # to. Adopt it as the persistent one, so the NEXT bash call (which has no export)
+  # attaches to that same tab instead of minting a fresh, empty one. Without this,
+  # mixing the two styles silently queries a blank tab.
+  case "${PINCHTAB_SESSION:-}" in
+    ses_*)
+      [ "$(cat "$F" 2>/dev/null)" = "$PINCHTAB_SESSION" ] \
+        || printf '%s' "$PINCHTAB_SESSION" > "$F"
+      ;;
+  esac
+fi
+
+# `--x X --y Y --unscale S`: X,Y read off a screenshot of scale S, divided back to
+# CSS pixels here, because dividing by 0.4249 in an agent's head goes wrong.
+case " $* " in *" --unscale "*)
+  unscale= x= y= prev=
+  for a in "$@"; do
+    case "$prev" in --unscale) unscale=$a ;; --x) x=$a ;; --y) y=$a ;; esac
+    prev=$a
+  done
+  case "$unscale" in ''|*[!0-9.]*|*.*.*|.) echo "$NAME: --unscale takes the scale from a screenshot: line, e.g. 0.4249" >&2; exit 2 ;; esac
+  [ -n "$x$y" ] || { echo "$NAME: --unscale needs --x and/or --y" >&2; exit 2; }
+  prev=
+  for a in "$@"; do
+    shift
+    case "$prev" in
+      --unscale) prev=; continue ;;
+      --x|--y)   a=$(awk -v v="$a" -v s="$unscale" 'BEGIN { printf "%d", v / s + 0.5 }') ;;
+    esac
+    prev=$a
+    [ "$a" = --unscale ] && continue
+    set -- "$@" "$a"
+  done ;;
 esac
 
 # After anything that can change the page, save a screenshot and name it, so a
@@ -604,9 +782,15 @@ trap '[ -n "$O" ] && cat "$O" && rm -f "$O"; cat "$E" >&2; rm -f "$E"' EXIT
 
 "$REAL" "$@" >&3 2>"$E"; rc=$?
 # Keyed on the message, not $rc: every failure exits 1, and only this one retries.
-if grep -q 'bad_session' "$E"; then
+if [ "$TIER" = local ] && grep -q 'bad_session' "$E"; then
   rm -f "$F"; resolve
   "$REAL" "$@" >&3 2>"$E"; rc=$?
+fi
+# The grant ran out, was released, or Louie revoked it: no screenshot to take.
+if [ "$TIER" = windows ] && grep -qE 'grant_(required|expired)' "$E"; then
+  rm -f "$G"
+  echo "$NAME: the grant is gone (idle 30 min, released, or Louie revoked it). Ask again: $NAME grant \"<purpose>\"" >> "$E"
+  exit $rc
 fi
 
 # Failures get a shot too: "why didn't that click land?" is answered by looking.
@@ -629,34 +813,25 @@ mkdir -p "$D"
 n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$N"
 shot=$D/$(printf %04d $n)-$1.jpg
-small=${shot%.jpg}-scale-0.5.jpg
+small=${shot%.jpg}-small.jpg
 # Fixed paths, viewable in the same message as the command. Cleared first so a
 # failed shot reads as missing, not as the previous page.
-rm -f "$D/latest.jpg" "$D/latest-scale-0.5.jpg"
-# The half-size copy is the one to view by default: a quarter of the image
-# tokens. A build without --also-scale (upstream, an older fork) gets the full
-# shot alone.
-"$REAL" screenshot -o "$shot" --also-scale 0.5 ${tab:+--tab "$tab"} >/dev/null 2>&1
+rm -f "$D/latest.jpg" "$D/latest-small.jpg"
+# Full: at most ~1.15MP, past which claude.ai shrinks images (1440x779 fits whole).
+# Small: a quarter of the tokens, viewed by default. Both carry their scale to CSS
+# pixels. A build without --max-pixels gets the full shot alone.
+info=$("$REAL" screenshot -o "$shot" --max-pixels 1150000 --also-max-pixels 281000 ${tab:+--tab "$tab"} 2>/dev/null)
 [ -s "$shot" ] || "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1
 if [ -s "$shot" ]; then
-  read -r full_dims small_dims <<DIMS
-$(node -e '
-  console.log(process.argv.slice(1).map(f => {
-    try {
-      const b = require("fs").readFileSync(f);
-      for (let i = 2; i + 9 < b.length; i += 2 + b.readUInt16BE(i + 2))
-        if (b[i + 1] >= 0xc0 && b[i + 1] <= 0xc3)
-          return b.readUInt16BE(i + 7) + "x" + b.readUInt16BE(i + 5);
-    } catch {}
-    return "?";
-  }).join(" "));
-' "$shot" "$small" 2>/dev/null)
-DIMS
-  # SKILL.md explains the two sizes once; this line only names them.
+  # "Image <path> <w>x<h>, scale <s> (...)" per file -> "<w>x<h>, scale <s>"
+  dims() { printf '%s\n' "$info" | awk -v p="$1" '$1 == "Image" && $2 == p {
+    d = $3; sub(/,$/, "", d); printf "%s", d; if ($4 == "scale") printf ", scale %s", $5 }'; }
+  # SKILL.md explains the two sizes and the scale once; this line only names them.
+  full_dims=$(dims "$shot") small_dims=$(dims "$small")
   line="$shot (${full_dims:-?})"
-  [ -s "$small" ] && line="$line, half: ${small##*/} (${small_dims:-?})"
+  [ -s "$small" ] && line="$line, small: ${small##*/} (${small_dims:-?})"
   cp -f "$shot" "$D/latest.jpg"
-  [ -s "$small" ] && cp -f "$small" "$D/latest-scale-0.5.jpg"
+  [ -s "$small" ] && cp -f "$small" "$D/latest-small.jpg"
   printf '%s\n' "$line" >> "$L"
   # With --json, stdout is the JSON alone, so it can be piped into a parser.
   if [ -n "$json" ]; then
@@ -665,12 +840,12 @@ DIMS
     printf 'screenshot: %s\n' "$line"
   fi
   if [ -d $OUT ]; then
-    cp -f "$shot" $OUT/pinchtab-shot-latest.jpg
+    cp -f "$shot" "$OUT/$NAME-shot-latest.jpg"
     # Append only what the zip lacks, so the cost doesn't grow with the session.
     # A zip broken by two concurrent shims is rebuilt instead.
-    python3 - "$D0" $OUT/pinchtab-shots.zip <<'PY' 2>/dev/null
+    python3 - "$D0" "$OUT/$NAME-shots.zip" "$NAME-shots" <<'PY' 2>/dev/null
 import os, sys, zipfile
-d, z = sys.argv[1:]
+d, z, top = sys.argv[1:]
 def add(mode):
     with zipfile.ZipFile(z, mode) as f:
         have = set(f.namelist())
@@ -679,7 +854,7 @@ def add(mode):
                 if n.startswith("latest"):
                     continue  # rewritten every shot; the numbered copy is in already
                 p = os.path.join(root, n)
-                a = "pinchtab-shots/" + os.path.relpath(p, d)
+                a = top + "/" + os.path.relpath(p, d)
                 if a not in have:
                     f.write(p, a)
 try:
@@ -691,8 +866,18 @@ PY
 fi
 exit $rc
 SHIM_EOF
+{ shim_header local pinchtab "$SHOT_BASE" "$SHOT_LEDGER_BASE" /tmp/pinchtab-shot-count; cat "$SHIM_BODY"; } > "$SHIM"
 chmod +x "$SHIM"
+ln -sf "$SHIM" "$BIN_DIR/pinchtab-local"
+rm -f "$WIN_SHIM"
+if [ -f "$WINDOWS_JSON" ]; then
+  { shim_header windows pinchtab-windows "$WIN_SHOT_BASE" "$WIN_SHOT_LEDGER" /tmp/pinchtab-windows-shot-count
+    cat "$SHIM_BODY"; } > "$WIN_SHIM"
+  chmod +x "$WIN_SHIM"
+fi
+rm -f "$SHIM_BODY"
 
 open_session
+setup_windows
 print_docs
 finish

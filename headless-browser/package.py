@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Build the uploadable skill zip.
 
-The zip embeds capsolver.key, and 2captcha.key when present, in plaintext.
-Treat the artefact as a secret: anyone holding it can spend both balances.
+The zip embeds capsolver.key, and 2captcha.key and windows.json when present, in
+plaintext. Treat the artefact as a secret: anyone holding it can spend both
+balances, and ask Louie's laptop for browser grants.
 """
 
+import json
 import os
 import re
 import sys
@@ -18,6 +20,8 @@ KEY = "capsolver.key"
 PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
 # Optional: the only provider left for hCaptcha and FunCaptcha.
 TWOCAPTCHA_KEY = "2captcha.key"
+# Optional: the Cloudflare Access service token for pinchtab-windows, Louie's Chrome.
+WINDOWS = "windows.json"
 
 
 def read_key() -> str:
@@ -50,14 +54,32 @@ def read_twocaptcha_key() -> str:
     return key
 
 
+def read_windows() -> dict:
+    path = os.path.join(HERE, WINDOWS)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    for field in ("host", "cf_access_client_id", "cf_access_client_secret"):
+        if not str(cfg.get(field, "")).strip():
+            raise SystemExit(f"{WINDOWS} lacks {field}.")
+    if not cfg["cf_access_client_id"].endswith(".access"):
+        raise SystemExit(f"{WINDOWS}: cf_access_client_id does not look like a service token ID (ends in .access).")
+    if cfg["cf_access_client_secret"].startswith("replace-"):
+        raise SystemExit(f"{WINDOWS} still holds the example secret.")
+    return cfg
+
+
 def main() -> int:
     with_key = "--no-key" not in sys.argv[1:]
     two_key = ""
     if with_key:
         key = read_key()
         two_key = read_twocaptcha_key()
+    windows = read_windows()
 
-    members = list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
+    members = (list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
+               + ([WINDOWS] if windows else []))
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for member in members:
@@ -75,6 +97,10 @@ def main() -> int:
             print(f"No {TWOCAPTCHA_KEY}: hCaptcha and FunCaptcha will go unsolved.")
     else:
         print("Built without a key: the browser works, captcha solving is off.")
+    if windows:
+        print(f"Contains {WINDOWS} (Access token for {windows['host']}) -- pinchtab-windows is on.")
+    else:
+        print(f"No {WINDOWS}: pinchtab-windows (Louie's Chrome) is off.")
     return 0
 
 

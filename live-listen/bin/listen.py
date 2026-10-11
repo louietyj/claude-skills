@@ -230,7 +230,8 @@ def cmd_watch(cfg, args):
         out["hint"] = ("The session is over. Give Louie a short wrap-up. If it was archived, "
                        "`listen transcript --batch` gets the clean full-file transcript.")
     else:
-        out["hint"] = "steer in chat if anything is worth it, then `listen watch` again in this same turn"
+        out["hint"] = ("speak only if it adds something (no 'still listening'), "
+                       "then `listen watch` again in this same turn")
     emit(out)
     # Only after the output is out: a kill mid-request must replay, not skip.
     write_state(cursor_name, {"since": body.get("last", since)})

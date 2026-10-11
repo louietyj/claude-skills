@@ -1,9 +1,11 @@
 # live-listen
 
 Louie's phone or watch is the microphone. A relay transcribes it with speaker
-labels and stores every turn; you read it a few seconds behind and steer Louie
-**in chat**. You never speak in the conversation. The watch can also buzz with
-a short note (120 characters at most), for things he has to act on right now.
+labels and stores every turn; you read it a few seconds behind. You never speak
+in the conversation. You reach it through **chat**, a **watch buzz** (a short
+note, 120 characters at most), and **files** you keep updated. Which to use,
+and how much, depends on whether you are steering Louie privately or
+collaborating with the room: see "Steering or collaborating" below.
 
 ## Before `start`
 
@@ -54,10 +56,9 @@ you that much further behind the conversation.
 
 Then:
 
-1. Read what came back. If something is worth steering on, research it if
-   needed (web, memory, calendar, documents) and write Louie a note in chat:
-   a line or two, the action first. He is reading it mid-conversation on a
-   phone.
+1. Read what came back. If something is worth saying (see below), research it
+   if needed (web, memory, calendar, documents) and say it in whichever channel
+   fits. If nothing is, say nothing.
 2. **In the same message, run `listen watch` again.** Text that is not followed
    by a tool call ends your turn, and nothing after it is read until Louie
    types. The relay keeps recording either way. Your cursor is saved, so
@@ -68,7 +69,7 @@ to 90s, and tool calls made together return together, so a lookup run in
 parallel with `watch` holds its answer back until `watch` returns. On a real
 call, Louie asked at 00:50, the answer arrived at 01:27, and he had asked
 again by then. The order is always: lookups (in parallel with each other is
-fine), then the note in chat, then `listen watch` on its own.
+fine), then your message, note or file update, then `listen watch` on its own.
 
 **End your turn only when** `watch` returns `event: ended` (then wrap up), or
 Louie tells you to stop. Not on a quiet stretch (`idle` means watch again), not
@@ -80,18 +81,75 @@ timeout. In a long silence you may raise it, but only with the bash call's
 watch loses nothing, though, because the cursor only advances after output is
 printed.
 
-### What is worth steering on
+## Steering or collaborating
 
-The way Louie would steer you if he were watching you work:
+Work out which situation you are in from context: what Louie said when he
+started you, who is talking, whether anyone addresses you by name ("Claude, can
+you check..."). It can change mid-session. Neither description below is a rule
+set; they tell you what the situation is so you can make the call.
+
+In both, the balance is the same. Too many messages, especially walls of text,
+and people stop reading them. Too few, and they wonder why you didn't look up
+the thing they were plainly discussing. Speak when you add something. Never
+send no-op messages: "Still listening", or a recap of what they are discussing.
+Those only push the useful messages off screen.
+
+### Steering: Louie's private aide
+
+Louie is in a conversation (a shop counter, an appointment, a negotiation, a
+call) and the other side doesn't know you're there. **He may not be looking at
+the screen at all**: he is talking, standing in a queue, or on another call.
+
+- **Chat means "Louie may or may not see this."** Most FYIs go here: a line or
+  two, action first, useful even if he reads it later.
+- **A watch note means "Louie will see this."** It buzzes and he glances at
+  his wrist. Use it when you want his attention on what is being said right
+  now: the other side just asked something you can answer, a wrong number is
+  about to be agreed, he is about to skip the thing he came to ask. At a tyre
+  shop the tech asked how to put the truck into TPMS relearn mode; the answer
+  sat in a six-line chat message when one line on the wrist was what he needed.
+  But a note every few sentences trains him to ignore the buzz.
+
+Worth steering on, the way Louie would steer you if he were watching you work:
 - something said that contradicts an earlier statement or a fact you know;
 - a number, claim or term worth checking, then checking it;
 - something the other side said that he seems to have missed or skated past;
 - a better next question, or something he said he wanted to cover and hasn't.
 
-Nothing worth saying? Say nothing and watch again. Silence is the default; a
-stream of commentary is noise he has to read while talking.
+### Collaborating: a participant at the table
 
-### Reading the transcript
+Everyone talking knows you are listening, and Louie's chat is usually
+screen-shared or projected, so everyone reads what you write. A planning
+session with family is the typical case. Treat yourself as part of the
+conversation.
+
+- **Be proactive.** When the talk turns to something you could look up (drive
+  times, prices, reviews, opening hours, whether two places are near each
+  other), look it up and put in a short note with your take, without waiting
+  to be asked. In a good session this was most of the value: reviews pulled
+  while the family compared two ice-fishing operators, a step-by-step
+  walkthrough of each that a parent read aloud.
+- **Keep messages brief**: a few lines, unless a long answer is truly called
+  for or someone asks for one.
+- **Keep a whiteboard.** Chat keeps scrolling: an itinerary you post is off
+  screen five messages later, and the room has to scroll up and down to find
+  it. Keep the current state in one Markdown file instead, so the room always
+  looks at the same place; chat holds the discussion.
+  - **If the project already has a file for this** (an itinerary, a plan),
+    use it. Don't start a second file that copies its decisions and drifts
+    from it. Add an **"Under discussion"** section at the top for what the room
+    is weighing right now: a comparison table, open questions, a draft change.
+    When something is decided, write it into the plan below and remove the
+    working material or cut it to one line. Longer research goes wherever the
+    project already keeps it.
+  - **Otherwise**, start a session whiteboard in your scratchpad, not cfs, so
+    nothing lingers.
+  - **Tell Louie which file to keep open** at the start, and again if it
+    changes. Update it in place and present it again after each change.
+- **The watch is rarely needed**: the screen is already the channel. One
+  session sent 44 buzzes in half an hour.
+
+## Reading the transcript
 
 - **Speakers are guesses.** `S0`/`S1` come from voice clustering. They can swap,
   merge, or renumber after a reconnect. Infer who is who from content. When it
@@ -106,7 +164,7 @@ stream of commentary is noise he has to read while talking.
   and harmless (look something up, take a note). Anything consequential gets
   confirmed in chat.
 
-### The device line
+## The device line
 
 | `device` says | meaning | do |
 |---|---|---|
@@ -119,7 +177,7 @@ stream of commentary is noise he has to read while talking.
 A phone page off screen still sends audio, but it is silence. Only this line
 tells you the difference between a quiet room and a dead mic.
 
-### Watch notes
+## Watch notes
 
 ```bash
 listen note <<'EOF'
@@ -132,9 +190,8 @@ Keep it terse: he reads it at a glance on his wrist mid-conversation. The hard
 limit is 120 characters, and the text shrinks to fit, but a few words beat a
 sentence. It vibrates the device and stays on screen, bright for
 30 seconds and then dimmed, until the next note replaces it.
-Use it only for what Louie must act on in the next minute, a few times per
-conversation at most. The buzz is intrusive. The full steer goes in chat as
-well; the note is the nudge to look.
+When to send one is above, under "Steering": when you want him to see
+something now. Put any detail in chat as well; the note is the nudge to look.
 
 ## Interruptions
 
@@ -148,7 +205,10 @@ meanwhile (`more` means the backlog continues; watch again at once).
 `watch` returns `event: ended` when Louie taps STOP, the device has been gone
 5 minutes, or you ran `listen stop` (only when he asks). Then give a short
 wrap-up: what was agreed, numbers, open questions, follow-ups, anything you
-flagged that never got answered. If the session was archived, offer
+flagged that never got answered. If you kept a whiteboard, make sure everything
+decided is in the plan, then offer to clean up what was only there to show the
+room things (the "Under discussion" section, a scratch whiteboard) and to save
+what is worth keeping to memory. If the session was archived, offer
 `listen transcript --batch` (and transcript-humanize after it). `listen
 transcript` prints the live transcript at any point.
 

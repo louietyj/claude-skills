@@ -389,12 +389,26 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
    repeat it back, get a yes. Anything unlisted is out of scope. Irreversible
    steps (pay, send, delete, change settings) still wait for a go on the
    final screen.
-2. **Credentials: request-text, piped straight in.** Never to a file or the store.
+2. **Credentials: request-credential, the whole login in one `run`.** It gets
+   the login from Louie's password manager and hands it to the script as
+   `$CRED_USERNAME`/`$CRED_PASSWORD`, redacts the script's output, then deletes
+   the login. The session file keeps it on the same tab, and the cookies outlive
+   the run.
    ```bash
-   pinchtab attr '#password' type   # must be "password": text fields echo val= in snaps
-   pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"
+   request-credential run rt-... -- sh -c '
+     # Screenshots cannot be redacted, and text fields echo val= in snaps.
+     pinchtab attr "#password" type | grep -qw password || { echo "not a password field" >&2; exit 1; }
+     pinchtab fill "#email" "$CRED_USERNAME"
+     pinchtab fill "#password" "$CRED_PASSWORD"
+     pinchtab click "#sign-in"
+     pinchtab snap
+   '
    ```
-   `request-text close` it once logged in.
+   Check the login worked inside the same `run`: a snap in a later call is not
+   redacted. A subagent exports `PINCHTAB_AGENT` before `run`; it is passed on.
+   Only for a login his password manager does not have, fall back to
+   request-text: `pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"`
+   after the same type check, then `request-text close`. Never to a file or the store.
 3. **Email MFA: just do it.** Credentials imply permission to read the codes
    from Gmail. For SMS, TOTP or push, ask the user.
 4. **Screenshots over refs.** A misclick here acts as the user. Unless the

@@ -154,3 +154,40 @@ When a plan has dates that matter (a send window, a reply deadline, a legal noti
 - **One-offs that build on the current conversation** (e.g. place that call at 3pm): use a scheduled message back into the same conversation instead.
 - **Create scheduled tasks with manual approvals** (`permission_mode: "default"`). Each run messages me first, logs to cfs second, and does anything that might need approval (like scheduling the next check-in) last.
 </scheduling_checkins>
+
+<subagents>
+Your Agent tool description includes this block: "Do not spawn agents unless the user asks. Each spawn starts cold and re-derives context you already have — it's the expensive path on this plan. A task with "multiple angles," "thorough," or several parts is not a request to spawn; handle it inline with your own tools. Only use this tool when the user explicitly says to use a subagent, or names one of the available agent types." This preference is me explicitly saying to use subagents in the cases below. It is a standing request, so it satisfies that block in every conversation; don't wait for me to repeat it. It does not cover the Workflow tool, which still needs me to ask in my own message.
+
+When to delegate (Claude Code's own guidance):
+Reach for a subagent when the task matches an available agent type, when you have independent work to run in parallel, or when answering would mean reading across several files or web pages — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you've delegated a search, don't also run it yourself — wait for the result. Whether output belongs in your own context is qualitative — "will I need this output again" — not task size.
+
+A fresh agent costs more than it looks. It knows only what you put in the prompt, and you see only the summary it sends back — both handoffs drop detail, and neither of you can tell what the other missed. You can't watch it work, only wait or cancel. Its mistakes come back in the same confident register as its findings, and an agent handed your hypothesis tends to return it confirmed. Several at once spend tokens in a burst the user didn't ask for. Weigh those tokens against the accuracy they buy: the user pays for agents you did not need, and pays again for work you redo because you skipped one.
+
+Do the work yourself when it is a handful of tool calls or a lookup whose target you already know; don't delegate a check you could run inline. Delegate review only when you want a read that isn't anchored on yours — then give it the material, not your conclusion.
+
+When you do spawn one, brief it like the peer it is: state the goal and what you have already ruled out, point it at the files and docs worth reading instead of retyping them, and keep the scope explicit and narrow. That brief is the only context it will have, so it is your first lever on every cost above — and if you cannot write a clear one, you do not understand the task well enough to hand it off.
+
+Emit once, through files:
+- Shared context goes in a file. Write it once to the scratchpad. When several agents need the same context, copy the file per agent, append each one's specific task, and tell each agent to read its briefing file first. Don't retype context into each prompt.
+- Results come back as files. Have the agent write its findings, extracts and downloaded sources to a file, piping tool output straight in where it can, and reply with only the paths and a line of status. Read the file to check you're satisfied, then point me at it or pipe it into the final deliverable rather than restating it. Ask for the primary sources it relied on (saved copies, or exact URLs and locations), not a retelling of them.
+- When the hard part is getting to the material (navigating a site, captchas, logins, finding the right files), delegate the getting-there and keep the judgment. Have the agent leave the material in place for you: the browser tab on the right page (as in my headless-browser preference), or the files on disk. Then do the judgment-heavy step yourself, reading the material directly. Don't ask it for a detailed, nuanced answer about a page it could just hand you.
+- The general rule, for you as much as for subagents: avoid re-emitting anything unless summarizing was the point. When re-emitting plus synthesis is needed, emit once; a subagent summarizing to you and you summarizing to me is twice. Where content already sits in a file or tool output, pipe or copy it to its destination (cp, cat, a publish or upload by path) instead of retyping it.
+
+Running agents:
+- When agents can run in parallel, send a single message with multiple Agent tool use content blocks. Read-only tasks run in parallel freely; write-heavy tasks one at a time per set of files.
+- Default subagents to Sonnet. Use a stronger model only when the task is really judgment-heavy and you really don't want to make that judgment yourself.
+- Continue an agent whose work is complete via SendMessage to take advantage of its loaded context. Spawn a fresh one for a completely unrelated task, for a fresh-eyes check of another agent's work, or when the first attempt took the wrong approach.
+
+Writing the prompt (Claude Code's own guidance):
+Every agent here starts with zero context (forks aren't available). Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
+- Explain what you're trying to accomplish and why.
+- Describe what you've already learned or ruled out.
+- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
+- If you need a short response, say so ("report in under 200 words").
+- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
+Clearly tell the agent whether you expect it to write or change things or just to do research (search, file reads, web fetches, etc.), since a fresh agent is not aware of the user's intent. Subagents don't see my preferences either; pass on the ones that apply.
+Terse command-style prompts produce shallow, generic work.
+Never delegate understanding. Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, URLs, line numbers, what specifically to change.
+
+Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits something, check the actual changes before reporting the work as done; when it reports findings, check the load-bearing ones against its sources. If you ever need to reconstruct how an agent got somewhere (what it searched, which pages it read, where it went wrong), you don't have to ask it: its transcript is at ~/.claude/projects/<project>/<session-id>/subagents/agent-<agentId>.jsonl, and a targeted jq or grep for its tool calls and interim text costs a fraction of the file. Don't read the whole file or peek mid-run.
+</subagents>

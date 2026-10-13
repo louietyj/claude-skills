@@ -5,7 +5,7 @@
 //
 //   request-credential ask <site> "<reason>" [--ttl-min N]   -> id: rt-...
 //   request-credential wait <id> [--timeout S]               -> received (never the password)
-//   request-credential run <id> [--keep-min N] -- <cmd>...   -> cmd with $CRED_USERNAME,
+//   request-credential run <id> -- <cmd>...                  -> cmd with $CRED_USERNAME,
 //                                                               $CRED_PASSWORD; output redacted
 //   ... | request-credential redact <id>...                  -> stdin, password replaced
 //   request-credential forget <id>
@@ -16,10 +16,11 @@
 // wait's exit codes: 0 received, 2 nothing yet (wait again), 4 declined,
 // expired or undeliverable (ask again only if Louie wants), 1 error.
 //
-// The login sits on disk only between `wait` and the `run` that uses it: run
-// deletes it afterwards unless --keep-min, and every command first deletes kept
-// logins past their deadline. Nothing runs in the background -- the sandbox
-// suspends between turns and would kill it.
+// A received login lives in RAM (/dev/shm), never on a disk where deleted bytes
+// survive. It is deleted when a run succeeds, and otherwise RETRY_MS after it
+// arrived or after a failed run. Nothing runs in the background -- the sandbox
+// suspends between turns and would kill it -- so every command first deletes
+// logins past their deadline.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -27,9 +28,22 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "config.json");
-const HOME = process.env.REQUEST_CREDENTIAL_HOME || path.join(os.homedir(), ".request-credential");
+const RAM = "/dev/shm";
+export const IN_RAM = (() => {
+  try {
+    fs.accessSync(RAM, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const BASE = IN_RAM ? RAM : os.homedir();
+const HOME = process.env.REQUEST_CREDENTIAL_HOME || path.join(BASE, ".request-credential");
+// request-text keeps the received login in its own directory; ours go here too.
+const RT_HOME = process.env.REQUEST_CREDENTIAL_RT_HOME || path.join(BASE, ".request-credential-rt");
 const REQUEST_TEXT = process.env.REQUEST_TEXT_BIN || "request-text";
 const EXIT = { OK: 0, ERROR: 1, TIMEOUT: 2, GONE: 4 };
+const RETRY_MS = 60_000;
 
 class Fail extends Error {}
 
@@ -53,7 +67,10 @@ async function relay(method, route, body) {
 function requestText(args) {
   // A script path (the tests' fake) runs under this node.
   const [cmd, pre] = /\.m?js$/.test(REQUEST_TEXT) ? [process.execPath, [REQUEST_TEXT]] : [REQUEST_TEXT, []];
-  const r = spawnSync(cmd, [...pre, ...args], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  const r = spawnSync(cmd, [...pre, ...args], {
+    stdio: ["ignore", "pipe", "pipe"], encoding: "utf8",
+    env: { ...process.env, REQUEST_TEXT_HOME: RT_HOME },
+  });
   if (r.error) throw new Fail(`could not run ${REQUEST_TEXT}: ${r.error.message} -- run request-text's setup.sh`);
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -125,6 +142,7 @@ async function ask(args) {
   saveRecord({ id, rid: out.rid, site, url });
   // No URL: the phone has it, and Louie never needs to open it himself.
   process.stdout.write(`id: ${id}\nsent to the phone: ${site}\n`);
+  if (!IN_RAM) process.stderr.write(`warning: no ${RAM}, so the login will be held on disk\n`);
   return EXIT.OK;
 }
 
@@ -136,7 +154,12 @@ async function wait(args) {
     const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
     const w = requestText(["wait", rec.id, "--timeout", String(Math.min(left, 30))]);
     if (w.code === 0) {
-      process.stdout.write(`${rec.id}: received the ${rec.site} login for ${JSON.parse(w.stdout).username}\n`);
+      if (!rec.deleteAt) {
+        rec.deleteAt = Date.now() + RETRY_MS;
+        saveRecord(rec);
+      }
+      process.stdout.write(`${rec.id}: received the ${rec.site} login for ${JSON.parse(w.stdout).username}; ` +
+        "run it now, it is deleted unused after a minute\n");
       return EXIT.OK;
     }
     if (w.code === 3) {
@@ -212,10 +235,9 @@ function warnIfShort(targets) {
 
 async function run(args) {
   const split = args.indexOf("--");
-  if (split < 0 || split === args.length - 1) throw new Fail("usage: run <id> [--keep-min N] -- <command>...");
-  const a = flags(args.slice(0, split), ["keep-min"]);
+  if (split !== 1 || split === args.length - 1) throw new Fail("usage: run <id> -- <command>...");
   const [cmd, ...cmdArgs] = args.slice(split + 1);
-  const rec = record(a._[0]);
+  const rec = record(args[0]);
   const creds = login(rec.id);
   const targets = redactionTargets([creds]);
   warnIfShort(targets);
@@ -232,11 +254,13 @@ async function run(args) {
     redactStream(child.stderr, process.stderr, targets)]);
   const result = await exited;
 
-  if (a["keep-min"]) {
-    rec.deleteAt = Date.now() + Number(a["keep-min"]) * 60_000;
-    saveRecord(rec);
-  } else {
+  if (result.code === 0) {
     forgetNow(rec.id);
+  } else {
+    rec.deleteAt = Date.now() + RETRY_MS;
+    saveRecord(rec);
+    process.stderr.write(`request-credential: the command failed, so ${rec.id} is kept for one ` +
+      "minute: fix the script and run again now, or it is gone\n");
   }
   if (result.error) throw new Fail(`could not run ${cmd}: ${result.error.message}`);
   return result.code ?? EXIT.ERROR;
@@ -283,7 +307,9 @@ async function health() {
   const { status } = await relay("GET", "/request/0000000000000000");
   if (status === 401) throw new Fail("the relay rejected this skill's cli_token");
   if (status !== 404) throw new Fail(`relay: unexpected HTTP ${status}`);
-  process.stdout.write(`relay OK: ${cfg.worker_url}\n`);
+  process.stdout.write(`relay OK: ${cfg.worker_url}\n` + (IN_RAM
+    ? `logins are held in RAM (${RAM}) until used\n`
+    : `WARNING: no ${RAM}; logins will be held on disk until used. Tell Louie.\n`));
   return EXIT.OK;
 }
 

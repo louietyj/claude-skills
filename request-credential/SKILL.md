@@ -24,16 +24,23 @@ dies with the bash call.
 
 ## The flow
 
+**First, have the script ready.** Work out everything the login needs without
+the password: open the login page, find the selectors of every step
+(snapshots, `eval` over the inputs -- reading names and types, never values),
+and note whether the password page only appears after the username (two-step
+logins like Auth0). Write the script before asking. A login is kept only a
+minute for a retry, so a script you debug after it arrives costs Louie another
+tap.
+
 ```bash
 request-credential ask chase.com "Download the October statement"
 # id: rt-3f9a1c2e
-request-credential wait rt-3f9a1c2e
-# rt-3f9a1c2e: received the chase.com login for louie@example.com
-request-credential run rt-3f9a1c2e -- sh -c 'printf %s "$CRED_PASSWORD" | some-cmd --password-stdin'
+request-credential wait rt-3f9a1c2e && request-credential run rt-3f9a1c2e -- sh /tmp/login.sh
 ```
 
 Tell Louie in one line that his phone is asking (no link to give him), **then
-call `wait` in the same turn**.
+call `wait` in the same turn, chained to the `run`** as above, so the login is
+used the moment it arrives.
 
 - **site**: the bare domain his password manager saved it under: `chase.com`,
   not `https://secure.chase.com/login`. Subdomains match the parent, so the
@@ -47,7 +54,7 @@ call `wait` in the same turn**.
 
 | exit | meaning | do |
 |---|---|---|
-| 0 | received (it prints the username, never the password) | `run` it |
+| 0 | received (it prints the username, never the password) | `run` it within the minute |
 | 2 | nothing yet, request still open | run `wait` again |
 | 4 | he declined, it expired, or the phone could not be reached (stderr says which) | stop; tell him; ask again only if he says to |
 | 1 | error (stderr) | report it |
@@ -59,12 +66,16 @@ it), sent, declined, expired.
 ## Using the login: `run`
 
 `request-credential run <id> -- <command>...` runs the command with
-`$CRED_USERNAME` and `$CRED_PASSWORD` in its environment, passes its stdout and
-stderr through a redactor, and **then deletes the login from disk**. The
-redactor replaces the password, including its JSON, URL, HTML, base64 and
-Basic-auth forms, with `[REDACTED]`, so a browser dump, page text or verbose
-HTTP log that echoes it does not leak it into the transcript. It exits with the
-command's exit code.
+`$CRED_USERNAME` and `$CRED_PASSWORD` in its environment and passes its stdout
+and stderr through a redactor. The redactor replaces the password, including
+its JSON, URL, HTML, base64 and Basic-auth forms, with `[REDACTED]`, so a
+browser dump, page text or verbose HTTP log that echoes it does not leak it
+into the transcript. It exits with the command's exit code.
+
+**If the command succeeds, the login is deleted. If it fails, it is kept one
+minute** for a single fixed-up retry, then deleted. That is the only way to
+reuse it: there is no keeping it for later. Logins are held in RAM
+(`/dev/shm`), not on disk.
 
 ```bash
 request-credential run rt-3f9a1c2e -- sh -c '
@@ -73,20 +84,20 @@ request-credential run rt-3f9a1c2e -- sh -c '
 '
 ```
 
-- **Do the whole job in one `run`.** Put every step that needs the login in a
-  single script (`sh -c '...'`, or write a script file first). The login is
-  gone afterwards; a second `run` means asking Louie again.
-- **Several commands across turns** only when one script truly cannot do it:
-  `run <id> --keep-min N -- ...` keeps the login for N minutes. Each command
-  then still goes through `run` (or ends `2>&1 | request-credential redact
-  <id>`), and **finish with `request-credential forget <id>`**. Nothing deletes
-  it on a timer -- the sandbox suspends between turns -- only the next
-  `request-credential` command after the deadline does, so forget it yourself.
+- **Do the whole job in one `run`.** Every step that needs the login goes in
+  one script, ending with a check that it worked. Make the script exit
+  non-zero when a step fails (`set -e`, or `|| exit 1`), so a failure keeps the
+  login for the retry instead of deleting it.
+- **A login that stops at MFA:** the session is what matters afterwards, not
+  the password. Let the `run` end at the code prompt (exit 0); get the code
+  separately (request-text for SMS).
 - **Never read the password any other way**: not `request-text wait`, not
-  `cat ~/.request-text/...`. Do not print `$CRED_PASSWORD` to check it; use
-  `printf %s "$CRED_PASSWORD" | wc -c`. The username is fine to show.
-- `redact` prints nothing at all if the login is already gone, rather than
-  pass text through unfiltered.
+  the files under `/dev/shm`. Do not print it, its length, or any part of it;
+  `[ -n "$CRED_PASSWORD" ]` is the only check you need. The username is fine
+  to show.
+- `forget <id>` deletes a kept login at once. `... 2>&1 | request-credential
+  redact <id>` filters a command that is not under `run`, while a login is
+  still kept; it prints nothing at all if the login is gone.
 
 ## Pairing
 

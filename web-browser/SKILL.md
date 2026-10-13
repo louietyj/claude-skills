@@ -404,8 +404,11 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
      pinchtab snap
    '
    ```
-   Check the login worked inside the same `run`: a snap in a later call is not
-   redacted. A subagent exports `PINCHTAB_AGENT` before `run`; it is passed on.
+   Before asking, find each step's selectors without the password (snap,
+   `eval` over the inputs' names and types): many logins put the password on
+   a second page after the username. Check the login worked inside the same
+   `run`: a snap in a later call is not redacted. A subagent exports
+   `PINCHTAB_AGENT` before `run`; it is passed on.
    Only for a login his password manager does not have, fall back to
    request-text: `pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"`
    after the same type check, then `request-text close`. Never to a file or the store.

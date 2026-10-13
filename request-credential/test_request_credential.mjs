@@ -84,42 +84,67 @@ function sandbox({ received = true, deleteAt } = {}) {
     env: { ...process.env, REQUEST_CREDENTIAL_HOME: home, FAKE_RT_DIR: rt,
       REQUEST_TEXT_BIN: path.join(HERE, "dev", "fake-request-text.mjs") },
   });
-  const onDisk = () => fs.existsSync(path.join(home, `${ID}.json`)) || fs.existsSync(path.join(rt, `${ID}.json`));
-  return { cli, onDisk };
+  const recPath = path.join(home, `${ID}.json`);
+  const onDisk = () => fs.existsSync(recPath) || fs.existsSync(path.join(rt, `${ID}.json`));
+  const deadline = () => JSON.parse(fs.readFileSync(recPath, "utf8")).deleteAt;
+  const expire = () => fs.writeFileSync(recPath,
+    JSON.stringify({ ...JSON.parse(fs.readFileSync(recPath, "utf8")), deleteAt: Date.now() - 1 }));
+  return { cli, onDisk, deadline, expire };
 }
 
-const ECHO = ["-e", "console.log('out ' + process.env.CRED_USERNAME + ' ' + process.env.CRED_PASSWORD);" +
-  "console.error('err ' + process.env.CRED_PASSWORD); process.exit(3)"];
+const echo = (exitCode) => ["-e", "console.log('out ' + process.env.CRED_USERNAME + ' ' + process.env.CRED_PASSWORD);" +
+  `console.error('err ' + process.env.CRED_PASSWORD); process.exit(${exitCode})`];
 
-test("wait reports the login without printing the password", () => {
-  const { cli } = sandbox();
+test("wait reports the login without printing the password, and starts its minute", () => {
+  const { cli, deadline } = sandbox();
+  const before = Date.now();
   const r = cli(["wait", ID]);
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(LOGIN.username), r.stdout);
   assert.ok(!r.stdout.includes(LOGIN.password) && !r.stderr.includes(LOGIN.password));
+  assert.ok(deadline() >= before + 60_000 && deadline() <= Date.now() + 60_000, String(deadline()));
 });
 
-test("run hands the login to the command, redacts its output, then deletes the login", () => {
+test("a successful run hands over the login, redacts its output, then deletes the login", () => {
   const { cli, onDisk } = sandbox();
-  const r = cli(["run", ID, "--", process.execPath, ...ECHO]);
-  assert.equal(r.status, 3, "the command's exit code is passed through");
+  const r = cli(["run", ID, "--", process.execPath, ...echo(0)]);
+  assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `out ${LOGIN.username} ${MARK}\n`);
   assert.ok(r.stderr.includes(`err ${MARK}`) && !r.stderr.includes(LOGIN.password), r.stderr);
-  assert.ok(!onDisk(), "the login is still on disk");
-  assert.equal(cli(["run", ID, "--", process.execPath, ...ECHO]).status, 1, "a second run should fail");
+  assert.ok(!onDisk(), "the login is still stored");
+  assert.equal(cli(["run", ID, "--", process.execPath, ...echo(0)]).status, 1, "a second run should fail");
 });
 
-test("run --keep-min keeps the login until its deadline, then any command deletes it", () => {
-  const { cli, onDisk } = sandbox();
-  assert.equal(cli(["run", ID, "--keep-min", "5", "--", process.execPath, ...ECHO]).status, 3);
-  assert.ok(onDisk());
-  assert.equal(cli(["redact", ID], `x ${LOGIN.password} y`).stdout, `x ${MARK} y`);
+test("a failed run keeps the login for one minute's retry, then any command deletes it", () => {
+  const { cli, onDisk, deadline } = sandbox();
+  const r = cli(["run", ID, "--", process.execPath, ...echo(3)]);
+  assert.equal(r.status, 3, "the command's exit code is passed through");
+  assert.ok(r.stderr.includes("kept for one minute"), r.stderr);
+  assert.ok(onDisk() && deadline() <= Date.now() + 60_000);
 
-  const past = sandbox({ deleteAt: Date.now() - 1 });
-  const r = past.cli(["redact", ID], `x ${LOGIN.password} y`);
-  assert.equal(r.status, 1);
-  assert.equal(r.stdout, "", "redact must print nothing once the login is gone");
-  assert.ok(!past.onDisk());
+  assert.equal(cli(["run", ID, "--", process.execPath, ...echo(0)]).status, 0, "the retry works");
+  assert.ok(!onDisk());
+
+  const late = sandbox();
+  late.cli(["run", ID, "--", process.execPath, ...echo(3)]);
+  late.expire();
+  const gone = late.cli(["redact", ID], `x ${LOGIN.password} y`);
+  assert.equal(gone.status, 1);
+  assert.equal(gone.stdout, "", "redact must print nothing once the login is gone");
+  assert.ok(!late.onDisk());
+});
+
+test("an unused login is deleted after its minute", () => {
+  const { cli, onDisk, expire } = sandbox();
+  cli(["wait", ID]);
+  expire();
+  assert.equal(cli(["run", ID, "--", process.execPath, ...echo(0)]).status, 1);
+  assert.ok(!onDisk());
+});
+
+test("run needs exactly an id before --", () => {
+  const { cli } = sandbox();
+  assert.equal(cli(["run", ID, "--keep-min", "5", "--", process.execPath, ...echo(0)]).status, 1);
 });
 
 test("redact prints nothing when there is no login to redact against", () => {

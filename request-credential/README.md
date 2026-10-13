@@ -16,9 +16,13 @@ sandbox ◀═══════════ sealed login, POSTed to the request
   request-text's page), so only that sandbox can read it.
 - **FCM carries only a request id.** Site, reason and link come from the
   Worker over the device token.
-- **On the sandbox side it lives only until used.** `wait` never prints it;
-  `run` hands it to one command as env vars, redacts that command's output, and
-  deletes it.
+- **On the sandbox side it lives in RAM, briefly.** request-credential points
+  request-text at `/dev/shm` (tmpfs in claude.ai's sandbox), since deleted bytes
+  on disk or an overlay layer can survive. `wait` never prints the login; `run`
+  hands it to one command as env vars, redacts that command's output, and
+  deletes it on success. Unused, or after a failed run, it is kept one minute,
+  enforced at the start of every `request-credential` command because nothing
+  survives in the background between turns.
 
 ## Trust
 

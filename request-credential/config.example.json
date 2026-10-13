@@ -1,0 +1,10 @@
+{
+  "_comment": [
+    "Copy to config.json, which is gitignored -- this repo is public.",
+    "",
+    "cli_token  gates Claude's routes on the relay: pairing, filing requests."
+  ],
+
+  "worker_url": "https://cred-bridge.EXAMPLE.workers.dev",
+  "cli_token": "..."
+}

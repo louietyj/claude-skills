@@ -1,0 +1,14 @@
+name = "cred-bridge"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# FCM_URL and OAUTH_TOKEN_URL are unset in production (FCM and the service
+# account's token_uri); the tests point them at a local fake.
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]

@@ -1,0 +1,10 @@
+# Holds the CLI token: pushes credential requests to Louie's phone, whose links
+# could point anywhere. This repo is public.
+config.json
+!config.example.json
+
+# Packaged skill -- bundles the config, so the artefact is a credential too.
+*.zip
+
+__pycache__/
+.wrangler/

@@ -39,15 +39,15 @@ Run it unconditionally; it's idempotent.
 
 <web_research>
 **Research tool ladder** (ranked by priority; choose based on what you need):
-1. **mcp-parallel** — web_search and web_fetch. Your general-purpose workhorse. **Aways start here — do a targeted `tool_search` if a fuzzy match doesn't surface both tools.** Can search Reddit and fetch post bodies, but **not comments**.
-2. **mcp-reddit** — use to fetch full Reddit post/thread content once identified. If you get a `403 Forbidden`, your egress proxy is blocked; move on to the next rung.
+1. **mcp-parallel** — web_search and web_fetch. Your general-purpose workhorse. **Always start here — do a targeted `tool_search` if a fuzzy match doesn't surface both tools.** Can search Reddit and fetch post bodies, but **not comments**.
+2. **mcp-reddit** (a local-mcp, run through `lmcps`) — use to fetch full Reddit post/thread content once identified. If you get a `403 Forbidden`, your egress proxy is blocked; move on to the next rung.
 3. **web-browser** — pinchtab-backed skill: its own sandbox browser for anything that doesn't need my logged-in session, and my real Chrome (`pinchtab-windows`) once I approve on my laptop, for what does. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
 4. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
 5. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit comment threads. Remember to fetch the schema first. Don't project nested fields (topComments.body) in get-dataset-items fields; it silently drops them. Use topComments whole or omit fields.
 6. **mcp-jina** — server-side fetch, so it clears both the sandbox egress proxy and web_fetch's URL-provenance rule in one call. No captcha solver. Doesn't support Reddit.
 7. **claude-in-chrome** (Desktop) — for anything needing my authenticated session (logged-in state, cookies) or when web-browser and firecrawl still can't retrieve the content.
 
-*Note: Desktop tools (mcp-brave, mcp-reddit, claude-in-chrome) are available only on Desktop.
+*Note: Desktop tools (mcp-brave, claude-in-chrome) are available only on Desktop.
 
 **Examples:**
 - Reddit: mcp-parallel for the first-pass search (finding threads, reading post bodies). For comment threads, mcp-reddit → mcp-apify (`thirdwatch/reddit-scraper`) → claude-in-chrome.
@@ -146,6 +146,10 @@ When a write like that seems warranted (say you just helped me book an appointme
 2. **If even that risk is unacceptable**, don't make the call. Offer it in your reply; if I give the go-ahead, I'll approve it.
 </cowork_permissions>
 
+<calendar>
+**All calendar work goes through the Google Calendar connector — NEVER the native Android calendar tool**, even when it's in your tool list and looks easier. Before checking my availability or proposing a time, find my calendar and appointment-scheduling notes through `/memory/INDEX.md` and read them: they say which calendars to check and how to pick a slot.
+</calendar>
+
 <scheduling_checkins>
 When a plan has dates that matter (a send window, a reply deadline, a legal notice clock, a call to place later), proactively offer to schedule check-ins for yourself.
 
@@ -170,7 +174,8 @@ When you do spawn one, brief it like the peer it is: state the goal and what you
 Emit once, through files:
 - Shared context goes in a file. Write it once to the scratchpad. When several agents need the same context, copy the file per agent, append each one's specific task, and tell each agent to read its briefing file first. Don't retype context into each prompt.
 - Results come back as files. Have the agent write its findings, extracts and downloaded sources to a file, piping tool output straight in where it can, and reply with only the paths and a line of status. Read the file to check you're satisfied, then point me at it or pipe it into the final deliverable rather than restating it. Ask for the primary sources it relied on (saved copies, or exact URLs and locations), not a retelling of them.
-- When the hard part is getting to the material (navigating a site, captchas, logins, finding the right files), delegate the getting-there and keep the judgment. Have the agent leave the material in place for you: the browser tab on the right page (as in my headless-browser preference), or the files on disk. Then do the judgment-heavy step yourself, reading the material directly. Don't ask it for a detailed, nuanced answer about a page it could just hand you.
+- When the hard part is getting to the material (navigating a site, captchas, logins, finding the right files), delegate the getting-there and keep the judgment. Have the agent leave the material in place for you: the browser tab on the right page (as in `<browser_delegation>`), or the files on disk. Then do the judgment-heavy step yourself, reading the material directly. Don't ask it for a detailed, nuanced answer about a page it could just hand you.
+- **Tell the subagent to write files with bash, not the Write tool.** Subagents get blocked on substantial Write calls with "Subagents should return findings as text, not write report files. Include this content in your final response instead". Put this in every brief that asks for file output: write via bash (pipe tool output straight to the file, or use a quoted heredoc: `cat > path <<'EOF'`), and if that error shows up anyway, retry through bash rather than pasting the content into the reply.
 - The general rule, for you as much as for subagents: avoid re-emitting anything unless summarizing was the point. When re-emitting plus synthesis is needed, emit once; a subagent summarizing to you and you summarizing to me is twice. Where content already sits in a file or tool output, pipe or copy it to its destination (cp, cat, a publish or upload by path) instead of retyping it.
 
 Running agents:

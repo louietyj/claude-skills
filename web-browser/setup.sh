@@ -626,6 +626,9 @@ fi
 if [ "$TIER" = windows ]; then
   # shellcheck source=/dev/null
   . "$WIN_CONF" 2>/dev/null || { echo "$NAME: not set up -- the skill has no windows.json" >&2; exit 1; }
+  # Advisories only, such as "no agent session", which a bridge can never have;
+  # occurrence hints (captchas, stale refs) still print.
+  export PINCHTAB_HINTS=off
   G=/tmp/.pinchtab-windows-grant
   RQ=/tmp/.pinchtab-windows-request
   json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }

@@ -775,10 +775,18 @@ esac
 # The command's output is held back until the path is printed: callers pipe
 # through `| head`, which would otherwise cut the path off.
 O=
+shoot=
 case "${1:-}" in
-  nav|click|dblclick|fill|type|press|select|check|uncheck|hover|scroll|drag|mouse|keyboard|back|forward|reload|vision)
-    [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] && O=$(mktemp) ;;
+  nav|goto|navigate|open|quick|back|forward|reload|click|dblclick|hover|focus|mouse|drag|\
+  fill|type|press|keydown|keyup|keyboard|select|check|uncheck|upload|scroll|scrollintoview|\
+  dialog|vision)
+    shoot=1 ;;
+  # `tab` alone lists tabs; `tab <id>` switches to one.
+  tab|tabs) case "${2:--}" in -*|close|handoff|resume|handoff-status) ;; *) shoot=1 ;; esac ;;
+  clipboard) [ "${2:-}" = paste ] && shoot=1 ;;
+  set) case "${2:-}" in viewport|media) shoot=1 ;; esac ;;
 esac
+[ -n "$shoot" ] && [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] && O=$(mktemp)
 if [ -n "$O" ]; then exec 3>"$O"; else exec 3>&1; fi
 E=$(mktemp)
 trap '[ -n "$O" ] && cat "$O" && rm -f "$O"; cat "$E" >&2; rm -f "$E"' EXIT

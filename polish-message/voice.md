@@ -38,7 +38,7 @@ sentence or two, backs it with exact facts, and stops.
   …`, `Ok!`, `Done.`
 - **Then straight to the point.** No "I hope this email finds you well",
   no "I'm reaching out because". The first sentence is the situation or
-  the ask: `We booked a 12pm tour on 7 Mar (Booking ID ABC-123, $482.04)
+  the ask: `We booked a 12pm tour on 03/07 (Booking ID ABC-123, $482.04)
   which was described as a 3h tour.`
 - **Replies open with thanks for the specific thing:** `Thanks for meeting
   me today!` / `Thanks for escalating the ticket!`
@@ -77,7 +77,7 @@ sentence or two, backs it with exact facts, and stops.
   option, phone still works.` / `If not, send me some times and I'll do my
   best to move things around.`
 - **Says why when it matters, briefly:** `This is sort of time sensitive
-  since I have to send the old phone in by Oct 15.` One clause, not a
+  since I have to send the old phone in by 10/15.` One clause, not a
   backstory.
 - **Bolds the one sentence that must not be missed,** if there is one:
   the key ask, the instruction, or the line he's holding. Never more than
@@ -91,7 +91,7 @@ sentence or two, backs it with exact facts, and stops.
 - `Just` softens follow-ups and check-ins: `Just following up on this.` /
   `Just checking if you were able to run it?`
 - Follow-ups are short and point to what was already promised: `Following
-  up on <ticket> again. Any ETA? Per your 23 Sep email, …`
+  up on <ticket> again. Any ETA? Per your 09/23 email, …`
 
 ## With collaborators
 
@@ -191,8 +191,10 @@ Disputes and refusals are their own mode, and he's good at it:
   email.
 - **Apologises briefly and moves on:** `Sorry for the late response.` /
   `Sorry, forgot to attach!`
-- **Dates:** `7 Mar 2026` or `23 Sep` in prose. Times like `12pm` or
-  `2:30pm`.
+- **Dates:** `10/17` (zero-padded: `09/23`) for a US audience when the
+  year is obvious.
+  Otherwise spell it out with the year: `17 Oct 2003`. ISO `2026-10-17`
+  only for technical audiences. Times like `12pm` or `2:30pm`.
 - **With friends, even shorter and playful:** `Hey, scanned letter for you
   as requested.` His Gmail has few of these messages, so keep it simple
   rather than guessing at a style.
@@ -209,6 +211,9 @@ If a draft contains any of these, it isn't in his voice yet:
   "Cheers,"
 - "I would be grateful if …" / "I was wondering if perhaps …". He just
   asks.
+- "Please respond in writing", even when a written reply is the goal. A
+  reply to an email is an email anyway, so it adds nothing, and it puts
+  the recipient on high alert.
 - Restating the recipient's email back to them before answering.
 - A closing paragraph that summarizes what the email already said.
 - Em dashes, semicolon-heavy sentences, "Additionally," / "Furthermore," /

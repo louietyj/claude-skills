@@ -142,10 +142,13 @@ doubt, end with it: it costs a few lines.
 ## Subagents for involved navigation
 
 If you have a subagent tool, hand the navigation to a Sonnet subagent
-(`model: "sonnet"`). Strongly recommended: treat it as the default. Clicking
-through an SPA -- shop search results, filters, product listings, multi-step
-flows -- is where an agent burns 30 tool calls and fills its context with
-screenshots and snaps. Delegated, only the findings come back.
+(`model: "sonnet"`). This is the default, not an option -- above all when you
+are Opus. A single page fetch you can run yourself; clicking through a site --
+shop search results, filters, product listings, booking or checkout flows --
+is where an agent burns 30 tool calls and fills its context with screenshots
+and snaps. Delegated, only the findings come back, and you keep the last mile.
+Scope each task narrowly, with a clear stopping point: "find xyz's official
+booking site, go through its booking flow, and stop at the pricing page".
 
 Spawn them whenever the need shows up, before or after you have browsed
 yourself. Give each a name no other subagent in this conversation has had

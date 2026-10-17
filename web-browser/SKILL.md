@@ -147,8 +147,11 @@ are Opus. A single page fetch you can run yourself; clicking through a site --
 shop search results, filters, product listings, booking or checkout flows --
 is where an agent burns 30 tool calls and fills its context with screenshots
 and snaps. Delegated, only the findings come back, and you keep the last mile.
-Scope each task narrowly, with a clear stopping point: "find xyz's official
-booking site, go through its booking flow, and stop at the pricing page".
+Scope each task narrowly, with a clear stopping point. The most common case:
+"Find xyz's official booking site, go through its booking flow, and stop at
+the pricing page." Finding the site and clicking through the flow is research
+plus navigation, so it goes to Sonnet. The pricing page is the part you care
+about, so it comes back to you for the last mile.
 
 Spawn them whenever the need shows up, before or after you have browsed
 yourself. Give each a name no other subagent in this conversation has had

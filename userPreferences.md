@@ -55,12 +55,14 @@ Run it unconditionally; it's idempotent.
 </web_research>
 
 <browser_delegation>
-**If you have a subagent tool, hand website navigation to a Sonnet subagent (`model: "sonnet"`). This is the default, not an option — above all when you are Opus.** A single page fetch you can run yourself. Anything that means clicking through a site (search results, filters, listings, a booking or checkout flow) goes to the subagent. Done yourself, it burns 30+ tool calls and fills your context with screenshots and snaps you never need again. Sonnet does the clicking cheaply, never sends back a wall of text, and you keep control of the last mile.
+**If you have a subagent tool, hand website navigation to a Sonnet subagent (`model: "sonnet"`). This is the default, not an option — ESPECIALLY if you are Opus.** A single page fetch you can run yourself. Anything that means clicking through a site (search results, filters, listings, a booking or checkout flow) goes to the subagent. Done yourself, it burns 30+ tool calls and fills your context with screenshots and snaps you never need again. Sonnet does the clicking cheaply, never sends back a wall of text, and you keep control of the last mile.
 
-Spawn it with the preamble from web-browser's SKILL.md ("Subagents for involved navigation"), then give it **one narrowly scoped task with a clear stopping point**, e.g. "find xyz's official booking site, go through its booking flow, and stop at the pricing page". Say which of these to come back with:
+Spawn it with the preamble from web-browser's SKILL.md ("Subagents for involved navigation"), then give it **one narrowly scoped task with a clear stopping point**, and say which of these to come back with:
 1. **The answer**, when it's simple (a price, a yes/no, whether something is in stock).
 2. **Files**: `text`, `snap` or screenshots of the right page(s), as paths plus a short summary.
 3. **The browser**: navigate to the right page and stop. You drive its tab for the last bit by prefixing your own calls with `export PINCHTAB_AGENT=<its name>;`.
+
+**The most common case:** "Find xyz's official booking site, go through its booking flow, and stop at the pricing page." Finding the site and clicking through the flow is research plus navigation: that goes to Sonnet. The pricing page is the part you care about, so it comes back to you (option 3) for the last mile.
 
 **Want more afterwards? Send the same subagent a continuation task** (SendMessage in Claude Code) rather than browsing yourself or spawning a fresh one — it still has its tab, its page state and what it learned about the site. Only take over directly for short, precise finishing work (option 3).
 </browser_delegation>

@@ -412,8 +412,9 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
    Only for a login his password manager does not have, fall back to
    request-text: `pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"`
    after the same type check, then `request-text close`. Never to a file or the store.
-3. **Email MFA: just do it.** Credentials imply permission to read the codes
-   from Gmail. For SMS, TOTP or push, ask the user.
+3. **Email and SMS MFA: just do it.** Credentials imply permission to read
+   the codes from Gmail, or from his text messages through mcp-android. For
+   TOTP or push, ask the user.
 4. **Screenshots over refs.** A misclick here acts as the user. Unless the
    target is unmistakable, check the screenshot, click with `--x --y`, and
    verify the next screenshot. Never reuse refs across a page change.

@@ -90,8 +90,8 @@ request-credential run rt-3f9a1c2e -- sh -c '
   login for the retry instead of deleting it.
 - **A login that stops at MFA:** the session is what matters afterwards, not
   the password. Let the `run` end at the code prompt (exit 0); get the code
-  separately (Gmail, or his texts through mcp-android; request-text if
-  neither has it).
+  separately (Gmail, or his texts through mcp-android; otherwise ask him for
+  it in chat, since a used code is worthless).
 - **Never read the password any other way**: not `request-text wait`, not
   the files under `/dev/shm`. Do not print it, its length, or any part of it;
   `[ -n "$CRED_PASSWORD" ]` is the only check you need. The username is fine

@@ -344,13 +344,17 @@ function closeVoice() {
 function startVoice() {
   closeVoice();
   const pc = voice = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }] });
+  // The relay holds Claude's speech until both are true: anything sent earlier is never heard.
+  let playing = false;
+  const ready = () => { if (voice === pc && playing && pc.connectionState === "connected") send({ type: "voice_ready" }); };
   pc.ontrack = (e) => {
     try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
     voiceEl.srcObject = new MediaStream([e.track]);
-    voiceEl.play().catch((err) => voiceFailed(`won't play (${err.name})`));
+    voiceEl.play().then(() => { playing = true; ready(); }, (err) => voiceFailed(`won't play (${err.name})`));
   };
   pc.onconnectionstatechange = () => {
     if (voice === pc && pc.connectionState === "failed") voiceFailed("connection failed");
+    ready();
   };
   send({ type: "voice_request" });
 }

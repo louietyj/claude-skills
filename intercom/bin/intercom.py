@@ -207,9 +207,8 @@ def cmd_start(cfg, args):
     write_state(f"cursor-{sid}.json", {"since": 0})
     tap = (f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id matches; "
            f"it should say {args.mode.upper()}).")
-    then = (" Then arm Monitor on `intercom monitor-url`, or in a sandbox without Monitor run "
-            "`intercom watch`." if args.mode == "talk" else
-            " Then run `intercom watch` and keep watching in this same turn.")
+    then = (" Then, if you have a Monitor tool (in any environment), arm it on `intercom monitor-url`;"
+            " only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
           "archive": args.archive, "next": tap + then})
 
@@ -280,8 +279,8 @@ def cmd_note(cfg, args):
 
 
 def speak_timeout(text):
-    """Covers playback at a slow rate, waiting out Louie's turn, and generation."""
-    return min(300, len(text) // SPEAK_CHARS_PER_S + 40)
+    """Covers playback at a slow rate, the device's voice connecting, and generation."""
+    return min(300, len(text) // SPEAK_CHARS_PER_S + 50)
 
 
 def cmd_speak(cfg, args):
@@ -305,8 +304,10 @@ def cmd_speak(cfg, args):
     elif body.get("status") == "interrupted":
         out["hint"] = ("Louie heard only `spoken`; don't repeat it. What he said arrives as the next "
                        "event (heard_so_far is a preview: don't act on it).")
-    elif body.get("status") == "not_delivered" and body.get("reason"):
+    elif body.get("status") == "not_delivered" and "paused" in (body.get("reason") or ""):
         out["hint"] = "nothing was heard: Louie paused. Say it when he resumes, or in chat if it can't wait"
+    elif body.get("status") == "not_delivered" and body.get("reason"):
+        out["hint"] = "nothing was heard: the device can't play your voice. Tell him in chat"
     elif body.get("status") == "not_delivered":
         out["hint"] = "no device connected, so nothing was heard; say it in chat"
     elif body.get("status") == "not_spoken":

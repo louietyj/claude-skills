@@ -133,7 +133,9 @@ playback, and even an on-page WebRTC loopback, came back through the phone's
 mic word for word. The relay creates a WebSocket adapter that dials `/tts-in`,
 paces Soniox's 48 kHz PCM into it at real time (as stereo, in protobuf
 packets), and the page subscribes to the published track over WebRTC and plays
-it through `<audio>` with a ~500 ms jitter buffer.
+it through `<audio>` with a ~500 ms jitter buffer. That connection takes a few
+seconds after START, and audio sent before it is up is simply lost, so `speak`
+waits (up to 10s) for the page to say it is connected and playing.
 
 **The relay decides barge-in and keeps the clock.** While Claude speaks, two
 words of Louie's live transcript (or a pause) make the relay stop feeding the

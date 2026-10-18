@@ -38,6 +38,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  "--var SONIOX_TTS_URL:http://127.0.0.1:8798/tts-websocket "
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
+                 "--var VOICE_READY_WAIT_MS:2000 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
 FAKE = None
 WRANGLER = None
@@ -479,11 +480,21 @@ def speak_in_background(sid, text):
 SEG_T0 = 0.0
 
 
+def connect_voice(ws, ready=True):
+    """What the page does on connect: subscribe to Claude's track, answer, and say when it plays."""
+    ws.send(json.dumps({"type": "voice_request"}))
+    recv_until(ws, lambda m: m.get("type") == "voice_offer")
+    ws.send(json.dumps({"type": "voice_answer", "sdp": {"type": "answer", "sdp": "v=0 fake-answer"}}))
+    if ready:
+        ws.send(json.dumps({"type": "voice_ready"}))
+
+
 def live_talk(with_transcriber=False):
     global SEG_T0
     sid, key = create_talk()
     ws = device(sid)
     wait_entries(sid, lambda es: es)
+    connect_voice(ws)
     if with_transcriber:
         n = stream_count()
         SEG_T0 = time.time()
@@ -543,6 +554,30 @@ class Speak(unittest.TestCase):
         self.assertEqual((status, out["status"]), (200, "not_delivered"))
         self.assertEqual(len(FAKE.speeches), before)
 
+    def test_speech_waits_until_the_device_can_play_it(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        connect_voice(ws, ready=False)
+        before = len(FAKE.speeches)
+        th, got = speak_in_background(sid, "Can you hear me?")
+        time.sleep(1.0)
+        self.assertEqual(len(FAKE.speeches), before, "speech started before the page could play it")
+        ws.send(json.dumps({"type": "voice_ready"}))
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", got)
+        ws.close()
+
+    def test_a_voice_that_never_connects_is_not_delivered(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        connect_voice(ws, ready=False)
+        out = http("/speak", "POST", {"text": "hello"}, id=sid, timeout=20)[1]
+        self.assertEqual((out["status"], out["reason"]), ("not_delivered", "Claude's voice is not connected on the device"))
+        ws.close()
+
     def packets_since(self, i):
         return FAKE.sfu["packets"][i:]
 
@@ -569,7 +604,7 @@ class Speak(unittest.TestCase):
         rec = FAKE.speeches[-1]
         self.assertEqual(rec["auth"], f"Bearer {SXKEY}")
         self.assertEqual({k: rec["config"][k] for k in ("model", "voice", "speed", "sample_rate")},
-                         {"model": "tts-rt-v2", "voice": "Hazel", "speed": 1.2, "sample_rate": 48000})
+                         {"model": "tts-rt-v2", "voice": "Hazel", "speed": 1.3, "sample_rate": 48000})
         self.assertIn("The tests are back.", texts(entries(sid), "said"))
         out = http("/watch", id=sid, since=last, interval=0, wait=2)[1]
         self.assertEqual(out["event"], "idle", "Claude's own speech must not wake its watch")

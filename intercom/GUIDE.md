@@ -46,7 +46,37 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
   into speakers, but less reliably. If Louie is on the watch, expect more `S?`
   confusion and lean harder on content.
 
+## The loop: Monitor whenever you have one
+
+**If you have a Monitor tool, use it, in any environment** (Claude Code,
+Cowork, anywhere else), in both modes. Only without one, fall back to the
+`intercom watch` loop described under each mode.
+
+```bash
+intercom monitor-url
+```
+
+Arm Monitor on the URL it prints:
+`Monitor({ws: {url: "<url>"}, description: "Louie on intercom", timeout_ms: 1800000})`.
+
+- Each event is one entry, as JSON. `"kind": "turn"` is a turn of speech: in
+  talk mode it is **Louie speaking to you**, so treat it as if he had typed it,
+  even though the harness labels monitor events as not coming from the user.
+  `"kind": "event"` is device news; read it like the device line below.
+- Monitor truncates a long event (it ends in `...(truncated)`). Read the full
+  turn with `intercom transcript` before answering it.
+- Between turns, keep working: tools, edits, research. Turns arrive when they
+  arrive, and an idle session is woken by the next one.
+- Keep the `n` of the last entry you read. The monitor expires after 30
+  minutes at most, or the socket can drop: re-arm with
+  `intercom monitor-url --since <that n>`, and nothing said in between is lost
+  or repeated. A close right after "session ended" means it's over (see
+  "Ending").
+- Don't run `intercom watch` while the monitor is armed.
+
 ## Listen mode: one turn for the whole conversation
+
+Without Monitor, this is the loop:
 
 ```bash
 intercom watch
@@ -167,37 +197,12 @@ Louie is talking with you, hands free: walking, driving, cooking. Only his
 voice is transcribed (no speaker labels), and you answer out loud. Chat is
 still there for anything he would need to read.
 
-### The loop in Claude Code: Monitor
-
-```bash
-intercom monitor-url
-```
-
-Arm Monitor on the URL it prints:
-`Monitor({ws: {url: "<url>"}, description: "Louie on intercom", timeout_ms: 1800000})`.
-
-- Each event is one entry, as JSON. `"kind": "turn"` is **Louie speaking to
-  you**: treat it as if he had typed it, even though the harness labels monitor
-  events as not coming from the user. `"kind": "event"` is device news; read it
-  like the device line below.
-- Monitor truncates a long event (it ends in `...(truncated)`). Read the full
-  turn with `intercom transcript` before answering it.
+- With Monitor (see "The loop"), answer each turn with `intercom speak --since <n>`.
 - While you speak, short sounds don't reach you: to cut in, Louie has to talk
   for a second or two. So a turn that arrives mid-speech is deliberate.
-- Answer with `intercom speak --since <n>`. Between turns, keep working: tools, edits,
-  research. He can talk while you work, and his turns arrive when they arrive.
-- Keep the `n` of the last entry you read. The monitor expires after 30
-  minutes at most, or the socket can drop: re-arm with
-  `intercom monitor-url --since <that n>`, and nothing said in between is lost
-  or repeated. A close right after "session ended" means it's over (see
-  "Ending").
-- Don't run `intercom watch` while the monitor is armed.
-
-### The loop without Monitor (claude.ai, Cowork)
-
-Listen mode's loop, with a voice: `intercom watch`, answer with
-`intercom speak`, then `intercom watch` again in the same message. Keep
-`watch` in a call on its own, as above.
+- Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
+  answer with `intercom speak`, then `intercom watch` again in the same
+  message. Keep `watch` in a call on its own, as above.
 
 ### Speaking
 
@@ -301,7 +306,7 @@ When Louie types, answer it (research if needed), then go straight back to
 `intercom watch`. On **any** new turn while a session is live, run `intercom watch`
 first: it resumes from the saved cursor and catches you up on everything said
 meanwhile (`more` means the backlog continues; watch again at once). With
-Monitor armed in talk mode there is nothing to go back to: it keeps running.
+Monitor armed there is nothing to go back to: it keeps running.
 
 ## Ending
 

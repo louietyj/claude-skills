@@ -53,7 +53,7 @@ const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
                         endpoint_latency_adjustment_level: 0 };
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
-                     sample_rate: 48000, speed: 1.2, reduce_silence: true, return_timestamps: true };
+                     sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
 const TTS_BYTES_PER_S = 96000;
 const VOICE_TRACK = "claude";
 const PUMP_MS = 50;
@@ -61,6 +61,8 @@ const VOICE_LEAD_S = 0.2;
 const VOICE_CHUNK_BYTES = 9600;          // 100 ms mono; doubled to stereo it stays under the 32 KB packet cap
 // SFU forwarding plus the page's ~500 ms jitter buffer: how far the ear trails the relay.
 const VOICE_PLAYOUT_MS = 700;
+// The page's WebRTC connection takes a few seconds after START; audio fed before it is up is lost.
+const VOICE_READY_WAIT_MS = 10_000;
 // A paragraph per call: an interruption then costs at most one paragraph.
 const SPEAK_MAX = 400;
 const BARGE_IN_WORDS = 2;
@@ -237,6 +239,7 @@ export class Session {
     this.voiceOut = null;        // the SFU adapter's socket: PCM in, Claude's voice track out
     this.voicePending = null;
     this.voiceSub = null;        // the page's SFU session, awaiting its answer
+    this.voiceReady = false;     // the page says it is connected and playing
     this.speechSpans = [];       // [start, end|null] in session seconds: when Claude's voice could echo
     this.loudSpans = [];         // [start, end] when the page's sustained-energy gate was open
     this.loudFrom = null;
@@ -545,6 +548,7 @@ export class Session {
       try { server.close(1000); } catch {}
       if (this.device !== server) return;
       this.device = null;
+      this.voiceReady = false;
       if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", "the device disconnected");
       this.closeTranscriber();
       await this.flushTurn();
@@ -567,6 +571,7 @@ export class Session {
     if (msg.type === "pause") return this.pause();
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
+    if (msg.type === "voice_ready") { this.voiceReady = true; return; }
     if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
     if (msg.type === "vis") {
       const who = this.meta.ui ?? "device";
@@ -731,7 +736,7 @@ export class Session {
       this.meta.voice = { adapterId: t.adapterId, sessionId: t.sessionId };
       await this.saveMeta();
       // A page subscribed to the previous publication would hear nothing.
-      if (!forPage) this.toDevice({ type: "voice_restart" });
+      if (!forPage) { this.voiceReady = false; this.toDevice({ type: "voice_restart" }); }
       return this.meta.voice;
     })();
     try { return await this.voicePending; } finally { this.voicePending = null; }
@@ -758,6 +763,7 @@ export class Session {
 
   // The page asks for the track; the SFU offers it, and the page's answer goes back.
   async subscribeVoice() {
+    this.voiceReady = false;
     try {
       const pub = await this.ensureVoice(true);
       const { sessionId } = await this.sfu("/sessions/new", "POST");
@@ -803,6 +809,12 @@ export class Session {
     if (!this.voiceOut) {
       try { await this.ensureVoice(); } catch (e) { return json({ status: "error", error: e.message }, 502); }
       if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
+    }
+    const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
+    while (!this.voiceReady && this.device && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
+    if (!this.voiceReady) {
+      return json({ status: "not_delivered", reason: "Claude's voice is not connected on the device", spoken: "",
+                    unspoken: text });
     }
 
     // Claude says which entry it last read; a turn after that means it would be

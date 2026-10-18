@@ -215,6 +215,45 @@ Cut:
 
 ## Running the call
 
+### The loop: Monitor whenever you have one
+
+**If you have a Monitor tool, use it, in any environment.** Right after
+`dispatch`, arm it on `follow`:
+`Monitor({command: "dialer follow CALL_ID", description: "call to <who>", timeout_ms: 1800000})`.
+Every line is an event, and the stream ends with the call:
+
+```text
+follow: streaming call_8f2e
+user: Bright Smiles Dental, how can I help?
+agent: Hi, this is Louie Tan's AI assistant. This call is recorded.  [...still speaking]
+user: Sure, so our cancellation policy works like this. We ask for 48 hours' notice.  [...still speaking]
+user (cont.): If you cancel later than that, there's a $50 fee.
+user (edited): Sure, so our cancellation policy works like this. We ask for 48 hours notice.
+  [STEER LANDED] Louie says Wednesday afternoon also works.
+CONSULT call_8f2e:q7c1: They offered Tuesday 2pm. Accept?
+  answer: dialer answer call_8f2e:q7c1 <<'EOF', your text, then EOF alone on the last line
+CALL ENDED: agent_hangup, 184s. Full transcript: dialer transcript call_8f2e
+```
+
+- **Dialogue comes in batches, at most one every 10 seconds;** a consult and
+  the end come at once, with the dialogue so far ahead of them.
+- **`[...still speaking]`**: that turn is still going. Everything on the line is
+  a whole sentence Retell has stopped revising, but the speaker has not
+  finished the thought.
+- **`(edited)`**: Retell revised text you already had. The line is that turn
+  so far, in full, replacing what came before.
+- **`answer` and `steer` send and return** while follow runs, since the
+  stream already carries what happens next. Act, then wait for the next event.
+- **A long call outlives Monitor's 30 minutes.** On the expiry notice, arm the
+  same command again: it picks up where the last one stopped. Stopped some
+  other way? `dialer journal` first, then re-arm.
+- **The call in full:** `dialer watch CALL_ID` during it, `dialer transcript
+  CALL_ID` after.
+
+Without Monitor (claude.ai), `watch` is the loop, below.
+
+### Commands
+
 ```text
 dialer health
     Queue, token, agent, webhook, number. setup.sh already ran it; run it
@@ -240,6 +279,9 @@ dialer dispatch --to +16695550142 --other-party "…" --opening "…" --purpose 
     placing (an interrupted turn loses the tool call, not the call)? Watch
     it. None of them? It is another conversation's: leave it alone and
     dispatch again with --force.
+
+dialer follow CALL_ID
+    Under Monitor only; see "The loop" above. Runs until the call ends.
 
 dialer watch CALL_ID [--interval 10] [--budget 200] [--since N]
     Defaults as shown. Blocks, then prints one JSON object whose "event" is
@@ -285,7 +327,8 @@ dialer steer  CALL_ID [--speak-now] [watch flags] <<'EOF'
     its own line. Never as an argument: the shell rewrites it first, and
     "$50" arrives as "0".
     Send, then keep watching in the same process: same returns, same flags.
-    The next turn or two is what shows whether you were understood.
+    The next turn or two is what shows whether you were understood. With
+    follow running, send and return instead; those turns arrive there.
     If the agent asks something new before you answer, it queues: answering
     one consult returns the next straight away.
 

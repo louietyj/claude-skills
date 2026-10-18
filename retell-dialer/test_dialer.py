@@ -721,6 +721,264 @@ class ResumeAfterActing(unittest.TestCase):
         self.assertEqual(self.seen, {})
 
 
+def replay(stream, frames):
+    """Feed recorded frames at their arrival times, asking for a batch every
+    0.1s as follow's loop does. Returns [(t, line)]."""
+    out, i, t, final = [], 0, 0.0, False
+    while not final:
+        while i < len(frames) and frames[i]["t"] <= t:
+            final = final or frames[i]["frame"].get("type") == "call_ended"
+            stream.feed(frames[i]["frame"], frames[i]["t"])
+            i += 1
+        out += [(t, line) for line in stream.batch(t, final=final)]
+        t = round(t + 0.1, 1)
+    return out
+
+
+def frame(*items):
+    return {"type": "transcript_updated", "transcripts": list(items)}
+
+
+def said(iid, content, time_sec):
+    return {"id": iid, "role": iid.split("_")[0], "content": content, "time_sec": time_sec}
+
+
+class FollowRecordedCall(unittest.TestCase):
+    """dev/monitor-frames.jsonl is a real browser call: a 56-second monologue
+    from the "receptionist" that Retell revised as it went -- a word inserted,
+    one phrase flipped five times over 13 seconds, a full stop later taken back."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(HERE / "dev" / "monitor-frames.jsonl", encoding="utf-8") as fh:
+            cls.frames = [json.loads(line) for line in fh]
+        cls.out = replay(dialer.Stream(), cls.frames)
+
+    def test_batches_are_ten_seconds_apart_and_nothing_is_edited(self):
+        times = sorted({t for t, _ in self.out})
+        self.assertEqual(times, [6.0, 16.0, 26.0, 39.4, 49.4, 64.5, 74.5, 84.5, 94.5, 104.2])
+        self.assertFalse([l for _, l in self.out if "(edited)" in l])
+
+    def test_the_monologue_goes_out_in_settled_sentences(self):
+        pieces = [l for _, l in self.out if l.startswith("user") and "48 hours" in l
+                  or l.startswith("user (cont.)")]
+        self.assertEqual(len(pieces), 5)
+        for piece in pieces[:-1]:
+            self.assertTrue(piece.endswith("." + dialer.STILL), piece)
+        # Sent once the five-way flip of this phrase had stopped.
+        self.assertIn("there is a fee of $50", pieces[1])
+
+    def test_the_pieces_add_up_to_what_retell_finally_heard(self):
+        final = [f["frame"]["transcripts"][0]["content"] for f in self.frames
+                 if f["frame"].get("transcripts")
+                 and f["frame"]["transcripts"][0]["id"] == "user_1"][-1]
+        pieces = [l.split(": ", 1)[1].replace(dialer.STILL, "") for _, l in self.out
+                  if l.startswith("user") and ("48 hours" in l or "(cont.)" in l)]
+        self.assertEqual(" ".join(pieces), final.strip())
+
+
+class FollowStream(unittest.TestCase):
+    def test_agent_sentences_go_out_without_settling(self):
+        s = dialer.Stream()
+        s.feed(frame(said("agent_0", "Hi there. This is", 1.0)), 1.0)
+        self.assertEqual(s.lines(1.0), ["agent: Hi there." + dialer.STILL])
+
+    def test_a_user_sentence_waits_until_retell_leaves_it_alone(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "Sure. ", 1.0)), 1.0)
+        self.assertEqual(s.lines(2.9), [])
+        self.assertEqual(s.lines(3.0), ["user: Sure." + dialer.STILL])
+
+    def test_a_flip_inside_the_window_restarts_it(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "Sure. ", 1.0)), 1.0)
+        s.feed(frame(said("user_0", "Sure, so. ", 1.0)), 2.5)
+        self.assertEqual(s.lines(3.0), [])
+        self.assertEqual(s.lines(4.5), ["user: Sure, so." + dialer.STILL])
+
+    def test_a_closed_turn_goes_out_in_full_once_quiet(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "Tuesday, maybe", 1.0)), 1.0)
+        s.feed(frame(said("agent_1", "Okay", 3.0)), 1.5)
+        self.assertEqual(s.lines(3.0), ["user: Tuesday, maybe"])
+
+    def test_a_turn_talked_over_is_not_cut_mid_sentence(self):
+        # On a live call "Thanks" went out as the agent's whole goodbye, and
+        # "so much for your help, bye." followed as a continuation.
+        s = dialer.Stream()
+        s.feed(frame(said("agent_0", "Covers it. Thanks", 1.0)), 1.0)
+        s.feed(frame(said("user_1", "Yes, that's correct.", 2.0)), 2.0)
+        self.assertEqual(s.lines(2.0), ["agent: Covers it." + dialer.STILL])
+        s.feed(frame(said("agent_0", "Covers it. Thanks so much, bye.", 1.0)), 2.5)
+        self.assertEqual(s.lines(4.5), ["agent (cont.): Thanks so much, bye.",
+                                        "user: Yes, that's correct." + dialer.STILL])
+
+    def test_revised_sent_text_goes_out_again_marked_edited(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "We charge 15. Then", 1.0)), 1.0)
+        self.assertEqual(s.lines(3.0), ["user: We charge 15." + dialer.STILL])
+        s.feed(frame(said("user_0", "We charge 50. Then more. And", 1.0)), 4.0)
+        self.assertEqual(s.lines(5.0), [])
+        self.assertEqual(s.lines(6.0),
+                         ["user (edited): We charge 50. Then more." + dialer.STILL])
+
+    def test_a_taken_back_full_stop_is_not_an_edit_until_it_settles(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "Instead of 48. ", 1.0)), 1.0)
+        self.assertEqual(s.lines(3.0), ["user: Instead of 48." + dialer.STILL])
+        s.feed(frame(said("user_0", "Instead of 48 because we block", 1.0)), 4.0)
+        self.assertEqual(s.lines(6.5), [])
+        s.feed(frame(said("user_0", "Instead of 48 because we block it. ", 1.0)), 7.0)
+        self.assertEqual(s.lines(9.0), ["user (edited): Instead of 48 because we block it."
+                                        + dialer.STILL])
+
+    def test_dialogue_is_held_between_batches_unless_forced(self):
+        s = dialer.Stream()
+        s.feed(frame(said("agent_0", "One.", 1.0)), 1.0)
+        self.assertEqual(len(s.batch(1.0)), 1)
+        s.feed(frame(said("agent_0", "One. Two.", 1.0)), 2.0)
+        self.assertEqual(s.batch(2.0), [])
+        self.assertEqual(s.batch(2.0, force=True), ["agent (cont.): Two." + dialer.STILL])
+
+    def test_a_resumed_stream_does_not_repeat_itself(self):
+        first = dialer.Stream()
+        first.feed(frame(said("agent_0", "One.", 1.0)), 1.0)
+        first.lines(1.0)
+        again = dialer.Stream(json.loads(json.dumps(first.sent)))
+        again.feed({"type": "transcript_snapshot",
+                    "transcripts": [said("agent_0", "One. Two.", 1.0)]}, 5.0)
+        self.assertEqual(again.lines(5.0), ["agent (cont.): Two." + dialer.STILL])
+
+    def test_a_steer_is_reported_once_when_it_lands(self):
+        s = dialer.Stream()
+        steer = {"id": "injected_0", "role": "injected", "content": "Wednesday works too.",
+                 "time_sec": 2.0}
+        s.feed(frame(steer), 2.0)
+        self.assertEqual(s.lines(2.0), ["  [STEER LANDED] Wednesday works too."])
+        s.feed(frame(steer), 3.0)
+        self.assertEqual(s.lines(3.0), [])
+
+    def test_long_lines_wrap_short_of_monitors_cutoff(self):
+        parts = dialer.wrap("user: " + "word " * 300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p) <= dialer.FOLLOW_WRAP for p in parts))
+        self.assertTrue(all(p.startswith("    ") for p in parts[1:]))
+
+
+class FollowRun(unittest.TestCase):
+    """cmd_follow end to end, with Retell, the queue and the socket stubbed."""
+
+    CONSULT = {"consult_id": "call_1:qab12", "call_id": "call_1",
+               "question": "They offered Tuesday 2pm. Accept?", "queued_behind": 0}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {n: getattr(dialer, n) for n in
+                      ("JOURNAL", "FOLLOW_STATUS", "queue", "call_status", "ended_result")}
+        dialer.JOURNAL = os.path.join(self.tmp.name, "journal.jsonl")
+        dialer.FOLLOW_STATUS = 0.3
+        self.pending_checks = 0
+        self.status_checks = 0
+
+        def queue(cfg, path, **kw):
+            if path == "/poll":
+                time.sleep(0.05)
+                return 200, dict(self.CONSULT)
+            self.pending_checks += 1
+            waiting = [self.CONSULT] if self.pending_checks == 1 else []
+            return 200, {"count": len(waiting), "items": waiting}
+
+        def call_status(cfg, call_id):
+            self.status_checks += 1
+            return "ongoing" if self.status_checks < 4 else "ended"
+
+        dialer.queue, dialer.call_status = queue, call_status
+        dialer.ended_result = lambda cfg, call_id, why: {
+            "call_ended": True, "call_status": "ended",
+            "disconnection_reason": "agent_hangup", "duration_ms": 5000}
+
+        class Sock:
+            close_code = None
+
+            def recv(self, timeout=None):
+                time.sleep(0.05)
+                return None
+
+            def close(self):
+                pass
+
+        fake_ws = types.ModuleType("ws")
+        fake_ws.monitor = lambda *a, **kw: Sock()
+        fake_ws.WSError = type("WSError", (Exception,), {})
+        self.saved_ws = sys.modules.get("ws")
+        sys.modules["ws"] = fake_ws
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(dialer, name, value)
+        if self.saved_ws is None:
+            sys.modules.pop("ws", None)
+        else:
+            sys.modules["ws"] = self.saved_ws
+        self.tmp.cleanup()
+
+    def follow(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dialer.cmd_follow({"retell_api_key": "k"}, Args(call_id="call_1"))
+        return buf.getvalue().splitlines()
+
+    def test_a_consult_is_reported_once_and_its_timeout_too(self):
+        out = self.follow()
+        self.assertEqual(sum(l.startswith("CONSULT call_1:qab12: ") for l in out), 1)
+        self.assertEqual(sum("closed without your answer" in l for l in out), 1)
+        self.assertEqual(out[-1], "CALL ENDED: agent_hangup, 5s. Full transcript: "
+                                  "dialer transcript call_1")
+
+    def test_an_answered_consult_closes_quietly(self):
+        dialer.journal("answer", call_id="call_1", consult_id="call_1:qab12", text="no")
+        out = self.follow()
+        self.assertFalse([l for l in out if "closed without your answer" in l])
+
+    def test_the_heartbeat_stops_when_the_call_ends(self):
+        self.follow()
+        self.assertFalse(dialer.follow_alive("call_1"))
+        self.assertEqual(dialer.load_follow_state("call_1")["consults"], ["call_1:qab12"])
+
+
+class ActingWhileFollowing(ResumeAfterActing):
+    """With follow streaming the call, answer and steer send and return: a
+    watch on top would block the shell for minutes on what Monitor carries."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved["JOURNAL"] = dialer.JOURNAL
+        dialer.JOURNAL = os.path.join(self.tmp.name, "journal.jsonl")
+
+    def tearDown(self):
+        super().tearDown()
+        self.tmp.cleanup()
+
+    def beat(self, age):
+        dialer.save_follow_state("call_1", {"pid": 1, "heartbeat": time.time() - age})
+
+    def test_answer_does_not_watch_while_follow_streams(self):
+        self.beat(1)
+        self.run_cli("answer", "call_1:qab12")
+        self.assertEqual(self.seen, {})
+
+    def test_steer_does_not_either(self):
+        self.beat(1)
+        self.run_cli("steer", "call_1")
+        self.assertEqual(self.seen, {})
+
+    def test_a_stale_heartbeat_means_watching_as_before(self):
+        self.beat(dialer.FOLLOW_STALE + 1)
+        self.run_cli("steer", "call_1")
+        self.assertEqual(self.seen["call_id"], "call_1")
+
+
 class AgentPrompt(unittest.TestCase):
     """agent.json carries a copy of agent/prompt.md; an edit to one without
     `agent-push` deploys a prompt nobody reviewed."""

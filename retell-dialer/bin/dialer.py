@@ -11,7 +11,8 @@ live calls when it was left to the caller:
 
   * `answer` and `steer` resume watching in the same process -- two commands
     invite prose between them, and that prose is dead air on a stranger's
-    phone.
+    phone. Unless `follow` is streaming the call to Monitor, which already
+    carries what happens next.
   * Requests are built by urllib, never curl. `curl -G` folds the body into the
     query string and sends none, which hung three calls on an empty req.json().
   * Both `watch` and `poll` check Retell's call status themselves. Neither the
@@ -466,6 +467,61 @@ MONITOR_FATAL = {4000: "malformed request",
                  4008: "5 watchers already on this call, dashboard tabs included"}
 
 
+def run_monitor(cfg, call_id, stop, state, on_frame):
+    """Hand one call's monitor frames to `on_frame` until the call ends or
+    `stop` is set. Sets `state` "ended" on a hangup, "error" on a failure a
+    reconnect cannot fix, and adds every frame type seen to "types"."""
+    import ws
+
+    # Only 1000 means the call is over. 4004 is "not ongoing", which a call
+    # gets for as long as it rings, so it is retried rather than a hangup.
+    attempts = 0
+    while not stop.is_set():
+        try:
+            sock = ws.monitor(cfg["retell_api_key"], call_id, timeout=20)
+        except Exception as e:                  # noqa: BLE001 - reported, not raised
+            state["error"] = f"monitor: {type(e).__name__}: {e}"
+            return
+        code = pump(ws, sock, stop, state, on_frame)
+        if stop.is_set():
+            return
+        if code == 1000:
+            state["ended"] = state["ended"] or "call_ended"
+            return
+        if code in MONITOR_FATAL:
+            state["error"] = f"monitor: ws {code}, {MONITOR_FATAL[code]}"
+            return
+        # 4004, 1011 or a dropped socket: the reconnect's snapshot fills the gap.
+        attempts += 1
+        time.sleep(min(4.0, 0.5 * 2 ** attempts))
+
+
+def pump(ws, sock, stop, state, on_frame):
+    """Drain one connection. Returns its close code, or None if we stopped."""
+    try:
+        while not stop.is_set():
+            try:
+                raw = sock.recv(timeout=2)
+            except (ws.WSError, OSError):
+                return 1006
+            if raw is None:
+                if sock.close_code is not None:
+                    return sock.close_code
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            kind = msg.get("type", "?")
+            state["types"].add(kind)
+            if kind == "call_ended":
+                state["ended"] = "call_ended"
+                return 1000
+            on_frame(msg)
+    finally:
+        sock.close()
+
+
 def watch_loop(cfg, call_id, budget, interval, since=0):
     """Supervise on two channels: the consult queue and the live transcript.
 
@@ -477,60 +533,16 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
     nobody waiting on the far end."""
     import threading
 
-    import ws
-
     state = {"turns": [], "by_id": {}, "ended": None, "consult": None,
              "error": None, "types": set()}
     stop = threading.Event()
 
-    def run_monitor():
-        # Only 1000 means the call is over. 4004 is "not ongoing", which a call
-        # gets for as long as it rings, so it is retried rather than a hangup.
-        attempts = 0
-        while not stop.is_set():
-            try:
-                sock = ws.monitor(cfg["retell_api_key"], call_id, timeout=20)
-            except Exception as e:                  # noqa: BLE001 - reported, not raised
-                state["error"] = f"monitor: {type(e).__name__}: {e}"
-                return
-            code = pump(sock)
-            if stop.is_set():
-                return
-            if code == 1000:
-                state["ended"] = state["ended"] or "call_ended"
-                return
-            if code in MONITOR_FATAL:
-                state["error"] = f"monitor: ws {code}, {MONITOR_FATAL[code]}"
-                return
-            # 4004, 1011 or a dropped socket: the reconnect's snapshot fills the gap.
-            attempts += 1
-            time.sleep(min(4.0, 0.5 * 2 ** attempts))
+    def on_frame(msg):
+        if merge_turns(state["by_id"], msg):
+            state["turns"] = list(state["by_id"].values())
 
-    def pump(sock):
-        """Drain one connection. Returns its close code, or None if we stopped."""
-        try:
-            while not stop.is_set():
-                try:
-                    raw = sock.recv(timeout=2)
-                except (ws.WSError, OSError):
-                    return 1006
-                if raw is None:
-                    if sock.close_code is not None:
-                        return sock.close_code
-                    continue
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                kind = msg.get("type", "?")
-                state["types"].add(kind)
-                if kind == "call_ended":
-                    state["ended"] = "call_ended"
-                    return 1000
-                if merge_turns(state["by_id"], msg):
-                    state["turns"] = list(state["by_id"].values())
-        finally:
-            sock.close()
+    def monitor():
+        run_monitor(cfg, call_id, stop, state, on_frame)
 
     def run_poll():
         _, body = queue(cfg, "/poll", params={"wait": budget, "call_id": call_id},
@@ -538,7 +550,7 @@ def watch_loop(cfg, call_id, budget, interval, since=0):
         if isinstance(body, dict) and body.get("question"):
             state["consult"] = body
 
-    threads = [threading.Thread(target=t, daemon=True) for t in (run_monitor, run_poll)]
+    threads = [threading.Thread(target=t, daemon=True) for t in (monitor, run_poll)]
     for t in threads:
         t.start()
 
@@ -631,6 +643,306 @@ def cmd_poll(cfg, args):
     emit(poll_loop(cfg, args.call_id, args.budget))
 
 
+# --- follow: the call as a stream, for Claude Code's Monitor -----------------
+
+FOLLOW_HOLD = 10      # seconds between batches of dialogue; each one wakes Claude
+FOLLOW_SETTLE = 2     # how long Retell must leave a sentence alone before it goes out
+FOLLOW_WRAP = 450     # Monitor cuts a line off at about 490 characters
+FOLLOW_STALE = 15     # a heartbeat older than this means no follow is running
+FOLLOW_STATUS = 15    # seconds between checks of call status and the consult queue
+STILL = "  [...still speaking]"
+FOLLOWING = "sent; not watching, since follow is streaming this call and the next turns arrive there"
+SENTENCE_END = re.compile(r"[.?!][\"')\]]*(?=\s|$)")
+
+
+def last_sentence_end(text):
+    ends = list(SENTENCE_END.finditer(text))
+    return text[:ends[-1].end()] if ends else ""
+
+
+def wrap(line):
+    """One line per Monitor event, each short enough to arrive whole."""
+    out = []
+    while len(line) > FOLLOW_WRAP:
+        cut = line.rfind(" ", 0, FOLLOW_WRAP)
+        cut = cut if cut > 0 else FOLLOW_WRAP
+        out.append(line[:cut])
+        line = "    " + line[cut:].lstrip()
+    return out + [line]
+
+
+def describe(item):
+    """A line for an item nobody speaks."""
+    role = item.get("role")
+    if role == "injected":
+        return f"  [STEER LANDED] {item.get('content', '')}"
+    if role == "node_transition":
+        return f"  [NODE] {item.get('former_node_name')} -> {item.get('new_node_name')}"
+    if role == "sms":
+        return f"  [SMS] {item.get('content', '')}"
+    return render_turns([item])[0]
+
+
+class Stream:
+    """The live transcript as lines to report, fed monitor frames.
+
+    The agent's text only grows. A user turn is Retell's current hypothesis of
+    the whole turn, revised words and punctuation alike, sometimes ten seconds
+    back. So a user turn goes out up to a sentence end every version of the
+    last FOLLOW_SETTLE agrees on; any turn goes out in full once a later one
+    exists and it has gone quiet (Retell sends no other end); and text revised
+    after it went out goes again, marked edited.
+    """
+
+    def __init__(self, sent=None):
+        self.items = {}               # id -> latest version
+        self.seq = {}                 # id -> order of first arrival, for ties
+        self.history = {}             # id -> [(t, content)], pruned to FOLLOW_SETTLE
+        self.sent = dict(sent or {})  # id -> text reported, or True for a non-spoken item
+        self.last_batch = float("-inf")
+
+    def feed(self, msg, now):
+        for item in msg.get("transcripts") or []:
+            iid = item.get("id")
+            if not iid:
+                continue
+            self.seq.setdefault(iid, len(self.seq))
+            self.items[iid] = item
+            if item.get("role") in SPOKEN:
+                versions = self.history.setdefault(iid, [])
+                content = item.get("content") or ""
+                if not versions or versions[-1][1] != content:
+                    versions.append((now, content))
+
+    def ordered(self):
+        # time_sec is 0 before any word timing exists: such an item is the newest.
+        return sorted(self.items, key=lambda i: (self.items[i].get("time_sec") or float("inf"),
+                                                 self.seq[i]))
+
+    def settled(self, iid, now):
+        """The longest prefix ending a sentence that no version of the last
+        FOLLOW_SETTLE contradicts; empty if the turn is younger than that."""
+        versions = self.history.get(iid) or []
+        older = [n for n, (t, _) in enumerate(versions) if t <= now - FOLLOW_SETTLE]
+        if not older:
+            return ""
+        del versions[:older[-1]]
+        window = [content for _, content in versions]
+        for end in reversed(list(SENTENCE_END.finditer(window[-1]))):
+            cut = window[-1][:end.end()]
+            if all(content.startswith(cut) for content in window):
+                return cut
+        return ""
+
+    def quiet(self, iid, now):
+        versions = self.history.get(iid)
+        return not versions or versions[-1][0] <= now - FOLLOW_SETTLE
+
+    def lines(self, now, final=False):
+        """Everything new, and marks it sent. `final` treats every turn as closed."""
+        out = []
+        order = self.ordered()
+        spoken = [i for i in order if self.items[i].get("role") in SPOKEN]
+        open_id = spoken[-1] if spoken and not final else None
+        for iid in order:
+            item, role = self.items[iid], self.items[iid].get("role")
+            if role not in SPOKEN:
+                if iid not in self.sent:
+                    out.append(describe(item))
+                    self.sent[iid] = True
+                continue
+            text = (item.get("content") or "").strip()
+            # A turn talked over keeps growing after a later one starts, so
+            # closed is not enough: it must also have gone quiet.
+            if final or iid != open_id and self.quiet(iid, now):
+                target = text
+            elif role == "agent":
+                target = last_sentence_end(text)
+            else:
+                target = self.settled(iid, now).strip()
+            sent = self.sent.get(iid) or ""
+            # A shorter version of what went out is a revision still settling.
+            if not target or sent.startswith(target):
+                continue
+            tail = STILL if iid == open_id or target != text else ""
+            if target.startswith(sent):
+                label = f"{role} (cont.)" if sent else role
+                out.append(f"{label}: {target[len(sent):].strip()}{tail}")
+            else:
+                out.append(f"{role} (edited): {target}{tail}")
+            self.sent[iid] = target
+        return out
+
+    def batch(self, now, force=False, final=False):
+        """What to send now: nothing until FOLLOW_HOLD after the last batch,
+        unless `force` (a consult) or `final` (the call is over)."""
+        if not (force or final or now - self.last_batch >= FOLLOW_HOLD):
+            return []
+        out = self.lines(now, final)
+        if out:
+            self.last_batch = now
+        return out
+
+
+def follow_state_path(call_id):
+    return os.path.join(os.path.dirname(JOURNAL), f"follow-{call_id}.json")
+
+
+def load_follow_state(call_id):
+    try:
+        with open(follow_state_path(call_id), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_follow_state(call_id, state):
+    path = follow_state_path(call_id)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
+def follow_alive(call_id):
+    """Whether a follow is streaming this call. answer and steer ask, so they
+    do not block the shell watching what the stream already carries."""
+    beat = load_follow_state(call_id).get("heartbeat")
+    return isinstance(beat, (int, float)) and time.time() - beat < FOLLOW_STALE
+
+
+def answered_consults():
+    """Consult ids the journal shows an answer going out for."""
+    try:
+        with open(JOURNAL, encoding="utf-8") as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+    except (OSError, ValueError):
+        return set()
+    return {r.get("consult_id") for r in rows if r.get("command") == "answer"}
+
+
+def consult_lines(body):
+    cid = body["consult_id"]
+    out = [f"CONSULT {cid}: {body.get('question')}"]
+    if body.get("queued_behind"):
+        out.append(f"  {body['queued_behind']} more queued behind it")
+    out.append(f"  answer: dialer answer {cid} <<'EOF', your text, then EOF alone on the last line")
+    return out
+
+
+def unanswered_lines(cid):
+    return [f"CONSULT {cid} closed without your answer: it timed out after 90s and "
+            "the agent promised a callback, or the call ended. If it still matters, steer."]
+
+
+def ended_lines(call_id, result):
+    if result.get("event") == "taken_over":
+        return [f"TAKEN OVER: {result['note']}"]
+    reason = result.get("disconnection_reason") or result.get("call_status")
+    if result.get("call_status") == "not_connected":
+        return [f"CALL NOT CONNECTED: {reason}"]
+    secs = round((result.get("duration_ms") or 0) / 1000)
+    return [f"CALL ENDED: {reason}, {secs}s. Full transcript: dialer transcript {call_id}"]
+
+
+def cmd_follow(cfg, args):
+    """The call as lines on stdout, one Monitor event each, until it ends.
+
+    What went out is kept in a state file, so a follow re-armed after
+    Monitor's 30-minute limit picks up where the last one stopped. A newer
+    follow on the same call takes the file over and the older one exits."""
+    import threading
+
+    call_id = args.call_id
+    me = os.getpid()
+    saved = load_follow_state(call_id)
+    stream = Stream(saved.get("sent"))
+    reported, settled = set(saved.get("consults", [])), set(saved.get("settled", []))
+    lock, stop = threading.Lock(), threading.Event()
+    state = {"ended": None, "error": None, "types": set()}
+    urgent = []
+
+    def on_frame(msg):
+        with lock:
+            stream.feed(msg, time.monotonic())
+
+    def poll():
+        while not stop.is_set():
+            status, body = queue(cfg, "/poll", params={"wait": POLL_WINDOW, "call_id": call_id},
+                                 timeout=POLL_WINDOW + 15)
+            cid = body.get("consult_id") if isinstance(body, dict) else None
+            if cid and cid not in reported:
+                with lock:
+                    reported.add(cid)
+                    urgent.extend(consult_lines(body))
+            # /poll keeps handing out the oldest consult until it settles.
+            if cid or status != 200:
+                stop.wait(1)
+
+    def save(heartbeat, take_over=False):
+        if not take_over and load_follow_state(call_id).get("pid", me) != me:
+            return False
+        with lock:
+            snapshot = {"pid": me, "heartbeat": heartbeat, "sent": dict(stream.sent),
+                        "consults": sorted(reported), "settled": sorted(settled)}
+        save_follow_state(call_id, snapshot)
+        return True
+
+    def say(lines):
+        for line in lines:
+            for part in wrap(line):
+                print(part, flush=True)
+
+    save(time.time(), take_over=True)
+    for target in (lambda: run_monitor(cfg, call_id, stop, state, on_frame), poll):
+        threading.Thread(target=target, daemon=True).start()
+    say([f"follow: streaming {call_id}" + (", resumed after what went out before" if saved else "")])
+
+    error_said = False
+    next_status = next_beat = 0.0
+    while True:
+        now = time.monotonic()
+        if now >= next_status:
+            next_status = now + FOLLOW_STATUS
+            live = call_status(cfg, call_id)
+            if live == "not_found":
+                say([f"ERROR: {NO_SUCH_CALL}"])
+                sys.exit(1)
+            if live in ENDED_STATUSES:
+                state["ended"] = state["ended"] or live
+            status, body = queue(cfg, "/pending", timeout=15)
+            if status == 200 and isinstance(body, dict):
+                waiting = {i.get("consult_id") for i in body.get("items", [])}
+                gone = reported - settled - waiting
+                answered = answered_consults() if gone else set()
+                with lock:
+                    for cid in sorted(gone):
+                        settled.add(cid)
+                        if cid not in answered:
+                            urgent.extend(unanswered_lines(cid))
+        with lock:
+            news, urgent[:] = urgent[:], []
+            out = stream.batch(now, force=bool(news), final=bool(state["ended"])) + news
+        say(out)
+        if state["error"] and not error_said:
+            error_said = True
+            say([f"MONITOR DOWN: {state['error']}. Consults still arrive; dialogue does not."])
+        if state["ended"]:
+            stop.set()
+            say(ended_lines(call_id, ended_result(cfg, call_id, state["ended"])))
+            save(None)
+            return
+        if now >= next_beat or out:
+            next_beat = now + 2
+            if not save(time.time()):
+                stop.set()
+                return
+        time.sleep(0.25)
+
+
 def read_text(args, target):
     """The answer or steer text, read raw from stdin.
 
@@ -687,6 +999,8 @@ def cmd_answer(cfg, args):
         emit({**answered, "hint": hint})
         sys.exit(1)
 
+    if follow_alive(call_id):
+        return emit({**answered, "hint": FOLLOWING})
     print(json.dumps(answered, ensure_ascii=False), file=sys.stderr)
     emit(watch_loop(cfg, call_id, args.budget, args.interval, args.since))
 
@@ -714,6 +1028,8 @@ def cmd_steer(cfg, args):
                               "in progress, not one still ringing or already over"})
         sys.exit(1)
 
+    if follow_alive(args.call_id):
+        return emit({**sent, "hint": FOLLOWING})
     print(json.dumps(sent, ensure_ascii=False), file=sys.stderr)
     emit(watch_loop(cfg, args.call_id, args.budget, args.interval, args.since))
 
@@ -976,7 +1292,7 @@ def main():
                     "until it ends. GUIDE.md is the full reference.")
     sub = ap.add_subparsers(
         dest="cmd", required=True,
-        metavar="{dispatch,watch,answer,steer,hangup,transcript,journal,gregorian_calendar,health}")
+        metavar="{dispatch,follow,watch,answer,steer,hangup,transcript,journal,gregorian_calendar,health}")
 
     def brief_args(parser):
         parser.add_argument("--opening", required=True,
@@ -1021,6 +1337,10 @@ def main():
     w.add_argument("call_id", help="as dispatch printed it")
     watch_args(w)
     w.set_defaults(fn=cmd_watch)
+
+    f = sub.add_parser("follow", help="stream the call for Monitor, one event per line, until it ends")
+    f.add_argument("call_id", help="as dispatch printed it")
+    f.set_defaults(fn=cmd_follow)
 
     p = sub.add_parser("poll", description="block until the agent consults, or the call ends")
     p.add_argument("--call-id")

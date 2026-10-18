@@ -23,7 +23,7 @@ to avoid.
 |---|---|
 | `SKILL.md` | thin skill body — just runs `setup.sh` |
 | `GUIDE.md` | how to run a call, printed in full by `setup.sh` so no reader truncates it |
-| `bin/dialer.py` | the CLI: health, dispatch, watch, answer, steer, transcript, journal, gregorian_calendar |
+| `bin/dialer.py` | the CLI: health, dispatch, follow, watch, answer, steer, transcript, journal, gregorian_calendar |
 | `bin/ws.py` | stdlib RFC 6455 client for Retell's live-transcript socket |
 | `test_dialer.py` | offline regression tests — `python test_dialer.py` |
 | `worker/` | the Durable Object queue (`wrangler deploy`) |
@@ -31,6 +31,7 @@ to avoid.
 | `agent/agent.json` | the Retell agent + response engine, ids templated out |
 | `agent/prompt.md` | the agent's prompt, source of `general_prompt` in `agent.json` |
 | `dev/webcall/` | localhost launcher, for exercising the loop without PSTN |
+| `dev/monitor-frames.jsonl` | every monitor frame of a recorded browser call, with arrival times; `follow`'s tests replay it |
 | `references/provisioning.md` | deploying the Worker, the agent, PII settings |
 | `references/retell-handbook.md` | Retell's handbook presets, as the agent recited them, and why they're off |
 
@@ -74,8 +75,9 @@ any interjection, because detecting the drop from the inside is impossible by
 construction.
 
 **Three things are structural rather than advisory**, each having cost a call:
-`answer` and `steer` resume watching in the same process — two commands invite
-prose between them, and that prose is dead air on a stranger's phone; every
+`answer` and `steer` resume watching in the same process (unless `follow` is
+streaming) — two commands invite prose between them, and that prose is dead air
+on a stranger's phone; every
 request is built by urllib rather than curl, because `curl -G` folds the body into the query string
 and sends none; and both `watch` and `poll` check Retell's call status
 themselves, because neither the queue nor the monitor socket can tell "still
@@ -89,6 +91,25 @@ does a tool call end the utterance around it: the agent's "let me check" and
 its reply once the consult returns share one turn, which grows *behind* the
 tool entries, so `watch` resumes at the last spoken turn rather than the last
 entry. Resuming past it lost the agent's reply to every consult on a call.
+
+**`follow` waits for Retell to stop revising.** Retell's monitor has no
+finalisation flag. On a recorded call (`dev/monitor-frames.jsonl`) the agent's
+text only grew, a word every 400 ms, but the other side's turn came every
+~1.3 s as a fresh hypothesis of the whole turn: a word inserted mid-sentence,
+one phrase flipped five times over 13 seconds, a full stop taken back. So a
+turn goes out up to a sentence end every version of the last 2 s agrees on,
+which produced no edits on that call, and in full once a later turn exists and
+it has gone 2 s unchanged. Without that second condition, a goodbye talked
+over went out as "Thanks". Revisions that do come are sent, marked; case and
+punctuation count, since they can change meaning.
+
+**`follow` batches for Monitor.** Every event wakes Claude, so dialogue goes
+out at most every 10 s, and a consult or the end goes out at once. Monitor cuts
+off each line at about 490 characters but delivers a batch of shorter lines
+whole, so long lines wrap. While a follow's heartbeat is fresh, `answer` and
+`steer` skip their usual watch, which would block the shell for minutes on what
+the stream already carries. That's detected rather than flagged, because a
+forgotten flag would block it at exactly the moment Claude needs it.
 
 **The agent is Sonnet 5 with a phone line.** It does not need telling how to
 behave on a call; it needs Louie's facts, the authority to decide for him, and a

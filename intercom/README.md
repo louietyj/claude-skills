@@ -1,13 +1,19 @@
 # intercom
 
-Claude listens to a live conversation through Louie's phone or Pixel Watch and
-steers him in chat while it runs.
+Claude listens through Louie's phone or Pixel Watch, in one of two modes fixed
+when the session starts. **Listen**: Claude follows a live conversation and
+steers him in chat. **Talk**: Louie and Claude talk hands-free while Claude
+keeps working; Claude speaks through the device with Soniox TTS (`tts-rt-v2`,
+voice Hazel). The relay refuses speech in a listen session, and the device
+shows the mode on its START button, so Louie's tap is the consent.
 
 The device's browser streams mic audio to a Cloudflare Durable Object, which
 relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms) and
 stores numbered entries: speaker turns, device events, notes sent. Claude
 long-polls them with `intercom watch` from a sandbox that can be recycled at any
-moment. Everything that matters lives in the object, so a recycle only pauses
+moment, or, in Claude Code, streams them with `Monitor` over `/events` (each
+session has its own key for this, so the CLI token never lands in a Monitor
+URL). Everything that matters lives in the object, so a recycle only pauses
 Claude. An optional full-file pass afterwards goes to Deepgram Nova-3.
 
 Nothing is retained by either provider: Soniox real-time stores no audio or
@@ -24,11 +30,11 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/intercom.py` | the CLI: health, start, watch, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, watch, monitor-url, speak, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
-| `dev/fake_stt.py` | Soniox-shaped live and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
+| `dev/fake_stt.py` | Soniox-shaped live STT and TTS and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
 | `dev/soniox_compare.py` | streams a file straight to Soniox, for comparing providers on identical bytes |
 | `dev/make_sample.ps1` | two Windows voices act out a consultation -> `dev/sample.webm` |
@@ -110,9 +116,23 @@ The page therefore reports `visibilitychange`, the relay logs "mic is OFF"
 entries, and `watch` names the device state on every return. With Wake Lock
 held, the watch stayed awake in ambient mode, wrist down.
 
-**No browser audio processing.** `noiseSuppression` and `autoGainControl` are
-off and the recorder runs at 64 kbps: both flatten the differences between
-voices that diarization relies on.
+**No browser audio processing in listen mode.** `noiseSuppression` and
+`autoGainControl` are off and the recorder runs at 64 kbps: both flatten the
+differences between voices that diarization relies on. Talk mode turns all
+three on, echo cancellation above all: without it Claude transcribes its own
+voice from the speaker.
+
+**Talk mode cuts turns late on purpose.** Soniox endpointing is at its most
+patient (`max_endpoint_delay_ms` 3000, sensitivity -1), then `<end>` opens a
+2.5s merge window that more speech extends. A turn is something Claude acts on,
+so a mid-thought pause must not split it; latency matters less than it would
+for a voice bot.
+
+**The relay decides barge-in, the page only plays.** While Claude speaks, two
+words of Louie's live transcript (or a tap) make the relay send `tts_stop` and
+cancel the TTS stream. The page reports how many seconds it played, and
+Soniox's character timestamps turn that into the words he heard. `speak`
+takes at most 400 characters, so an interruption costs one paragraph.
 
 **One recorder run = one webm header = one transcriber stream** (a "segment").
 A stream that resumes mid-container is not reliably decodable, so every

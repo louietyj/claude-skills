@@ -34,6 +34,7 @@ CLI, DEV, DGKEY, SXKEY = "clitok", "devtok", "dgkey", "sxkey"
 WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM_API_KEY:{DGKEY} "
                  f"--var SONIOX_API_KEY:{SXKEY} "
                  "--var SONIOX_URL:http://127.0.0.1:8798/transcribe-websocket "
+                 "--var SONIOX_TTS_URL:http://127.0.0.1:8798/tts-websocket "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
 FAKE = None
 WRANGLER = None
@@ -263,9 +264,12 @@ class Turns(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual(s["audio"][:2], [b"WEBM-HEADER", b"audio-1"])
         c = s["config"]
-        self.assertEqual(c["api_key"], SXKEY)
+        # The key rides on the connection; api_key in the config is deprecated.
+        self.assertEqual(s["auth"], f"Bearer {SXKEY}")
+        self.assertNotIn("api_key", c)
         self.assertEqual(c["model"], "stt-rt-v5")
         self.assertTrue(c["enable_speaker_diarization"])
+        self.assertNotIn("max_endpoint_delay_ms", c)
         self.assertEqual(c["context"]["terms"], ["Wooga", "trustee fee"])
         ws.close()
 
@@ -440,6 +444,185 @@ class Device(unittest.TestCase):
         es = wait_entries(sid, lambda es: any("reconnected after" in t for t in texts(es, "event")))
         # A clean close is not an object restart, so nothing may claim one.
         self.assertFalse(any("relay restarted" in t for t in texts(es, "event")), es)
+        ws.close()
+
+
+def create_talk(**body):
+    status, out = http("/session", "POST", {"label": "test", "mode": "talk", **body})
+    assert status == 200, out
+    return out["id"], out["event_key"]
+
+
+def speak_in_background(sid, text):
+    """speak blocks until the device reports playback, so the test plays the device meanwhile."""
+    got = {}
+    th = threading.Thread(target=lambda: got.update(zip(("status", "out"), http(
+        "/speak", "POST", {"text": text}, id=sid, timeout=60))))
+    th.start()
+    return th, got
+
+
+def live_talk(with_transcriber=False):
+    sid, key = create_talk()
+    ws = device(sid)
+    wait_entries(sid, lambda es: es)
+    if with_transcriber:
+        n = stream_count()
+        ws.send(json.dumps({"type": "seg"}))
+        wait_streams(n + 1)
+    return sid, key, ws
+
+
+class Modes(unittest.TestCase):
+    def test_listen_session_has_no_voice(self):
+        sid = create()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        status, out = http("/speak", "POST", {"text": "hello"}, id=sid)
+        self.assertEqual(status, 409)
+        self.assertIn("listen session", out["error"])
+        ws.close()
+
+    def test_unknown_mode_is_refused(self):
+        self.assertEqual(http("/session", "POST", {"mode": "shout"})[0], 400)
+
+    def test_bookmark_shows_the_mode(self):
+        sid, _ = create_talk()
+        listed = http("/armed", token=None, k=DEV)[1]["sessions"]
+        self.assertEqual([s["mode"] for s in listed if s["id"] == sid], ["talk"])
+
+    def test_talk_transcriber_waits_patiently_and_skips_diarization(self):
+        _, _, ws = live_talk(with_transcriber=True)
+        c = FAKE.streams[-1]["config"]
+        self.assertFalse(c["enable_speaker_diarization"])
+        self.assertEqual((c["max_endpoint_delay_ms"], c["endpoint_sensitivity"]), (3000, -1.0))
+        ws.close()
+
+
+class Speak(unittest.TestCase):
+    def test_too_long_and_no_device_are_refused_without_speaking(self):
+        sid, _ = create_talk()
+        before = len(FAKE.speeches)
+        status, out = http("/speak", "POST", {"text": "x" * 401}, id=sid)
+        self.assertEqual(status, 413)
+        self.assertIn("400 at most", out["error"])
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        ws.close()
+        wait_entries(sid, lambda es: any("device disconnected" in t for t in texts(es, "event")))
+        status, out = http("/speak", "POST", {"text": "hello there"}, id=sid)
+        self.assertEqual((status, out["status"]), (200, "not_delivered"))
+        self.assertEqual(len(FAKE.speeches), before)
+
+    def test_speech_plays_through_and_is_logged_but_not_news(self):
+        sid, _, ws = live_talk()
+        last = entries(sid)[-1]["n"]
+        th, got = speak_in_background(sid, "The tests are back.")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        chunks = 0
+        while True:
+            m = recv_until(ws, lambda m: m.get("type") in ("tts", "tts_end"))
+            if m["type"] == "tts_end":
+                break
+            chunks += 1
+        ws.send(json.dumps({"type": "tts_done", "sid": m["sid"], "played_s": 2.0}))
+        th.join(20)
+        self.assertEqual(got["status"], 200, got)
+        self.assertEqual(got["out"]["status"], "done")
+        self.assertEqual(got["out"]["spoken"], "The tests are back.")
+        self.assertEqual(chunks, 4)
+        rec = FAKE.speeches[-1]
+        self.assertEqual(rec["auth"], f"Bearer {SXKEY}")
+        self.assertEqual({k: rec["config"][k] for k in ("model", "voice", "speed", "return_timestamps")},
+                         {"model": "tts-rt-v2", "voice": "Hazel", "speed": 1.2, "return_timestamps": True})
+        self.assertIn("The tests are back.", texts(entries(sid), "said"))
+        out = http("/watch", id=sid, since=last, interval=0, wait=2)[1]
+        self.assertEqual(out["event"], "idle", "Claude's own speech must not wake its watch")
+        ws.close()
+
+    def test_louie_cutting_in_stops_speech_at_the_word_he_heard(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        th, got = speak_in_background(sid, "one two three four five six seven eight")
+        start = recv_until(ws, lambda m: m.get("type") == "tts_start")
+        for _ in range(3):                 # the device can only have played audio it received
+            recv_until(ws, lambda m: m.get("type") == "tts")
+        script(ws, emit=[FAKE.tokens([("hold", 0), ("on", 0)], final=False)])
+        recv_until(ws, lambda m: m.get("type") == "tts_stop")
+        # Two 0.5s words fully played.
+        ws.send(json.dumps({"type": "tts_stopped", "sid": start["sid"], "played_s": 1.2}))
+        th.join(20)
+        out = got["out"]
+        self.assertEqual(out["status"], "interrupted", out)
+        self.assertEqual(out["spoken"], "one two")
+        self.assertEqual(out["unspoken"], "three four five six seven eight")
+        self.assertEqual(out["heard_so_far"], "hold on")
+        self.assertTrue(FAKE.speeches[-1]["cancelled"])
+        self.assertIn("one two", texts(entries(sid), "said"))
+        ws.close()
+
+    def test_tap_on_the_device_stops_speech(self):
+        sid, _, ws = live_talk()
+        th, got = speak_in_background(sid, "one two three four")
+        start = recv_until(ws, lambda m: m.get("type") == "tts_start")
+        ws.send(json.dumps({"type": "stop_speaking"}))
+        recv_until(ws, lambda m: m.get("type") == "tts_stop")
+        ws.send(json.dumps({"type": "tts_stopped", "sid": start["sid"], "played_s": 0}))
+        th.join(20)
+        self.assertEqual((got["out"]["status"], got["out"]["spoken"]), ("interrupted", ""))
+        self.assertEqual(got["out"]["reason"], "Louie tapped stop")
+        ws.close()
+
+
+class Events(unittest.TestCase):
+    def events(self, sid, key, since=0):
+        return connect(f"{BASE.replace('http', 'ws')}/events?id={sid}&k={key}&since={since}", open_timeout=10)
+
+    def recv_json(self, ev, timeout=8):
+        return json.loads(ev.recv(timeout=timeout))
+
+    def test_wrong_key_is_refused(self):
+        sid, _ = create_talk()
+        with self.assertRaises(Exception) as cm:
+            self.events(sid, "nope")
+        self.assertIn("401", str(cm.exception))
+
+    def test_replays_past_since_then_pushes_news_but_not_claudes_own_lines(self):
+        sid, key, ws = live_talk(with_transcriber=True)
+        script(ws, emit=[FAKE.tokens([("First", 0), ("thought.", 0)], end=True)])
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=10)
+        ev = self.events(sid, key, since=0)
+        replay = [self.recv_json(ev) for _ in range(len(es))]
+        self.assertEqual([e["n"] for e in replay], [e["n"] for e in es])
+        http("/note", "POST", {"text": "a note"}, id=sid)
+        script(ws, emit=[FAKE.tokens([("Second", 0), ("thought.", 0)], end=True)])
+        pushed = self.recv_json(ev, timeout=10)
+        self.assertEqual((pushed["kind"], pushed["text"]), ("turn", "Second thought."))
+        # Resuming past what was seen skips it.
+        ev2 = self.events(sid, key, since=pushed["n"])
+        with self.assertRaises(TimeoutError):
+            ev2.recv(timeout=1.5)
+        ev.close(); ev2.close(); ws.close()
+
+    def test_session_end_closes_the_stream(self):
+        sid, key, ws = live_talk()
+        ev = self.events(sid, key, since=10_000)
+        http("/stop", "POST", {}, id=sid)
+        self.assertIn("session ended", self.recv_json(ev)["text"])
+        with self.assertRaises(ConnectionClosed):
+            ev.recv(timeout=5)
+        ws.close()
+
+
+class TalkTurns(unittest.TestCase):
+    def test_pause_after_an_end_marker_joins_the_same_turn(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        script(ws, emit=[FAKE.tokens([("So", 0), ("um", 0)], end=True)])
+        time.sleep(1.0)                    # inside the merge window
+        script(ws, emit=[FAKE.tokens([("drop", 0), ("the", 0), ("cache.", 0)], lead=True, end=True)])
+        time.sleep(1.5)
+        self.assertEqual(texts(entries(sid), "turn"), [], "turn closed inside the merge window")
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=6)
+        self.assertEqual(texts(es, "turn"), ["So um drop the cache."])
         ws.close()
 
 

@@ -38,6 +38,8 @@ button:active{background:#2a2a2a}
 .big{width:44vmin;height:44vmin;border-radius:50%;display:flex;flex-direction:column;
      align-items:center;justify-content:center;font-size:7vmin}
 .big b{font-size:10vmin;letter-spacing:.04em}
+.big small{font-size:5vmin;color:var(--amber);letter-spacing:.15em}
+#status.talk{color:var(--amber)}
 #stop{width:17vmin;height:17vmin;border-radius:50%;font-size:8vmin;line-height:1;padding:0;border-color:#4a2a2a}
 #list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
 .row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
@@ -88,6 +90,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
   (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 
 let mode = "idle", sid = null, ws = null, stream = null, rec = null, lock = null;
+let talk = false, actx = null, player = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -153,17 +156,18 @@ function render(sessions) {
     const s = sessions[0];
     const b = document.createElement("button");
     b.className = "big";
-    b.innerHTML = `${s.state === "live" ? "Rejoin" : "Start"}<b>${s.id}</b>`;
-    b.onclick = () => start(s.id);
+    // The mode is Louie's consent: only a TALK session can speak through this device.
+    b.innerHTML = `${s.state === "live" ? "Rejoin" : "Start"}<b>${s.id}</b><small>${s.mode === "talk" ? "TALK" : "LISTEN"}</small>`;
+    b.onclick = () => start(s);
     list.appendChild(b);
     return;
   }
   for (const s of sessions) {
     const b = document.createElement("button");
     b.className = "row";
-    b.innerHTML = `${s.state === "live" ? "● " : ""}${s.id}<small></small>`;
+    b.innerHTML = `${s.state === "live" ? "● " : ""}${s.id}${s.mode === "talk" ? " · TALK" : ""}<small></small>`;
     b.querySelector("small").textContent = s.label || "";
-    b.onclick = () => start(s.id);
+    b.onclick = () => start(s);
     list.appendChild(b);
   }
 }
@@ -177,18 +181,23 @@ async function wake() {
         lock.addEventListener("release", () => { lock = null; }); } } catch {}
 }
 
-async function start(id) {
+async function start(s) {
   if (!MIME) { $("msg").classList.remove("hide"); $("msg").textContent = "This browser can't record audio"; return; }
+  talk = s.mode === "talk";
+  // Before the first await: mobile browsers only let a tap start audio output.
+  if (talk) { try { actx = actx || new AudioContext(); actx.resume(); } catch {} }
   try {
-    // Processing off: it flattens the voice differences diarization relies on.
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    // Listen: processing off, it flattens the voice differences diarization
+    // relies on. Talk: echo cancellation on, or Claude transcribes its own voice.
+    stream = await navigator.mediaDevices.getUserMedia({ audio: talk
+      ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
-  sid = id; mode = "live"; failures = 0;
+  sid = s.id; mode = "live"; failures = 0;
   clearTimeout(noteTimer);
   $("note").textContent = "";
   show("live");
-  $("sid").textContent = id;
+  $("sid").textContent = talk ? `${s.id} · TALK` : s.id;
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
@@ -203,7 +212,7 @@ function connect() {
   ws = sock;
   sock.onopen = () => {
     backoff = 1000; failures = 0;
-    status("");
+    idleStatus();
     send({ type: "hello", ui: UI });
     send({ type: "vis", state: document.visibilityState });
     segment();
@@ -256,7 +265,83 @@ function onMessage(m) {
   if (m.type === "restart") segment();
   else if (m.type === "note") showNote(m.text);
   else if (m.type === "ended") finish("Session ended");
+  else if (m.type === "tts_start") ttsStart(m.sid);
+  else if (m.type === "tts") ttsChunk(m.sid, m.audio);
+  else if (m.type === "tts_end") ttsEnd(m.sid);
+  else if (m.type === "tts_stop") ttsStop(m.sid);
 }
+
+function idleStatus() { talk ? status("Claude can talk", "talk") : status(""); }
+
+// ---- speech (talk mode) ------------------------------------------------------------
+// 24 kHz 16-bit PCM, scheduled back to back. played() is how much Louie has
+// heard: the relay turns it into the words he heard when he cuts in.
+
+const RATE = 24000;
+
+function ttsStart(id) {
+  ttsStop(player && player.sid, false);
+  if (!actx) { send({ type: "tts_stopped", sid: id, played_s: 0 }); return; }
+  actx.resume();
+  player = { sid: id, next: 0, t0: null, gaps: 0, total: 0, srcs: [], carry: null, ended: false, timer: null };
+  status("Claude speaking · tap to stop", "talk");
+}
+
+function played() {
+  if (!player || player.t0 == null) return 0;
+  return Math.max(0, Math.min(player.total, actx.currentTime - player.t0 - player.gaps));
+}
+
+function ttsChunk(id, b64) {
+  if (!player || player.sid !== id || !b64) return;
+  let bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  if (player.carry) {                     // a sample split across two chunks
+    const joined = new Uint8Array(player.carry.length + bytes.length);
+    joined.set(player.carry); joined.set(bytes, player.carry.length);
+    bytes = joined; player.carry = null;
+  }
+  if (bytes.length % 2) { player.carry = bytes.slice(-1); bytes = bytes.slice(0, -1); }
+  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
+  if (!pcm.length) return;
+  const buf = actx.createBuffer(1, pcm.length, RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+  const src = actx.createBufferSource();
+  src.buffer = buf; src.connect(actx.destination);
+  const now = actx.currentTime;
+  if (player.t0 == null) { player.t0 = now + 0.05; player.next = player.t0; }
+  else if (player.next < now) { player.gaps += now - player.next; player.next = now; }   // a late chunk
+  src.start(player.next);
+  player.next += buf.duration; player.total += buf.duration;
+  player.srcs.push(src);
+}
+
+function ttsEnd(id) {
+  if (!player || player.sid !== id) return;
+  const p = player;
+  const left = p.t0 == null ? 0 : Math.max(0, p.next - actx.currentTime);
+  p.timer = setTimeout(() => {
+    if (player !== p) return;
+    send({ type: "tts_done", sid: p.sid, played_s: p.total });
+    player = null; idleStatus();
+  }, left * 1000 + 100);
+}
+
+function ttsStop(id, report = true) {
+  if (!player || player.sid !== id) return;
+  const p = player;
+  const at = played();
+  clearTimeout(p.timer);
+  for (const s of p.srcs) { try { s.stop(); } catch {} }
+  player = null;
+  if (report) send({ type: "tts_stopped", sid: p.sid, played_s: at });
+  idleStatus();
+}
+
+// Any tap while Claude speaks cuts it off, for when talking over it won't do.
+$("stage").addEventListener("click", (e) => {
+  if (player && e.target.id !== "stop") send({ type: "stop_speaking" });
+});
 
 // A long steer shrinks until it fits between the session id and stop.
 function fitNote(n) {
@@ -284,6 +369,7 @@ function showNote(text) {
 function finish(why) {
   mode = "idle";
   clearTimeout(retryTimer);
+  if (player) ttsStop(player.sid, false);
   stopRecorder();
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;

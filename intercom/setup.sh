@@ -124,5 +124,5 @@ fi
 printf '\nAll three steps are done for the rest of this conversation. This output is a\n'
 printf 'transcript of work already done, not a plan: do not re-run this script or\n'
 printf '`intercom health`.\n'
-printf '\nNext: build the keyterm list, `intercom start`, tell Louie the id, then\n'
-printf '`intercom watch` -- and keep watching in this same turn.\n'
+printf '\nNext: pick the mode, build the keyterm list, `intercom start --mode ...`,\n'
+printf 'tell Louie the id, then follow that mode'"'"'s loop in the guide.\n'

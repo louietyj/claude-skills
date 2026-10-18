@@ -206,6 +206,70 @@ class Start(Base):
         self.assertTrue(body["archive"])
 
 
+class Talk(Base):
+    def setUp(self):
+        super().setUp()
+        intercom.write_state("current.json", {"id": "K7QM"})
+
+    def test_talk_mode_reaches_the_relay_and_says_to_arm_monitor(self):
+        intercom.write_state("current.json", {})
+        relay = Relay({"/session": (200, {"id": "ACDE", "event_key": "ek"})})
+        code, out, _ = self.run_cli(["start", "--mode", "talk"], relay)
+        self.assertEqual((code, relay.calls[-1]["body"]["mode"]), (0, "talk"))
+        self.assertIn("TALK", json.loads(out)["next"])
+        self.assertIn("monitor-url", json.loads(out)["next"])
+
+    def test_listen_is_the_default_mode(self):
+        intercom.write_state("current.json", {})
+        relay = Relay({"/session": (200, {"id": "ACDE"})})
+        self.run_cli(["start"], relay)
+        self.assertEqual(relay.calls[-1]["body"]["mode"], "listen")
+
+    def test_long_speech_is_refused_with_how_to_split_it(self):
+        relay = Relay({})
+        code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("word " * 100))
+        self.assertEqual(code, 1)
+        self.assertIn("400 at most", err)
+        self.assertIn("another `intercom speak`", err)
+        self.assertEqual(relay.calls, [])
+
+    def test_speech_as_an_argument_is_refused(self):
+        code, _, err = self.run_cli(["speak", "it costs $50"], Relay({}), stdin=io.StringIO(""))
+        self.assertEqual(code, 1)
+        self.assertIn("intercom speak <<'EOF'", err)
+
+    def test_listen_session_refusal_is_shown_as_is(self):
+        relay = Relay({"/speak": (409, {"error": "this is a listen session: Claude has no voice in it"})})
+        code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("hello"))
+        self.assertEqual(code, 1)
+        self.assertIn("listen session", err)
+
+    def test_interrupted_speech_says_what_was_heard_and_what_comes_next(self):
+        relay = Relay({"/speak": (200, {"status": "interrupted", "spoken": "one two",
+                                        "unspoken": "three", "heard_so_far": "hold on"})})
+        _, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("one two three"))
+        out = json.loads(out)
+        self.assertEqual(out["spoken"], "one two")
+        self.assertIn("next event", out["hint"])
+
+    def test_longest_speech_still_fits_the_bash_timeout(self):
+        self.assertLess(intercom.speak_timeout("x" * intercom.SPEAK_MAX), 120)
+
+    def test_monitor_url_carries_the_event_key_not_the_cli_token(self):
+        relay = Relay({"/status": (200, {"state": "live", "event_key": "ek123"})})
+        code, out, _ = self.run_cli(["monitor-url", "--since", "41"], relay)
+        url = out.strip()
+        self.assertEqual(code, 0)
+        self.assertTrue(url.startswith("wss://relay.test/events?"), url)
+        self.assertIn("k=ek123", url)
+        self.assertIn("since=41", url)
+        self.assertNotIn("tok", url)
+
+    def test_said_lines_render_as_claudes_voice(self):
+        self.assertEqual(intercom.render({"kind": "said", "t": 5, "text": "one two", "interrupted": True}),
+                         "[00:05 <<] said: one two  (interrupted)")
+
+
 class Health(Base):
     def test_token_mismatch_is_named(self):
         relay = Relay({"/health": (200, {"secrets": {"CLI_TOKEN": True}}), "/status": (401, {})})

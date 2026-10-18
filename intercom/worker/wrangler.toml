@@ -6,6 +6,7 @@ compatibility_date = "2026-01-01"
 # outbound websocket with fetch(), so the live URL is https://, not wss://.
 [vars]
 SONIOX_URL = "https://stt-rt.soniox.com/transcribe-websocket"
+SONIOX_TTS_URL = "https://tts-rt.soniox.com/tts-websocket"
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 [[durable_objects.bindings]]

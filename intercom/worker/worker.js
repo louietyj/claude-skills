@@ -1,7 +1,8 @@
 // intercom relay: a phone or watch streams mic audio here, a Durable Object
 // relays it to Soniox and assembles speaker turns, and Claude long-polls the
-// turns from a sandbox that can be recycled without losing any. Deepgram does
-// the optional full-file pass afterwards.
+// turns from a sandbox that can be recycled without losing any, or streams
+// them over /events. In a talk session Claude can also speak through the
+// device (Soniox TTS). Deepgram does the optional full-file pass afterwards.
 //
 // Soniox for live because on watch-mic audio Deepgram's streaming diarization
 // put every word on one speaker, while Soniox split the same bytes correctly.
@@ -15,9 +16,12 @@
 //   GET  /device?id   websocket: audio in; notes, restarts and the end out
 // Claude (CLI_TOKEN as ?token=):
 //   POST /pair        a one-time 6-digit code for pairing a device
-//   POST /session     create and arm a session -> {id}
+//   POST /session     create and arm a session, {mode: listen|talk} -> {id, event_key}
 //   GET  /watch?id    long-poll for entries past ?since
 //   POST /note?id     a short note for the device (vibrates the watch)
+//   POST /speak?id    talk mode: say {text} through the device; blocks until played or interrupted
+// Monitor (the session's event_key as ?k=):
+//   GET  /events?id   websocket: news entries past ?since, then each new one
 //   POST /stop?id     end the session
 //   GET  /transcript?id[&batch=1]
 //   GET  /audio?id&seg  an archived segment's webm, until the batch pass deletes it
@@ -43,6 +47,22 @@ const MAX_ENTRIES = 400;
 const PENDING_AUDIO_MAX = 200;      // chunks held while the transcriber's socket opens
 
 const SONIOX_MODEL = "stt-rt-v5";
+// Talk mode: as patient as Soniox allows, then MERGE_MS more, so a mid-thought pause doesn't end a turn.
+const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
+                        endpoint_latency_adjustment_level: 0 };
+const MERGE_MS = 2500;
+const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
+                     sample_rate: 24000, speed: 1.2, reduce_silence: true, return_timestamps: true };
+const TTS_BYTES_PER_S = 48000;
+// A paragraph per call: an interruption then costs at most one paragraph.
+const SPEAK_MAX = 400;
+const BARGE_IN_WORDS = 2;
+const SPEAK_WAIT_FOR_TURN_MS = 10_000;
+const SPEAK_ACK_GRACE_MS = 15_000;
+const SPEAK_GEN_TIMEOUT_MS = 60_000;
+const MODES = new Set(["listen", "talk"]);
+// Claude's own notes and speech are logged but are not news.
+const NOT_NEWS = new Set(["note", "said"]);
 const BATCH_PARAMS = {
   model: "nova-3", diarize: "true", smart_format: "true", punctuate: "true",
   mip_opt_out: "true",
@@ -58,6 +78,10 @@ function deepgramUrl(base, params, keyterms) {
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
   for (const t of keyterms ?? []) u.searchParams.append("keyterm", t);
   return u.toString();
+}
+
+function randomKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function concat(parts) {
@@ -86,12 +110,12 @@ export class Registry {
     const now = Date.now();
 
     if (pathname === "/claim") {
-      const { label } = await req.json();
+      const { label, mode } = await req.json();
       for (let tries = 0; tries < 50; tries++) {
         const id = Array.from(crypto.getRandomValues(new Uint8Array(4)),
                               (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
         if (await this.ctx.storage.get(`s:${id}`)) continue;
-        await this.ctx.storage.put(`s:${id}`, { id, label, state: "armed", at: now });
+        await this.ctx.storage.put(`s:${id}`, { id, label, mode, state: "armed", at: now });
         return json({ id });
       }
       return json({ error: "no free id" }, 500);
@@ -138,7 +162,8 @@ export class Registry {
       for (const [key, s] of await this.ctx.storage.list({ prefix: "s:" })) {
         const age = now - s.at;
         if (s.state === "live" || (s.state === "armed" && age < ARMED_TTL_MS)) {
-          out.push({ id: s.id, label: s.label, state: s.state, age_s: Math.round(age / 1000) });
+          out.push({ id: s.id, label: s.label, mode: s.mode ?? "listen", state: s.state,
+                     age_s: Math.round(age / 1000) });
         } else if (age > KEEP_MS) {
           await this.ctx.storage.delete(key);
         }
@@ -172,7 +197,12 @@ export class Session {
     this.lastAudioAt = 0;
     this.arch = null;            // {seg, part, chunks, bytes}
     this.keepalive = null;
+    this.mergeTimer = null;      // talk mode: an <end> waiting MERGE_MS to become a turn
+    this.events = new Set();     // Monitor sockets
+    this.speaking = null;        // the speak call in flight
   }
+
+  talk() { return this.meta?.mode === "talk"; }
 
   async load() {
     if (this.meta) return this.meta;
@@ -207,16 +237,27 @@ export class Session {
 
   async addEntry(kind, fields) {
     const e = { n: ++this.meta.seq, kind, t: Math.round(this.elapsed()), ...fields };
-    // Claude's own notes are logged but are not news: they must not wake its watch.
-    if (kind !== "note") this.meta.news_seq = e.n;
+    if (!NOT_NEWS.has(kind)) {
+      this.meta.news_seq = e.n;
+      this.broadcast(e);
+    }
     await this.ctx.storage.put(`e:${pad(e.n)}`, e);
     await this.saveMeta();
     return e;
   }
 
+  broadcast(e) {
+    const frame = JSON.stringify(e);
+    for (const ws of this.events) {
+      try { ws.send(frame); } catch { this.events.delete(ws); }
+    }
+  }
+
   // --- turns -------------------------------------------------------------
 
   async flushTurn() {
+    clearTimeout(this.mergeTimer);
+    this.mergeTimer = null;
     const cur = this.cur;
     this.cur = null;
     const text = cur?.text.trim();
@@ -226,7 +267,8 @@ export class Session {
   // Soniox sends each final token once and every non-final token on every
   // message; tokens carry their own spacing, and "<end>" marks an utterance's
   // end. A turn also closes at the first sentence end past TURN_SPLIT_S, or a
-  // monologue would only be delivered once it stops.
+  // monologue would only be delivered once it stops. Talk mode does neither:
+  // "<end>" opens a MERGE_MS window that more speech extends.
   async onTranscript(raw, offset, conn) {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
@@ -242,15 +284,31 @@ export class Session {
         if (tok.text !== "<end>") { pending += tok.text; pendingSpk ??= tok.speaker; }
         continue;
       }
-      if (tok.text === "<end>") { await this.flushTurn(); continue; }
+      if (tok.text === "<end>") {
+        if (!this.talk()) await this.flushTurn();
+        else if (this.cur) this.armMerge();
+        continue;
+      }
       const spk = Number(tok.speaker ?? 0) || 0;
       if (this.cur && this.cur.spk !== spk) await this.flushTurn();
+      clearTimeout(this.mergeTimer);
+      this.mergeTimer = null;
       const at = offset + (tok.start_ms ?? 0) / 1000;
       if (!this.cur) this.cur = { spk, t: at, text: "" };
       this.cur.text += tok.text;
-      if (at - this.cur.t >= TURN_SPLIT_S && /[.?!]$/.test(tok.text)) await this.flushTurn();
+      if (!this.talk() && at - this.cur.t >= TURN_SPLIT_S && /[.?!]$/.test(tok.text)) await this.flushTurn();
     }
     this.pending = pending ? { spk: Number(pendingSpk ?? 0) || 0, text: pending } : null;
+    if (this.speaking && !this.speaking.stopping) {
+      const heard = (this.tail()?.text ?? "").split(/\s+/).filter(Boolean).length;
+      if (heard - this.speaking.heardBefore >= BARGE_IN_WORDS) this.bargeIn("Louie spoke");
+    }
+  }
+
+  // Words still being recognised mean Louie is talking again: keep waiting.
+  armMerge() {
+    clearTimeout(this.mergeTimer);
+    this.mergeTimer = setTimeout(() => (this.pending ? this.armMerge() : this.flushTurn()), MERGE_MS);
   }
 
   // The open turn's finished words plus those still being recognised.
@@ -260,6 +318,10 @@ export class Session {
   }
 
   // --- transcriber -----------------------------------------------------------
+
+  sonioxHeaders() {
+    return { Upgrade: "websocket", Authorization: `Bearer ${this.env.SONIOX_API_KEY}` };
+  }
 
   // A segment is one MediaRecorder run: one webm header, one transcriber
   // stream. A stream resumed mid-container is not reliably decodable, so every
@@ -276,7 +338,7 @@ export class Session {
 
     let ws;
     try {
-      const resp = await fetch(this.env.SONIOX_URL, { headers: { Upgrade: "websocket" } });
+      const resp = await fetch(this.env.SONIOX_URL, { headers: this.sonioxHeaders() });
       ws = resp.webSocket;
       if (!ws) {
         this.sttOpening = false;
@@ -291,8 +353,9 @@ export class Session {
     ws.accept();
     const conn = { ws, opened: Date.now(), error: null };
     ws.send(JSON.stringify({
-      api_key: this.env.SONIOX_API_KEY, model: SONIOX_MODEL, audio_format: "auto",
-      language_hints: ["en"], enable_speaker_diarization: true, enable_endpoint_detection: true,
+      model: SONIOX_MODEL, audio_format: "auto", language_hints: ["en"],
+      enable_speaker_diarization: !this.talk(), enable_endpoint_detection: true,
+      ...(this.talk() ? TALK_ENDPOINT : {}),
       ...(this.meta.keyterms.length ? { context: { terms: this.meta.keyterms } } : {}),
     }));
     this.stt = ws;
@@ -375,6 +438,7 @@ export class Session {
 
   async end(reason) {
     if (!this.meta || this.meta.state === "ended") return;
+    if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", 0, `session ended: ${reason}`);
     await this.closeTranscriber();          // its last finals land before the end entry
     await this.flushTurn();
     await this.flushArchive();
@@ -383,6 +447,8 @@ export class Session {
     this.meta.end_reason = reason;
     await this.addEntry("event", { text: `session ended: ${reason}` });
     this.toDevice({ type: "ended", reason });
+    for (const ws of this.events) { try { ws.close(1000, "session ended"); } catch {} }
+    this.events.clear();
     await this.registry("/put", { id: this.meta.id, state: "ended" });
     await this.ctx.storage.setAlarm(Date.now() + KEEP_MS);
   }
@@ -441,6 +507,11 @@ export class Session {
       try { server.close(1000); } catch {}
       if (this.device !== server) return;
       this.device = null;
+      // Playback dies with the page; wall time since the start is the best guess at what played.
+      if (this.speaking) {
+        const sp = this.speaking;
+        await this.finishSpeak(sp, "interrupted", (Date.now() - sp.startedAt) / 1000, "the device disconnected");
+      }
       this.closeTranscriber();
       await this.flushTurn();
       if (!this.live()) return;
@@ -457,6 +528,8 @@ export class Session {
     if (msg.type === "hello") { this.meta.ui = msg.ui ?? null; return this.saveMeta(); }
     if (msg.type === "seg") return this.startSegment();
     if (msg.type === "stop") return this.end("stopped on the device");
+    if (msg.type === "tts_done" || msg.type === "tts_stopped") return this.onPlayback(msg);
+    if (msg.type === "stop_speaking") return this.bargeIn("Louie tapped stop");
     if (msg.type === "vis") {
       const who = this.meta.ui ?? "device";
       if (msg.state === "hidden" && this.meta.hidden_since == null) {
@@ -485,6 +558,26 @@ export class Session {
     };
   }
 
+  // Monitor's view: every news entry after `since`, then each new one as it
+  // happens. The input gate holds other events during the storage read, so
+  // nothing lands between the replay and joining the live set.
+  async acceptEvents(since) {
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+    for (const e of await this.entriesAfter(since, 100_000)) {
+      if (!NOT_NEWS.has(e.kind)) server.send(JSON.stringify(e));
+    }
+    if (this.meta.state === "ended" || this.meta.state === "expired") {
+      server.close(1000, `session ${this.meta.state}`);
+    } else {
+      this.events.add(server);
+      const drop = () => this.events.delete(server);
+      server.addEventListener("close", drop);
+      server.addEventListener("error", drop);
+    }
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
   async entriesAfter(since, limit = MAX_ENTRIES) {
     const rows = await this.ctx.storage.list({ prefix: "e:", start: `e:${pad(since + 1)}`, limit });
     return [...rows.values()];
@@ -510,6 +603,7 @@ export class Session {
         const entries = await this.entriesAfter(since);
         return json({
           event, id: this.meta.id, state: this.meta.state, label: this.meta.label,
+          mode: this.meta.mode ?? "listen",
           elapsed_s: Math.round(this.elapsed()),
           entries,
           last: entries.length ? entries.at(-1).n : since,
@@ -534,6 +628,135 @@ export class Session {
     this.toDevice({ type: "note", text });
     const e = await this.addEntry("note", { text, delivered });
     return json({ ok: true, delivered, n: e.n });
+  }
+
+  // --- speech (talk mode) ----------------------------------------------------------
+  //
+  // Soniox streams PCM with per-character timestamps; the page plays it and
+  // reports how far it got, which the timestamps turn into the words Louie heard.
+
+  async speak(body) {
+    const text = String(body?.text ?? "").trim();
+    if (!this.talk()) return json({ ok: false, error: "this is a listen session: Claude has no voice in it" }, 409);
+    if (!text) return json({ ok: false, error: "nothing to say" }, 400);
+    if (text.length > SPEAK_MAX) {
+      return json({ ok: false, error: `${text.length} chars; ${SPEAK_MAX} at most per call` }, 413);
+    }
+    if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
+    if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
+    if (!this.device) return json({ status: "not_delivered", spoken: "", unspoken: text });
+
+    // Don't talk over Louie: let an open turn close first.
+    for (const end = Date.now() + SPEAK_WAIT_FOR_TURN_MS; this.tail() && Date.now() < end;) await sleep(200);
+
+    let ws;
+    try {
+      const resp = await fetch(this.env.SONIOX_TTS_URL, { headers: this.sonioxHeaders() });
+      ws = resp.webSocket;
+      if (!ws) return json({ status: "error", error: `TTS refused the connection (HTTP ${resp.status})` }, 502);
+    } catch (e) {
+      return json({ status: "error", error: `TTS unreachable (${e})` }, 502);
+    }
+    ws.accept();
+    const sid = crypto.randomUUID().slice(0, 8);
+    const sp = this.speaking = {
+      sid, ws, text, chars: [], ends: [], bytes: 0, stopping: null, guard: null,
+      genDone: false, startedAt: Date.now(), resolve: null,
+      // Words of an open turn that the wait above gave up on are not a barge-in.
+      heardBefore: (this.tail()?.text ?? "").split(/\s+/).filter(Boolean).length,
+    };
+    const done = new Promise((r) => { sp.resolve = r; });
+    ws.addEventListener("message", (m) => this.onTts(sp, m.data));
+    ws.addEventListener("close", () => { if (this.speaking === sp && !sp.genDone) this.finishSpeak(sp, "error", null, "TTS closed early"); });
+    ws.send(JSON.stringify({ ...TTS_CONFIG, stream_id: sid }));
+    ws.send(JSON.stringify({ stream_id: sid, text, text_end: true }));
+    this.toDevice({ type: "tts_start", sid });
+    sp.guard = setTimeout(() => this.finishSpeak(sp, "error", null, "TTS produced no end of audio"), SPEAK_GEN_TIMEOUT_MS);
+    return json(await done);
+  }
+
+  onTts(sp, raw) {
+    if (this.speaking !== sp) return;
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
+    if (m.error_code) return this.finishSpeak(sp, "error", null, `TTS ${m.error_type ?? m.error_code}: ${m.error_message ?? ""}`.trim());
+    if (m.audio && !sp.stopping) {
+      sp.bytes += Math.floor((m.audio.length * 3) / 4);
+      this.toDevice({ type: "tts", sid: sp.sid, audio: m.audio });
+    }
+    const ts = m.timestamps;
+    if (ts) {
+      sp.chars.push(...ts.characters);
+      sp.ends.push(...ts.character_end_times_seconds);
+    }
+    if (m.audio_end && !sp.stopping) {
+      this.toDevice({ type: "tts_end", sid: sp.sid });
+      // The page has the audio's length plus grace to confirm playback.
+      clearTimeout(sp.guard);
+      const audioMs = (sp.bytes / TTS_BYTES_PER_S) * 1000;
+      sp.guard = setTimeout(() => this.finishSpeak(sp, "error", null, "the device never confirmed playback"),
+                            audioMs + SPEAK_ACK_GRACE_MS);
+    }
+    if (m.terminated) {
+      sp.genDone = true;
+      try { sp.ws.close(1000); } catch {}
+    }
+  }
+
+  // The page stops at once; its tts_stopped says how far it got.
+  bargeIn(reason) {
+    const sp = this.speaking;
+    if (!sp || sp.stopping) return;
+    sp.stopping = reason;
+    this.toDevice({ type: "tts_stop", sid: sp.sid });
+    try { sp.ws.send(JSON.stringify({ stream_id: sp.sid, cancel: true })); } catch {}
+  }
+
+  onPlayback(msg) {
+    const sp = this.speaking;
+    if (!sp || msg.sid !== sp.sid) return;
+    const played = Math.max(0, Number(msg.played_s) || 0);
+    if (msg.type === "tts_done" && !sp.stopping) return this.finishSpeak(sp, "done", null);
+    return this.finishSpeak(sp, "interrupted", played, sp.stopping ?? "stopped on the device");
+  }
+
+  // Timestamps cover the original text, so the k-th timed word is the k-th
+  // word Claude wrote. A word counts as heard once its audio has fully played;
+  // words not timed yet were never played.
+  splitSpoken(sp, played) {
+    const wordEnds = [];
+    let end = null;
+    sp.chars.forEach((c, i) => {
+      if (/\s/.test(c)) {
+        if (end != null) wordEnds.push(end);
+        end = null;
+      } else {
+        end = sp.ends[i];
+      }
+    });
+    if (end != null) wordEnds.push(end);
+    let heard = 0;
+    while (heard < wordEnds.length && wordEnds[heard] <= played + 0.05) heard++;
+    const words = sp.text.split(/\s+/).filter(Boolean);
+    return { spoken: words.slice(0, heard).join(" "), unspoken: words.slice(heard).join(" ") };
+  }
+
+  async finishSpeak(sp, status, played, reason) {
+    if (this.speaking !== sp) return;
+    this.speaking = null;
+    clearTimeout(sp.guard);
+    if (!sp.genDone) { try { sp.ws.send(JSON.stringify({ stream_id: sp.sid, cancel: true })); } catch {} }
+    try { sp.ws.close(1000); } catch {}
+    if (status === "error") this.toDevice({ type: "tts_stop", sid: sp.sid });
+    const { spoken, unspoken } = status === "done" ? { spoken: sp.text, unspoken: "" }
+      : status === "error" ? { spoken: "", unspoken: sp.text } : this.splitSpoken(sp, played);
+    if (spoken) await this.addEntry("said", { text: spoken, interrupted: status !== "done" });
+    sp.resolve({
+      status, spoken, unspoken,
+      ...(reason ? { reason } : {}),
+      ...(status === "interrupted" ? { heard_so_far: this.tail()?.text ?? "" } : {}),
+      audio_s: Math.round((sp.bytes / TTS_BYTES_PER_S) * 10) / 10,
+    });
   }
 
   async batch() {
@@ -595,14 +818,16 @@ export class Session {
 
     if (path === "/create") {
       const b = await req.json();
+      // The mode is set here and nowhere else: a listen session can never speak.
       this.meta = {
         id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive,
+        mode: b.mode, event_key: randomKey(),
         state: "armed", created_at: Date.now(), started_at: null, ended_at: null,
         end_reason: null, seq: 0, segs: [],
       };
       await this.saveMeta();
       await this.ctx.storage.setAlarm(Date.now() + ARMED_TTL_MS);
-      return json({ id: b.id, state: "armed" });
+      return json({ id: b.id, state: "armed", mode: b.mode, event_key: this.meta.event_key });
     }
 
     if (!(await this.load())) return json({ error: "no such session" }, 404);
@@ -614,6 +839,12 @@ export class Session {
       }
       return this.acceptDevice();
     }
+    if (path === "/events") {
+      if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected a websocket" }, 426);
+      if (!this.meta.event_key || q.get("k") !== this.meta.event_key) return json({ error: "unauthorized" }, 401);
+      return this.acceptEvents(Math.max(0, Number(q.get("since")) || 0));
+    }
+    if (path === "/speak") return this.speak(await req.json().catch(() => null));
     if (path === "/watch") return this.watch(q, req.signal);
     if (path === "/note") return this.note(await req.json().catch(() => null));
     if (path === "/stop") {
@@ -646,7 +877,10 @@ export class Session {
 // ---------------------------------------------------------------------------
 
 const DEVICE_ROUTES = new Set(["/armed", "/device"]);
-const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/stop", "/transcript", "/status", "/audio", "/pair"]);
+const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/stop", "/transcript", "/status",
+                            "/audio", "/pair"]);
+// Gated inside the session by its own event key, so a Monitor URL never carries the CLI token.
+const EVENT_ROUTES = new Set(["/events"]);
 
 export default {
   async fetch(req, env) {
@@ -679,7 +913,7 @@ export default {
       if (!env.DEVICE_TOKEN || q.get("k") !== env.DEVICE_TOKEN) return json({ error: "unauthorized" }, 401);
     } else if (CLI_ROUTES.has(path)) {
       if (!env.CLI_TOKEN || q.get("token") !== env.CLI_TOKEN) return json({ error: "unauthorized" }, 401);
-    } else {
+    } else if (!EVENT_ROUTES.has(path)) {
       return json({ error: "not found" }, 404);
     }
 
@@ -693,13 +927,15 @@ export default {
     if (path === "/session") {
       if (req.method !== "POST") return json({ error: "POST" }, 405);
       const b = await req.json().catch(() => ({}));
+      const mode = b.mode ?? "listen";
+      if (!MODES.has(mode)) return json({ error: `mode must be listen or talk, not ${mode}` }, 400);
       const keyterms = (b.keyterms ?? []).map((t) => String(t).trim()).filter(Boolean).slice(0, 100);
       const claim = await (await registry.fetch("https://registry/claim", {
-        method: "POST", body: JSON.stringify({ label: b.label ?? "" }) })).json();
+        method: "POST", body: JSON.stringify({ label: b.label ?? "", mode }) })).json();
       if (!claim.id) return json(claim, 500);
       const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
       return stub.fetch("https://session/create", { method: "POST",
-        body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive }) });
+        body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive, mode }) });
     }
 
     const id = (q.get("id") ?? "").toUpperCase();

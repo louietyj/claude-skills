@@ -12,10 +12,15 @@ stream: the held messages go out, then {"finished": true}, then close 1000.
 
 Batch, Deepgram-shaped (`POST /v1/listen`): returns CANNED_BATCH and records the body.
 
+TTS, Soniox-shaped (`/tts-websocket`): records the config and auth header, then
+speaks the text one word per TTS_WORD_S of audio, each word its own audio frame
+with character timestamps, paced so a test can cut in. `cancel` stops it.
+
 Import it and call start() to run in a background thread with its state
 inspectable (test_session.py does), or run it directly to serve on :8798.
 """
 import asyncio
+import base64
 import json
 import sys
 import threading
@@ -29,10 +34,15 @@ CANNED_BATCH = {"results": {"channels": [{"alternatives": [{"words": [
 ]}]}]}}
 
 
+TTS_WORD_S = 0.5
+TTS_PACE_S = 0.15            # wall time between word frames
+
+
 class Fake:
     def __init__(self):
         self.streams = []      # one dict per live connection
         self.batches = []      # one dict per POST
+        self.speeches = []     # one dict per TTS connection
 
     def tokens(self, words, *, final=True, end=False, lead=False):
         """A Soniox response. words: [(text, speaker), ...]; tokens carry their
@@ -54,7 +64,8 @@ class Fake:
     async def live(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        rec = {"config": None, "audio": [], "text": [], "closed": None, "on_close": []}
+        rec = {"config": None, "audio": [], "text": [], "closed": None, "on_close": [],
+               "auth": request.headers.get("Authorization")}
         self.streams.append(rec)
 
         async def finish():
@@ -92,11 +103,53 @@ class Fake:
                     break
         return ws
 
+    async def tts(self, request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        rec = {"config": None, "text": "", "auth": request.headers.get("Authorization"),
+               "cancelled": False, "words_sent": 0}
+        self.speeches.append(rec)
+        speaking = None
+
+        async def speak(sid, text):
+            pcm = base64.b64encode(b"\0" * int(TTS_WORD_S * 48000)).decode()
+            t = 0.0
+            for i, word in enumerate(text.split()):
+                chars = list(word) + ([" "] if i < len(text.split()) - 1 else [])
+                step = TTS_WORD_S / len(chars)
+                ts = {"characters": chars,
+                      "character_start_times_seconds": [round(t + k * step, 3) for k in range(len(chars))],
+                      "character_end_times_seconds": [round(t + (k + 1) * step, 3) for k in range(len(chars))]}
+                await ws.send_str(json.dumps({"stream_id": sid, "audio": pcm, "audio_end": False, "timestamps": ts}))
+                rec["words_sent"] += 1
+                t += TTS_WORD_S
+                await asyncio.sleep(TTS_PACE_S)
+            await ws.send_str(json.dumps({"stream_id": sid, "audio": "", "audio_end": True}))
+            await ws.send_str(json.dumps({"stream_id": sid, "terminated": True}))
+
+        async for msg in ws:
+            if msg.type != WSMsgType.TEXT:
+                continue
+            m = json.loads(msg.data)
+            if rec["config"] is None:
+                rec["config"] = m
+            elif m.get("cancel"):
+                rec["cancelled"] = True
+                if speaking:
+                    speaking.cancel()
+                await ws.send_str(json.dumps({"stream_id": m["stream_id"], "terminated": True}))
+            elif "text" in m:
+                rec["text"] += m["text"]
+                if m.get("text_end"):
+                    speaking = asyncio.ensure_future(speak(m["stream_id"], rec["text"]))
+        return ws
+
 
 def start(port=8798):
     fake = Fake()
     app = web.Application(client_max_size=64 * 1024 * 1024)
     app.router.add_route("GET", "/transcribe-websocket", fake.live)
+    app.router.add_route("GET", "/tts-websocket", fake.tts)
     app.router.add_route("POST", "/v1/listen", fake.batch)
     ready = threading.Event()
 

@@ -25,6 +25,8 @@ STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 WATCH_BUDGET = 90
 WATCH_INTERVAL = 10
 NOTE_MAX = 120
+SPEAK_MAX = 400           # one paragraph a call: an interruption costs at most one
+SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 IN_PROGRESS = "  [...still speaking]"
 
 
@@ -124,6 +126,8 @@ def render(e):
     if e["kind"] == "note":
         tail = "" if e.get("delivered", True) else "  (NOT delivered: no device connected)"
         return f"[{at} >>] note to device: {e['text']}{tail}"
+    if e["kind"] == "said":
+        return f"[{at} <<] said: {e['text']}" + ("  (interrupted)" if e.get("interrupted") else "")
     return f"[{at} --] {e['text']}"
 
 
@@ -192,15 +196,20 @@ def cmd_start(cfg, args):
                 "or pass --force to start another alongside it.")
     terms = read_terms(args)
     status, body = relay(cfg, "/session", method="POST", timeout=20,
-                         body={"label": args.label or "", "keyterms": terms, "archive": args.archive})
+                         body={"label": args.label or "", "keyterms": terms, "archive": args.archive,
+                               "mode": args.mode})
     if status != 200 or not isinstance(body, dict) or not body.get("id"):
         die(f"could not create a session: {status} {error_text(body)}")
     sid = body["id"]
-    write_state("current.json", {"id": sid, "label": args.label or "", "at": time.time()})
+    write_state("current.json", {"id": sid, "label": args.label or "", "mode": args.mode, "at": time.time()})
     write_state(f"cursor-{sid}.json", {"since": 0})
-    emit({"id": sid, "state": "armed", "keyterms": len(terms), "archive": args.archive,
-          "next": f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id "
-                  "matches). Then run `intercom watch` and keep watching in this same turn."})
+    tap = (f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id matches; "
+           f"it should say {args.mode.upper()}).")
+    then = (" Then arm Monitor on `intercom monitor-url`, or in a sandbox without Monitor run "
+            "`intercom watch`." if args.mode == "talk" else
+            " Then run `intercom watch` and keep watching in this same turn.")
+    emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
+          "archive": args.archive, "next": tap + then})
 
 
 def cmd_watch(cfg, args):
@@ -229,6 +238,9 @@ def cmd_watch(cfg, args):
         out["end_reason"] = body.get("end_reason")
         out["hint"] = ("The session is over. Give Louie a short wrap-up. If it was archived, "
                        "`intercom transcript --batch` gets the clean full-file transcript.")
+    elif body.get("mode") == "talk":
+        out["hint"] = ("new turns are Louie talking to you: answer with `intercom speak`, "
+                       "then `intercom watch` again in this same turn")
     else:
         out["hint"] = ("speak only if it adds something (no 'still listening'), "
                        "then `intercom watch` again in this same turn")
@@ -237,16 +249,16 @@ def cmd_watch(cfg, args):
     write_state(cursor_name, {"since": body.get("last", since)})
 
 
-def read_text(args):
-    usage = ("pass the note on stdin in a quoted heredoc, so the shell leaves $, quotes and "
-             "backticks alone:\n\n  intercom note <<'EOF'\n  ask about the trustee fee\n  EOF")
+def read_text(args, cmd="note", example="ask about the trustee fee"):
+    usage = (f"pass the text on stdin in a quoted heredoc, so the shell leaves $, quotes and "
+             f"backticks alone:\n\n  intercom {cmd} <<'EOF'\n  {example}\n  EOF")
     if args.text is not None:
         die(f"text given as an argument has already been rewritten by the shell -- {usage}")
     if sys.stdin is None or sys.stdin.isatty():
         die(usage)
     text = " ".join(sys.stdin.read().split())
     if not text:
-        die(f"refusing to send an empty note -- {usage}")
+        die(f"refusing to send nothing -- {usage}")
     return text
 
 
@@ -262,6 +274,42 @@ def cmd_note(cfg, args):
     emit({"ok": True, "delivered": body.get("delivered"),
           **({} if body.get("delivered") else
              {"warning": "no device connected, so nothing vibrated; say it in chat"})})
+
+
+def speak_timeout(text):
+    """Covers playback at a slow rate, waiting out Louie's turn, and generation."""
+    return min(300, len(text) // SPEAK_CHARS_PER_S + 40)
+
+
+def cmd_speak(cfg, args):
+    sid = current_id(args)
+    text = read_text(args, "speak", "Okay, the tests are back and two failed.")
+    if len(text) > SPEAK_MAX:
+        die(f"{len(text)} chars; {SPEAK_MAX} at most per call. Say one paragraph, then the next "
+            "in another `intercom speak`: an interruption then only cuts the one being spoken.")
+    status, body = relay(cfg, "/speak", method="POST", id=sid, body={"text": text},
+                         timeout=speak_timeout(text))
+    if status != 200 or not isinstance(body, dict):
+        die(f"not spoken: {status} {error_text(body)}")
+    out = dict(body)
+    if body.get("status") == "interrupted":
+        out["hint"] = ("Louie heard only `spoken`; don't repeat it. What he said arrives as the next "
+                       "event (heard_so_far is a preview: don't act on it).")
+    elif body.get("status") == "not_delivered":
+        out["hint"] = "no device connected, so nothing was heard; say it in chat"
+    emit(out)
+
+
+def cmd_monitor_url(cfg, args):
+    sid = current_id(args)
+    status, body = relay(cfg, "/status", id=sid, timeout=15)
+    if status != 200 or not isinstance(body, dict):
+        die(f"status failed: {status} {error_text(body)}")
+    if not body.get("event_key"):
+        die(f"session {sid} predates event streams; start a new one")
+    base = cfg["worker_url"].replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+    query = urllib.parse.urlencode({"id": sid, "k": body["event_key"], "since": args.since})
+    print(f"{base}/events?{query}")
 
 
 def cmd_stop(cfg, args):
@@ -293,8 +341,8 @@ def cmd_status(cfg, args):
     status, body = relay(cfg, "/status", id=sid, timeout=15)
     if status != 200:
         die(f"status failed: {status} {error_text(body)}")
-    emit({"id": sid, "state": body.get("state"), "label": body.get("label"),
-          "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
+    emit({"id": sid, "mode": body.get("mode") or "listen", "state": body.get("state"),
+          "label": body.get("label"), "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
           "archive": body.get("archive"), "keyterms": body.get("keyterms"),
           "device": describe_device(body.get("device"), body.get("state"))})
 
@@ -349,6 +397,9 @@ def main():
     sub.add_parser("health", help="check the relay, its secrets and the token").set_defaults(fn=cmd_health)
 
     s = sub.add_parser("start", help="create and arm a session for the device to start")
+    s.add_argument("--mode", choices=("listen", "talk"), default="listen",
+                   help="listen: Claude hears but has no voice. talk: Claude can also speak "
+                        "through the device. Fixed for the session (default %(default)s)")
     s.add_argument("--label", help="a few words shown under the id on the device")
     s.add_argument("--term", action="append", help="a keyterm for the transcriber (repeatable)")
     s.add_argument("--terms-file", help="keyterms, one per line or comma-separated")
@@ -371,6 +422,18 @@ def main():
     n.add_argument("text", nargs="?", help=argparse.SUPPRESS)
     n.add_argument("--id")
     n.set_defaults(fn=cmd_note)
+
+    sp = sub.add_parser("speak", help=f"talk mode: say <= {SPEAK_MAX} chars, on stdin, through the "
+                                      "device; blocks until played or Louie cuts in")
+    sp.add_argument("text", nargs="?", help=argparse.SUPPRESS)
+    sp.add_argument("--id")
+    sp.set_defaults(fn=cmd_speak)
+
+    mu = sub.add_parser("monitor-url", help="the websocket URL for Monitor({ws}): news entries past "
+                                            "--since, then each new one")
+    mu.add_argument("--since", type=int, default=0, help="the last entry number you saw (default 0)")
+    mu.add_argument("--id")
+    mu.set_defaults(fn=cmd_monitor_url)
 
     st = sub.add_parser("stop", help="end the session")
     st.add_argument("--id")

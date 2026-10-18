@@ -1,6 +1,6 @@
 ---
 name: intercom
-description: "Listen in on a live conversation through Louie's phone or Pixel Watch as the microphone: read a real-time speaker-labelled transcript a few seconds behind and steer Louie in chat while it runs. Use whenever Louie asks Claude to listen in, sit in on, coach him through, or take notes on an in-person conversation, meeting, appointment or negotiation, including a Zoom/Meet/Teams call (the phone just listens to the room). NOT for placing phone calls (retell-dialer)."
+description: "Louie's phone or Pixel Watch as Claude's ears, and optionally its voice. Listen mode: read a real-time speaker-labelled transcript of a live conversation a few seconds behind and steer Louie in chat. Use whenever Louie asks Claude to listen in, sit in on, coach him through, or take notes on an in-person conversation, meeting, appointment or negotiation, including a Zoom/Meet/Teams call (the phone just listens to the room). Talk mode: a hands-free spoken conversation with Claude while it keeps working, for when Louie says let's talk, talk me through it, or he's walking, driving or away from the keyboard. NOT for placing phone calls (retell-dialer)."
 ---
 
 # intercom

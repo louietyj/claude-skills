@@ -34,6 +34,7 @@ const ID_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679";  // no 0/O, 1/I, 2/Z, 5/S, 8/B
 const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
 const ARMED_TTL_MS = 15 * 60_000;
 const DEVICE_GONE_MS = 5 * 60_000;
+const PAUSE_MAX_MS = 60 * 60_000;
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
 const ARCHIVE_ROW_BYTES = 120_000;   // ~30s of opus per row: rows written are capped per day
@@ -65,7 +66,6 @@ const SPEAK_MAX = 400;
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
 const MODES = new Set(["listen", "talk"]);
-const LEVELS_MAX = 900;                  // per-second peaks kept per class: 15 minutes
 // While Claude speaks, a word counts only if the page's sustained-energy gate
 // was open when it was said: echo residue comes in brief spikes, Louie's
 // speech is sustained. The gate reports late (it needs most of two seconds of
@@ -75,7 +75,6 @@ const GATE_MARGIN_S = 0.3;
 // Echo of the last words still in flight after the relay stops feeding.
 const ECHO_TAIL_S = 1.5;
 const SPANS_MAX = 50;
-const LEVEL_FRAMES_MAX = 6000;           // 100 ms frames for the timeline: 10 minutes
 // Claude's own notes and speech are logged but are not news.
 const NOT_NEWS = new Set(["note", "said"]);
 const BATCH_PARAMS = {
@@ -491,14 +490,19 @@ export class Session {
       await this.saveMeta();
       await this.registry("/put", { id: this.meta.id, state: "expired" });
       await this.ctx.storage.setAlarm(now + KEEP_MS);
-    } else if (this.live() && !this.device && this.meta.disconnected_at &&
-               now - this.meta.disconnected_at >= DEVICE_GONE_MS) {
-      await this.end(`the device was gone for ${Math.round(DEVICE_GONE_MS / 60000)} minutes`);
+    } else if (this.live() && !this.device && this.meta.disconnected_at && now >= this.goneDeadline()) {
+      await this.end(this.meta.paused_at ? `paused for ${Math.round(PAUSE_MAX_MS / 60000)} minutes`
+                                         : `the device was gone for ${Math.round(DEVICE_GONE_MS / 60000)} minutes`);
     } else if ((this.meta.state === "ended" || this.meta.state === "expired") &&
                now - (this.meta.ended_at ?? this.meta.created_at) >= KEEP_MS) {
       await this.ctx.storage.deleteAll();
       this.meta = null;
     }
+  }
+
+  // A paused device is away on purpose, so it gets longer than a dropped one.
+  goneDeadline() {
+    return this.meta.paused_at ? this.meta.paused_at + PAUSE_MAX_MS : this.meta.disconnected_at + DEVICE_GONE_MS;
   }
 
   // --- device socket -----------------------------------------------------------
@@ -518,10 +522,14 @@ export class Session {
       await this.saveMeta();
       await this.registry("/put", { id: this.meta.id, state: "live" });
       await this.addEntry("event", { text: "recording started" });
+    } else if (this.meta.paused_at) {
+      const gone = Math.round((Date.now() - this.meta.paused_at) / 1000);
+      await this.addEntry("event", { text: `Louie resumed after ${gone}s paused; nothing was heard in between` });
     } else if (this.meta.disconnected_at) {
       const gone = Math.round((Date.now() - this.meta.disconnected_at) / 1000);
       await this.addEntry("event", { text: `device reconnected after ${gone}s; nothing was heard in between` });
     }
+    this.meta.paused_at = null;
     this.meta.disconnected_at = null;
     this.meta.hidden_since = null;
     await this.saveMeta();
@@ -540,10 +548,12 @@ export class Session {
       if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", "the device disconnected");
       this.closeTranscriber();
       await this.flushTurn();
-      if (!this.live()) return;
+      // The page closes soon after a stop, often before ending is done: not a drop.
+      if (!this.live() || this.stopping) return;
       this.meta.disconnected_at = Date.now();
-      await this.addEntry("event", { text: "device disconnected; no audio until it reconnects" });
-      await this.ctx.storage.setAlarm(Date.now() + DEVICE_GONE_MS);
+      if (this.meta.paused_at) await this.saveMeta();
+      else await this.addEntry("event", { text: "device disconnected; no audio until it reconnects" });
+      await this.ctx.storage.setAlarm(this.goneDeadline());
     };
     server.addEventListener("close", gone);
     server.addEventListener("error", gone);
@@ -553,9 +563,8 @@ export class Session {
   async onDeviceMessage(msg) {
     if (msg.type === "hello") { this.meta.ui = msg.ui ?? null; return this.saveMeta(); }
     if (msg.type === "seg") return this.startSegment();
-    if (msg.type === "stop") return this.end("stopped on the device");
-    if (msg.type === "stop_speaking") return this.bargeIn("Louie tapped stop");
-    if (msg.type === "level") return this.onLevel(msg);
+    if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
+    if (msg.type === "pause") return this.pause();
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
     if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
@@ -570,6 +579,14 @@ export class Session {
         await this.addEntry("event", { text: `${who} page back on screen after ${s}s; nothing was heard in between` });
       }
     }
+  }
+
+  // The page closes its socket right after this; the close then counts as a pause, not a drop.
+  async pause() {
+    this.bargeIn("Louie paused the device");
+    await this.flushTurn();
+    this.meta.paused_at = Date.now();
+    await this.addEntry("event", { text: "Louie paused the device: nothing is heard, and you can't speak, until he resumes" });
   }
 
   // --- echo gate (talk mode) ---------------------------------------------------------
@@ -594,38 +611,6 @@ export class Session {
     return !this.loudSpans.some(([a, b]) => at >= a - m && at <= b + m);
   }
 
-  // --- mic levels (talk mode, diagnostic) ------------------------------------------
-  //
-  // Each second the page sends ten 100 ms mic levels in dBFS, kept by who was
-  // talking (status) and as a timeline (/levels), for tuning the echo gate.
-
-  onLevel(msg) {
-    const db = (Array.isArray(msg.db) ? msg.db : []).map(Number).filter(Number.isFinite);
-    if (!db.length) return;
-    const cls = this.speaking ? "claude" : this.tail() ? "louie" : "quiet";
-    this.levels ??= { claude: [], louie: [], quiet: [] };
-    const list = this.levels[cls];
-    list.push(Math.round(Math.max(...db)));
-    if (list.length > LEVELS_MAX) list.shift();
-    // Every frame, for a timeline: the batch covers the second just gone.
-    this.levelLog ??= [];
-    // A batch delayed in transit lands behind the next one; never let time run backwards.
-    const t0 = Math.max(this.elapsed() - db.length * 0.1, this.levelLog.at(-1)?.[0] ?? -Infinity);
-    db.forEach((v, i) => this.levelLog.push([Math.round((t0 + (i + 1) * 0.1) * 10) / 10, v, cls]));
-    if (this.levelLog.length > LEVEL_FRAMES_MAX) this.levelLog.splice(0, this.levelLog.length - LEVEL_FRAMES_MAX);
-  }
-
-  levelSummary() {
-    const out = {};
-    for (const [cls, list] of Object.entries(this.levels ?? {})) {
-      if (!list.length) continue;
-      const s = [...list].sort((a, b) => a - b);
-      const at = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
-      out[cls] = { seconds: s.length, p10: at(0.1), p50: at(0.5), p90: at(0.9), max: s.at(-1) };
-    }
-    return out;
-  }
-
   // --- what Claude reads ---------------------------------------------------------
 
   deviceStatus() {
@@ -634,6 +619,7 @@ export class Session {
     return {
       connected: !!this.device,
       ui: this.meta.ui ?? null,
+      paused_s: s(this.meta.paused_at),
       hidden_s: s(this.meta.hidden_since),
       disconnected_s: s(this.meta.disconnected_at),
       last_audio_s: s(this.lastAudioAt),
@@ -810,7 +796,10 @@ export class Session {
     }
     if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
     if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
-    if (!this.device) return json({ status: "not_delivered", spoken: "", unspoken: text });
+    if (!this.device) {
+      return json({ status: "not_delivered", ...(this.meta.paused_at ? { reason: "Louie paused the device" } : {}),
+                    spoken: "", unspoken: text });
+    }
     if (!this.voiceOut) {
       try { await this.ensureVoice(); } catch (e) { return json({ status: "error", error: e.message }, 502); }
       if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
@@ -1075,10 +1064,8 @@ export class Session {
       }
       return new Response(concat(parts), { headers: { "content-type": "audio/webm" } });
     }
-    if (path === "/levels") return json({ id: this.meta.id, frames: this.levelLog ?? [] });
     if (path === "/status") {
-      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()),
-                    levels: this.levelSummary() });
+      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()) });
     }
     return json({ error: "not found" }, 404);
   }
@@ -1088,7 +1075,7 @@ export class Session {
 
 const DEVICE_ROUTES = new Set(["/armed", "/device"]);
 const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/stop", "/transcript", "/status",
-                            "/audio", "/pair", "/levels"]);
+                            "/audio", "/pair"]);
 // Gated inside the session by its own keys: a Monitor URL never carries the CLI
 // token, and the SFU adapter never sees it.
 const EVENT_ROUTES = new Set(["/events", "/tts-in"]);

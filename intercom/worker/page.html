@@ -26,9 +26,8 @@ button:active{background:#2a2a2a}
    never rides up into the clock. */
 #mid{position:absolute;top:54%;left:10%;right:10%;transform:translateY(-50%)}
 #pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
-#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center}
+#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:6vmin}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
-#build{color:var(--dim);font-size:4vmin}
 #msg{color:var(--dim);font-size:8vmin}
 #status{font-size:7vmin;font-weight:600}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
@@ -40,8 +39,9 @@ button:active{background:#2a2a2a}
      align-items:center;justify-content:center;font-size:7vmin}
 .big b{font-size:10vmin;letter-spacing:.04em}
 .big small{font-size:5vmin;color:var(--amber);letter-spacing:.15em}
-#status.talk{color:var(--amber)}
-#stop{width:17vmin;height:17vmin;border-radius:50%;font-size:8vmin;line-height:1;padding:0;border-color:#4a2a2a}
+#stop,#pause{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
+#bot svg{width:7vmin;height:7vmin;fill:var(--clock)}
+#stop{border-color:#4a2a2a}
 #list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
 .row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
 .row small{display:block;color:var(--dim);font-size:5vmin}
@@ -66,18 +66,20 @@ button:active{background:#2a2a2a}
     <div id="list"></div>
   </div>
   <div id="live" class="hide">
-    <div id="status"></div>
+    <div id="status" class="hide"></div>
     <div id="note"></div>
-    <div id="build"></div>
   </div>
 </div>
-<div id="bot"><button id="stop" class="hide" aria-label="stop">⏹</button></div>
+<div id="bot">
+  <button id="pause" class="hide" aria-label="pause"></button>
+  <button id="stop" class="hide" aria-label="stop"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></button>
+</div>
 <div id="debug" class="hide"></div>
 </div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const KEY = "claude-listen-k";   // the relay's name; changing it would unpair devices
+const KEY = "intercom-k";   // changing it unpairs every device
 // Only reported to Claude; both devices show the same page.
 const UI = new URLSearchParams(location.search).get("ui")
   || (Math.min(innerWidth, innerHeight, screen.width, screen.height) <= 320 ? "watch" : "phone");
@@ -91,9 +93,9 @@ else { try { K = localStorage.getItem(KEY) || ""; } catch {} }
 const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
   (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 
-let mode = "idle", sid = null, ws = null, stream = null, rec = null, lock = null;
-let talk = false, voice = null, voiceEl = null, voiceHow = "", speaking = null;
-let meterCtx = null, meterTimer = null, micDb = null;
+let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
+let talk = false, voice = null, voiceEl = null;
+let meterCtx = null, meterTimer = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -105,9 +107,14 @@ tick(); setInterval(tick, 1000);
 function show(screen) {
   for (const s of ["pair", "idle", "live"]) $(s).classList.toggle("hide", s !== screen);
   $("stop").classList.toggle("hide", screen !== "live");
+  $("pause").classList.toggle("hide", screen !== "live");
   if (screen !== "live") $("sid").textContent = "";
 }
-function status(text, cls) { $("status").textContent = text || ""; $("status").className = cls || ""; }
+// Only trouble and pauses: an empty status leaves the room to the steer note.
+function status(text, cls) {
+  $("status").textContent = text || "";
+  $("status").className = (cls || "") + (text ? "" : " hide");
+}
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 
 // ---- pairing --------------------------------------------------------------------
@@ -193,7 +200,8 @@ async function start(s) {
     voiceEl.autoplay = true;
     voiceEl.play().catch(() => {});   // claims the tap's permission to play
   }
-  if (talk && !meterCtx) { try { meterCtx = new AudioContext(); meterCtx.resume(); } catch {} }
+  if (talk && !meterCtx) { try { meterCtx = new AudioContext(); } catch {} }
+  try { meterCtx && meterCtx.resume(); } catch {}
   try {
     // Listen: processing off, it flattens the voice differences diarization
     // relies on. Talk: echo cancellation on, or Claude transcribes its own voice.
@@ -202,28 +210,32 @@ async function start(s) {
       ? { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
       : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
-  sid = s.id; mode = "live"; failures = 0;
-  clearTimeout(noteTimer);
-  $("note").textContent = "";
+  // A resume keeps the last steer on screen.
+  if (mode !== "paused") { clearTimeout(noteTimer); $("note").textContent = ""; }
+  session = s; sid = s.id; mode = "live"; failures = 0;
   show("live");
+  $("pause").innerHTML = PAUSE_ICON;
   $("sid").textContent = talk ? `${s.id} · TALK` : s.id;
-  showBuild();
   if (talk) startMeter();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
 }
 
+function deviceUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/device?k=${encodeURIComponent(K)}&id=${sid}`;
+}
+
 function connect() {
   clearTimeout(retryTimer);
   if (mode !== "live") return;
   status("Connecting…", "amber");
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const sock = new WebSocket(`${proto}//${location.host}/device?k=${encodeURIComponent(K)}&id=${sid}`);
+  const sock = new WebSocket(deviceUrl());
   ws = sock;
   sock.onopen = () => {
     backoff = 1000; failures = 0;
-    idleStatus();
+    status("");
     send({ type: "hello", ui: UI });
     send({ type: "vis", state: document.visibilityState });
     segment();
@@ -277,66 +289,49 @@ function onMessage(m) {
   if (m.type === "restart") segment();
   else if (m.type === "note") showNote(m.text);
   else if (m.type === "ended") finish("Session ended");
-  else if (m.type === "tts_start") {
-    speaking = m.sid;
-    if (voiceEl) voiceEl.muted = false;
-    status("Claude speaking · tap to stop", "talk");
-  } else if (m.type === "tts_stop" || m.type === "tts_done") {
-    // Muting drops what is still in flight, so the interruption is heard at once.
-    if (m.type === "tts_stop" && voiceEl) voiceEl.muted = true;
-    speaking = null;
-    idleStatus();
-  } else if (m.type === "voice_offer") answerVoice(m.sdp);
+  else if (m.type === "tts_start") { if (voiceEl) voiceEl.muted = false; }
+  // Muting drops what is still in flight, so the interruption is heard at once.
+  else if (m.type === "tts_stop") { if (voiceEl) voiceEl.muted = true; }
+  else if (m.type === "voice_offer") answerVoice(m.sdp);
   else if (m.type === "voice_restart" && talk) startVoice();
-  else if (m.type === "voice_failed") { voiceHow = `failed: ${m.error}`; showBuild(); }
+  else if (m.type === "voice_failed") voiceFailed(m.error);
 }
-
-function idleStatus() { talk ? status("Claude can talk", "talk") : status(""); }
 
 // ---- Claude's voice (talk mode) ------------------------------------------------------
 // A WebRTC track from Cloudflare's SFU, played by an <audio> element: the only
 // playback Chrome on Android cancels from the mic. The relay paces it and keeps
 // time; the page just mutes it the moment Louie cuts in.
 
-const BUILD = "v7";
 // Measured on the watch: echo residue comes in bursts of a few loud frames;
 // Louie's speech holds 70-100% of frames above -35 dB. A one-second window let
 // echo bursts through, so the gate wants most of two seconds: an interruption
-// takes real talking, and a tap still stops Claude at once.
+// takes real talking.
 const GATE_FLOOR_DB = -35;
 const GATE_WINDOW = 20;
 const GATE_MIN_FRAMES = 12;
 const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
-function showBuild() {
-  $("build").textContent = talk ? `${BUILD} · voice: ${voiceHow}${micDb == null ? "" : ` · mic ${micDb} dB`}` : BUILD;
-}
 
-// The mic's level after the browser's echo cancellation, every 100 ms: it
-// drives the echo gate, and goes to the relay a second at a time for diagnostics.
+function voiceFailed(why) { status(`No voice: ${why}`, "red"); }
+
+// The mic's level after the browser's echo cancellation, every 100 ms, drives
+// the echo gate: sustained energy, not a spike. Only transitions are sent.
 function startMeter() {
   if (!meterCtx || !stream) return;
   const an = meterCtx.createAnalyser();
   an.fftSize = 2048;
   meterCtx.createMediaStreamSource(stream).connect(an);
   const buf = new Float32Array(an.fftSize);
-  let batch = [], recent = [], loud = false;
+  let recent = [], loud = false;
   clearInterval(meterTimer);
   meterTimer = setInterval(() => {
     an.getFloatTimeDomainData(buf);
     let sum = 0;
     for (const v of buf) sum += v * v;
-    const db = Math.round(20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9));
-    batch.push(db);
-    // The echo gate: sustained energy, not a spike. Only transitions are sent.
+    const db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);
     recent.push(db > GATE_FLOOR_DB);
     if (recent.length > GATE_WINDOW) recent.shift();
     const now = recent.filter(Boolean).length >= GATE_MIN_FRAMES;
     if (now !== loud) { loud = now; send({ type: "loud", on: loud }); }
-    if (batch.length < 10) return;
-    micDb = Math.max(...batch);
-    send({ type: "level", db: batch });
-    batch = [];
-    showBuild();
   }, 100);
 }
 
@@ -351,15 +346,11 @@ function startVoice() {
   pc.ontrack = (e) => {
     try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
     voiceEl.srcObject = new MediaStream([e.track]);
-    voiceEl.play().catch((err) => { voiceHow = `won't play: ${err.name}`; showBuild(); });
+    voiceEl.play().catch((err) => voiceFailed(`won't play (${err.name})`));
   };
   pc.onconnectionstatechange = () => {
-    if (voice !== pc) return;
-    voiceHow = pc.connectionState === "connected" ? "webrtc sfu" : pc.connectionState;
-    showBuild();
+    if (voice === pc && pc.connectionState === "failed") voiceFailed("connection failed");
   };
-  voiceHow = "connecting";
-  showBuild();
   send({ type: "voice_request" });
 }
 
@@ -379,15 +370,9 @@ async function answerVoice(sdp) {
     });
     if (voice === pc) send({ type: "voice_answer", sdp: pc.localDescription });
   } catch (err) {
-    voiceHow = `failed: ${err.name}`;
-    showBuild();
+    voiceFailed(err.name);
   }
 }
-
-// Any tap while Claude speaks cuts it off, for when talking over it won't do.
-$("stage").addEventListener("click", (e) => {
-  if (speaking && e.target.id !== "stop") send({ type: "stop_speaking" });
-});
 
 // A long steer shrinks until it fits between the session id and stop.
 function fitNote(n) {
@@ -412,13 +397,11 @@ function showNote(text) {
   noteTimer = setTimeout(() => { n.classList.remove("flash"); n.classList.add("old"); }, NOTE_FRESH_MS);
 }
 
-function finish(why) {
-  mode = "idle";
+// Mic, recorder, voice and socket off; the mode is set first, so the close isn't retried.
+function release() {
   clearTimeout(retryTimer);
   closeVoice();
-  speaking = null;
   clearInterval(meterTimer);
-  micDb = null;
   stopRecorder();
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -426,6 +409,11 @@ function finish(why) {
   try { sock && sock.close(1000); } catch {}
   try { lock && lock.release(); } catch {}
   lock = null;
+}
+
+function finish(why) {
+  mode = "idle";
+  release();
   show("idle");
   $("list").innerHTML = "";
   $("msg").classList.remove("hide");
@@ -434,12 +422,44 @@ function finish(why) {
 }
 
 // Flush the recorder first: its last chunk carries the final words.
-$("stop").onclick = async () => {
+async function flushRecorder() {
   const r = rec;
   rec = null;
   if (r) await new Promise((res) => { r.onstop = res; try { r.stop(); } catch { res(); } });
+}
+
+$("stop").onclick = async () => {
+  if (mode === "paused") {
+    // No socket while paused: open one just to say so, until the relay confirms.
+    const sock = new WebSocket(deviceUrl());
+    sock.onopen = () => sock.send(JSON.stringify({ type: "stop" }));
+    sock.onmessage = (m) => { try { if (JSON.parse(m.data).type === "ended") sock.close(1000); } catch {} };
+    return finish("Stopped");
+  }
+  await flushRecorder();
   send({ type: "stop" });
   setTimeout(() => finish("Stopped"), 300);
+};
+
+// Drawn, not font glyphs: those sit off-centre in a round button. The
+// triangle is nudged right so its weight, not its box, is centred.
+const PAUSE_ICON = '<svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.5" height="8"/><rect x="6" y="1" width="2.5" height="8"/></svg>';
+const PLAY_ICON = '<svg viewBox="0 0 10 10"><path d="M2.5 1 L9.5 5 L2.5 9 Z"/></svg>';
+
+// Pause is a deliberate disconnect: everything off, nothing heard or said
+// until resume, which reconnects like a rejoin.
+$("pause").onclick = async () => {
+  if (mode === "paused") return start(session);
+  if (mode !== "live") return;
+  mode = "paused";
+  if (voiceEl) voiceEl.muted = true;
+  await flushRecorder();
+  send({ type: "pause" });
+  setTimeout(() => {
+    release();
+    $("pause").innerHTML = PLAY_ICON;
+    status("Paused", "amber");
+  }, 300);
 };
 
 document.addEventListener("visibilitychange", () => {

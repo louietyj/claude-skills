@@ -129,6 +129,8 @@ class Watch(Base):
                  "last_audio_s": 12, "transcriber": "open"}
         self.assertIn("no audio for 12s", intercom.describe_device(quiet, "live"))
         self.assertIn("has not tapped START", intercom.describe_device({"connected": False}, "armed"))
+        paused = dict(gone, paused_s=30)
+        self.assertIn("PAUSED by Louie 30s ago", intercom.describe_device(paused, "live"))
 
     def test_events_and_notes_render_distinctly_from_speech(self):
         _, out, _ = self.watch_json(body=watch_body(last=3, entries=[

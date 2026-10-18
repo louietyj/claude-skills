@@ -140,6 +140,8 @@ def describe_device(d, state):
         return f"session {state}"
     if state == "armed":
         return "no device yet: Louie has not tapped START"
+    if not d.get("connected") and d.get("paused_s") is not None:
+        return f"{who} PAUSED by Louie {d['paused_s']}s ago: no audio, no speech, until he resumes"
     if not d.get("connected"):
         gone = d.get("disconnected_s")
         return f"{who} DISCONNECTED" + (f" for {gone}s" if gone is not None else "") + ": no audio"
@@ -296,9 +298,14 @@ def cmd_speak(cfg, args):
     if status != 200 or not isinstance(body, dict):
         die(f"not spoken: {status} {error_text(body)}")
     out = dict(body)
-    if body.get("status") == "interrupted":
+    if body.get("status") == "interrupted" and "paused" in (body.get("reason") or ""):
+        out["hint"] = ("Louie paused mid-sentence and heard only `spoken`. When he resumes, pick up "
+                       "from there if it still matters.")
+    elif body.get("status") == "interrupted":
         out["hint"] = ("Louie heard only `spoken`; don't repeat it. What he said arrives as the next "
                        "event (heard_so_far is a preview: don't act on it).")
+    elif body.get("status") == "not_delivered" and body.get("reason"):
+        out["hint"] = "nothing was heard: Louie paused. Say it when he resumes, or in chat if it can't wait"
     elif body.get("status") == "not_delivered":
         out["hint"] = "no device connected, so nothing was heard; say it in chat"
     elif body.get("status") == "not_spoken":
@@ -351,8 +358,7 @@ def cmd_status(cfg, args):
     emit({"id": sid, "mode": body.get("mode") or "listen", "state": body.get("state"),
           "label": body.get("label"), "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
           "archive": body.get("archive"), "keyterms": body.get("keyterms"),
-          "device": describe_device(body.get("device"), body.get("state")),
-          **({"mic_levels_dbfs": body["levels"]} if body.get("levels") else {})})
+          "device": describe_device(body.get("device"), body.get("state"))})
 
 
 def cmd_audio(cfg, args):
@@ -438,7 +444,7 @@ def main():
                     help="the last entry number you read; newer turns from Louie mean nothing is played "
                          "(default: the watch cursor)")
     sp.add_argument("--no-barge-in", action="store_true",
-                    help="testing: Louie's voice doesn't stop this one (a tap still does)")
+                    help="testing: Louie's voice doesn't stop this one (pausing still does)")
     sp.add_argument("--id")
     sp.set_defaults(fn=cmd_speak)
 

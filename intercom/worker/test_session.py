@@ -221,6 +221,16 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(Exception):
             device(sid).recv(timeout=3)
 
+    def test_closing_right_after_stop_is_not_a_drop(self):
+        sid = create()
+        ws = device(sid)
+        ws.send(json.dumps({"type": "seg"}))
+        wait_streams(len(FAKE.streams) or 1)
+        ws.send(json.dumps({"type": "stop"}))
+        ws.close()
+        es = wait_entries(sid, lambda es: any("session ended" in t for t in texts(es, "event")))
+        self.assertFalse(any("device disconnected" in t for t in texts(es, "event")), es)
+
     def test_last_words_land_before_the_end(self):
         sid = create()
         ws = device(sid)
@@ -510,27 +520,6 @@ class Modes(unittest.TestCase):
         listed = http("/armed", token=None, k=DEV)[1]["sessions"]
         self.assertEqual([s["mode"] for s in listed if s["id"] == sid], ["talk"])
 
-    def test_mic_levels_are_sorted_by_who_was_talking(self):
-        sid, _, ws = live_talk(with_transcriber=True)
-        ws.send(json.dumps({"type": "level", "db": [-70, -62, -65]}))
-        script(ws, emit=[FAKE.tokens([("so", 0), ("anyway", 0)], final=False)])
-        end = time.time() + 5
-        while time.time() < end and not http("/watch", id=sid, since=0, interval=0, wait=1)[1]["tail"]:
-            time.sleep(0.2)
-        ws.send(json.dumps({"type": "level", "db": [-30, -24, -28]}))
-        end = time.time() + 5
-        while time.time() < end:
-            levels = http("/status", id=sid)[1].get("levels", {})
-            if "louie" in levels and "quiet" in levels:
-                break
-            time.sleep(0.2)
-        self.assertEqual((levels["quiet"]["max"], levels["louie"]["max"]), (-62, -24), levels)
-        frames = http("/levels", id=sid)[1]["frames"]
-        self.assertEqual([(f[1], f[2]) for f in frames],
-                         [(-70, "quiet"), (-62, "quiet"), (-65, "quiet"), (-30, "louie"), (-24, "louie"), (-28, "louie")])
-        self.assertEqual(frames, sorted(frames), "frame times must run forward")
-        ws.close()
-
     def test_talk_transcriber_waits_patiently_and_skips_diarization(self):
         _, _, ws = live_talk(with_transcriber=True)
         c = FAKE.streams[-1]["config"]
@@ -645,14 +634,26 @@ class Speak(unittest.TestCase):
         self.assertEqual(texts(es, "turn"), ["Okay."])
         ws.close()
 
-    def test_tap_on_the_device_stops_speech(self):
+    def test_pause_stops_speech_and_is_not_a_drop(self):
         sid, _, ws = live_talk()
         th, got = speak_in_background(sid, "one two three four")
         recv_until(ws, lambda m: m.get("type") == "tts_start")
-        ws.send(json.dumps({"type": "stop_speaking"}))
+        ws.send(json.dumps({"type": "pause"}))
         recv_until(ws, lambda m: m.get("type") == "tts_stop")
         th.join(20)
-        self.assertEqual((got["out"]["status"], got["out"]["reason"]), ("interrupted", "Louie tapped stop"))
+        self.assertEqual((got["out"]["status"], got["out"]["reason"]), ("interrupted", "Louie paused the device"))
+        ws.close()
+        end = time.time() + 5
+        while time.time() < end and http("/status", id=sid)[1]["device"]["connected"]:
+            time.sleep(0.1)
+        self.assertIsNotNone(http("/status", id=sid)[1]["device"]["paused_s"])
+        out = http("/speak", "POST", {"text": "hello there"}, id=sid)[1]
+        self.assertEqual((out["status"], out.get("reason")), ("not_delivered", "Louie paused the device"))
+        ws = device(sid)
+        es = wait_entries(sid, lambda es: any("resumed after" in t for t in texts(es, "event")))
+        self.assertTrue(any("Louie paused" in t for t in texts(es, "event")), es)
+        self.assertFalse(any("device disconnected" in t for t in texts(es, "event")), es)
+        self.assertIsNone(http("/status", id=sid)[1]["device"]["paused_s"])
         ws.close()
 
     def test_page_subscribes_to_the_voice_track_through_the_relay(self):

@@ -7,7 +7,7 @@
     "              `intercom bookmark` prints the bookmark URLs."
   ],
 
-  "worker_url": "https://claude-listen.EXAMPLE.workers.dev",
+  "worker_url": "https://claude-intercom.EXAMPLE.workers.dev",
   "cli_token": "...",
   "device_token": "..."
 }

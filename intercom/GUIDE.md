@@ -183,7 +183,7 @@ Arm Monitor on the URL it prints:
 - Monitor truncates a long event (it ends in `...(truncated)`). Read the full
   turn with `intercom transcript` before answering it.
 - While you speak, short sounds don't reach you: to cut in, Louie has to talk
-  for a second or two (or tap). So a turn that arrives mid-speech is deliberate.
+  for a second or two. So a turn that arrives mid-speech is deliberate.
 - Answer with `intercom speak --since <n>`. Between turns, keep working: tools, edits,
   research. He can talk while you work, and his turns arrive when they arrive.
 - Keep the `n` of the last entry you read. The monitor expires after 30
@@ -218,12 +218,13 @@ EOF
   - `not_spoken`: nothing was played, because he said something you hadn't
     read (`turns` has it) or is still mid-sentence (`heard_so_far`). Read his
     turn, then decide what to say now; your line may no longer fit.
-  - `interrupted`: he talked over you or tapped stop. He heard only `spoken`;
-    `unspoken` never reached him. Don't send the next paragraph. His full turn
-    arrives as the next event (`heard_so_far` is only a preview: don't act on
-    it). Then decide whether what he missed still matters, said differently,
+  - `interrupted`: he talked over you or paused. He heard only `spoken`;
+    `unspoken` never reached him. Don't send the next paragraph. If he talked,
+    his full turn arrives as the next event (`heard_so_far` is only a preview:
+    don't act on it); if he paused, wait for him to resume. Then decide whether what he missed still matters, said differently,
     or not at all.
-  - `not_delivered`: no device connected. Tell him in chat.
+  - `not_delivered`: no device connected. If `reason` says he paused, wait
+    for him to resume; otherwise tell him in chat.
 - Before anything consequential (deleting, pushing, sending, spending), say
   what you are about to do and wait for his yes. A misheard word costs more
   when you act on it than when you only answer it.
@@ -270,6 +271,7 @@ exact text in chat, saying out loud that it's there.
 |---|---|---|
 | `streaming` | fine | nothing |
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground (crown press, screen lock, app switch). **Both phone and watch stop the mic** (a watch after ~5s). | tell Louie in chat at once: "your watch page left the screen, I'm not hearing anything" |
+| `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
 | `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
 | `connected but no audio for Ns` | the mic went silent without the page leaving | tell him if it lasts |
 | `has not tapped START` | session armed, nobody started it | remind him of the id |
@@ -304,7 +306,8 @@ Monitor armed in talk mode there is nothing to go back to: it keeps running.
 ## Ending
 
 `watch` returns `event: ended` (Monitor gets a "session ended" event, then the
-socket closes) when Louie taps STOP, the device has been gone 5 minutes, or you
+socket closes) when Louie taps STOP, the device has been gone 5 minutes (paused
+for an hour), or you
 ran `intercom stop` (only when he asks). You have no voice after that. Give a
 short wrap-up in chat: what was agreed, numbers, open questions, follow-ups, anything you
 flagged that never got answered. If you kept a whiteboard, make sure everything

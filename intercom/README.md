@@ -42,8 +42,8 @@ video call to join.
 
 ## Setup
 
-The relay is deployed as the `claude-listen` Worker (the name predates the
-skill's; skill names can't contain "claude"), and that name is in its URL.
+The relay is deployed as the `claude-intercom` Worker (skill names can't
+contain "claude", Worker names can), and that name is in its URL.
 
 ```bash
 cd worker
@@ -136,7 +136,7 @@ packets), and the page subscribes to the published track over WebRTC and plays
 it through `<audio>` with a ~500 ms jitter buffer.
 
 **The relay decides barge-in and keeps the clock.** While Claude speaks, two
-words of Louie's live transcript (or a tap) make the relay stop feeding the
+words of Louie's live transcript (or a pause) make the relay stop feeding the
 track and tell the page to mute. Playback position is time since the first
 frame less the SFU-plus-jitter delay (`VOICE_PLAYOUT_MS`), and Soniox's
 character timestamps turn that into the words he heard. `speak` takes at most
@@ -149,8 +149,13 @@ seconds) clear -35 dB, and sends only the open and close; the relay drops any
 word said during Claude's speech (plus an echo tail) unless the gate was open
 at that word's audio time. Peak loudness alone could not separate them (echo
 spikes reached Louie's level), and a one-second window let echo bursts and
-wrist noise through. So interrupting takes real talking; a tap stops Claude at
-once. When Claude is silent every word counts.
+wrist noise through. So interrupting takes real talking. When Claude is silent
+every word counts.
+
+**Pause is a deliberate disconnect.** The page tells the relay, then turns
+off the mic, the recorder, Claude's voice and the socket; resuming reconnects
+like a rejoin. The relay logs it as a pause rather than a drop, and gives it an
+hour rather than five minutes before ending the session.
 
 **`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
 turn from Louie, or one still in progress, means nothing is played and the

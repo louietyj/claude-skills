@@ -137,6 +137,14 @@ it through `<audio>` with a ~500 ms jitter buffer. That connection takes a few
 seconds after START, and audio sent before it is up is simply lost, so `speak`
 waits (up to 10s) for the page to say it is connected and playing.
 
+**The page's `AudioContext` must open after the mic.** On a Pixel, Chrome
+leaves echo cancellation to the phone, which only cancels audio on a call
+(voice-communication) stream. The echo-cancelled mic puts Android in call
+mode; a context created before that opens a *media* stream, Chrome plays
+Claude's voice through it, and the echo comes back at full level while the
+track still reports `echoCancellation: true`. It depended on timing, so it
+looked intermittent. `dumpsys audio` shows Chrome's playback `usage`.
+
 **The relay decides barge-in and keeps the clock.** While Claude speaks, two
 words of Louie's live transcript (or a pause) make the relay stop feeding the
 track and tell the page to mute. Playback position is time since the first
@@ -156,7 +164,9 @@ word said during Claude's speech (plus an echo tail) unless the gate was open
 at that word's audio time. Peak loudness alone could not separate them (echo
 spikes reached Louie's level), and a one-second window let echo bursts and
 wrist noise through. So interrupting takes real talking. When Claude is silent
-every word counts.
+every word counts. Meanwhile the page ducks Claude to a quarter volume after
+200 ms of sound, as claude.ai's voice mode does, so Louie can be heard while
+the gate decides.
 
 **Pause is a deliberate disconnect.** The page tells the relay, then turns
 off the mic, the recorder, Claude's voice and the socket; resuming reconnects

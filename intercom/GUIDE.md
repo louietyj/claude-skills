@@ -198,7 +198,8 @@ conversation.
 
 Louie is talking with you, hands free: walking, driving, cooking. Only his
 voice is transcribed (no speaker labels), and you answer out loud. Chat is
-still there for anything he would need to read.
+still there for anything he would need to read (see "The screen is a
+whiteboard").
 
 - With Monitor (see "The loop"), answer each turn with `intercom speak --since <n>`.
 - While you speak, short sounds don't reach you: to cut in, Louie has to talk
@@ -206,6 +207,28 @@ still there for anything he would need to read.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
   answer with `intercom speak`, then `intercom watch` again in the same
   message. Keep `watch` in a call on its own, as above.
+
+### The screen is a whiteboard
+
+Talk mode usually means Louie's attention is elsewhere: he is driving or
+walking, and talking so the work can move at a comfortable pace. He looks at
+the screen now and then, never in step with what you say. **Voice is the
+channel.** Chat is a whiteboard for what you can't say aloud.
+
+- **Put on screen only what doesn't work spoken**: a draft for him to send, a
+  link, a table, an image, a sourced write-up, an artifact. Post it once, and
+  say out loud that it's there.
+- **Never restate in chat what you just said aloud.** No prose version of the
+  spoken answer, no "I told Louie…", no "still listening". If a turn has
+  nothing for the screen, end it with no text.
+- **A short checkpoint is fine** at a real milestone: one line on where things
+  stand ("SVFG draft saved; next, the insurer question"). The wrap-up when the
+  session ends is fine too (see "Ending").
+
+A wall of text after every turn means none of it gets read. On one walk,
+nearly every spoken answer was followed by a 1-2K character chat recap of the
+same thing, the email draft appeared in chat twice, and a sourced table was
+followed by a bullet list repeating it.
 
 ### Speaking
 

@@ -100,7 +100,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
 
 let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
-let meterCtx = null, meterTimer = null;
+let meterCtx = null, meterTimer = null, probe = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -217,7 +217,7 @@ async function start(s) {
   // Only after the mic, which puts Android in call mode: a context opened earlier
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams.
-  if (talk) { try { meterCtx = new AudioContext(); meterCtx.resume(); } catch {} }
+  try { meterCtx = new AudioContext(); meterCtx.resume(); } catch {}
   // A resume keeps the last steer on screen.
   if (mode !== "paused") { clearTimeout(noteTimer); $("note").textContent = ""; }
   session = s; sid = s.id; mode = "live"; failures = 0;
@@ -225,6 +225,7 @@ async function start(s) {
   $("pause").innerHTML = PAUSE_ICON;
   $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
   if (talk) startMeter();
+  startProbe();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
@@ -281,7 +282,10 @@ function segment() {
   stopRecorder();
   send({ type: "seg" });
   rec = new MediaRecorder(stream, { mimeType: MIME, audioBitsPerSecond: 64000 });
-  rec.ondataavailable = (e) => { if (e.data.size && ws && ws.readyState === 1) ws.send(e.data); };
+  rec.ondataavailable = (e) => {
+    if (e.data.size && ws && ws.readyState === 1) ws.send(e.data);
+    probeTick();
+  };
   rec.onerror = () => status("Recorder error", "red");
   rec.start(250);
 }
@@ -353,6 +357,41 @@ function startMeter() {
     if (!claudeTalking || quietRun >= UNDUCK_FRAMES) voiceEl.volume = 1;
     else if (hotRun >= DUCK_FRAMES) voiceEl.volume = DUCK_VOLUME;
   }, 100);
+}
+
+// Whether the mic really hears anything, which leaving the screen no longer
+// settles: Chrome with AndroidEnableBackgroundMediaCapturing keeps it, without
+// it Android feeds exact zeros, and a real room is never exactly zero. A frozen
+// buffer means the context stopped, so the page can't tell.
+const PROBE_MS = 500;
+const SILENT_MS = 3000;
+const PROBE_REPEAT_MS = 5000;   // so the relay can tell a stale reading
+function startProbe() {
+  probe = null;
+  if (!meterCtx || !stream) return;
+  const an = meterCtx.createAnalyser();
+  an.fftSize = 2048;
+  meterCtx.createMediaStreamSource(stream).connect(an);
+  probe = { an, buf: new Float32Array(an.fftSize), prev: null, zeroSince: null, at: 0, sent: null, sentAt: 0 };
+}
+
+// Driven by recorder chunks, not a timer: Chrome throttles a hidden page's timers
+// to once a minute, but chunks keep coming as long as the recorder runs.
+function probeTick() {
+  const p = probe, now = Date.now();
+  if (!p || now - p.at < PROBE_MS) return;
+  p.at = now;
+  p.an.getFloatTimeDomainData(p.buf);
+  const zero = p.buf.every((v) => v === 0);
+  const frozen = !zero && p.prev && p.buf.every((v, i) => v === p.prev[i]);
+  p.prev = p.buf.slice();
+  p.zeroSince = zero ? (p.zeroSince ?? now) : null;
+  const state = meterCtx.state !== "running" || frozen ? "unknown"
+    : !zero ? "live" : now - p.zeroSince >= SILENT_MS ? "silent" : p.sent;
+  if (state && (state !== p.sent || now - p.sentAt >= PROBE_REPEAT_MS)) {
+    p.sent = state; p.sentAt = now;
+    send({ type: "mic", state });
+  }
 }
 
 function closeVoice() {
@@ -427,6 +466,7 @@ function release() {
   closeVoice();
   claudeTalking = false;
   clearInterval(meterTimer);
+  probe = null;
   try { meterCtx && meterCtx.close(); } catch {}
   meterCtx = null;
   closePip();

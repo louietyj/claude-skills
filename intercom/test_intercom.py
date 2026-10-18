@@ -121,6 +121,16 @@ class Watch(Base):
         self.assertIn("OFF SCREEN for 16s", out["device"])
         self.assertIn("mic is off", out["device"])
 
+    def test_the_pages_mic_reading_overrides_off_screen(self):
+        dev = {"connected": True, "ui": "phone", "hidden_s": 16, "mic": "live", "mic_silent_s": None,
+               "disconnected_s": None, "last_audio_s": 0, "transcriber": "open"}
+        self.assertEqual(intercom.describe_device(dev, "live"),
+                         "phone streaming, page off screen for 16s but its mic hears")
+        silent = dict(dev, mic="silent", mic_silent_s=9)
+        self.assertEqual(intercom.describe_device(silent, "live"),
+                         "phone mic SILENT for 9s with its page off screen: nothing is being heard")
+        self.assertIn("mic SILENT for 9s: nothing", intercom.describe_device(dict(silent, hidden_s=None), "live"))
+
     def test_dead_device_and_silent_stream_are_named(self):
         gone = {"connected": False, "ui": "watch", "hidden_s": None, "disconnected_s": 40,
                 "last_audio_s": 41, "transcriber": "closed"}

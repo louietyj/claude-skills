@@ -38,6 +38,7 @@ const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const PAUSE_MAX_MS = 60 * 60_000;
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
+const MIC_STALE_MS = 12_000;      // the page repeats its mic reading every ~5s
 const ARCHIVE_ROW_BYTES = 120_000;   // ~30s of opus per row: rows written are capped per day
 const NOTE_MAX = 120;
 const TURN_SPLIT_S = 12;
@@ -233,6 +234,7 @@ export class Session {
     this.cur = null;             // turn being assembled: {spk, t, text}
     this.pending = null;         // words still being recognised, never stored
     this.lastAudioAt = 0;
+    this.mic = null;             // the page's latest mic reading: {state, at}
     this.arch = null;            // {seg, part, chunks, bytes}
     this.keepalive = null;
     this.events = new Set();     // Monitor sockets
@@ -558,6 +560,8 @@ export class Session {
     this.meta.paused_at = null;
     this.meta.disconnected_at = null;
     this.meta.hidden_since = null;
+    this.meta.mic_silent_since = null;
+    this.mic = null;
     await this.saveMeta();
 
     server.addEventListener("message", (m) => {
@@ -596,17 +600,41 @@ export class Session {
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
     if (msg.type === "voice_ready") { this.voiceReady = true; return; }
     if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
+    if (msg.type === "mic") return this.onMic(msg.state);
     if (msg.type === "vis") {
       const who = this.meta.ui ?? "device";
       if (msg.state === "hidden" && this.meta.hidden_since == null) {
         this.meta.hidden_since = Date.now();
-        await this.addEntry("event", { text: `${who} page left the screen: the mic is OFF (a watch keeps ~5s) until it is back` });
+        this.meta.hidden_heard = this.micHears();
+        await this.addEntry("event", { text: this.meta.hidden_heard
+          ? `${who} page left the screen; its mic still hears, and you'll be told if it goes silent`
+          : `${who} page left the screen: the mic is OFF (a watch keeps ~5s) until it is back` });
       } else if (msg.state === "visible" && this.meta.hidden_since != null) {
         const s = Math.round((Date.now() - this.meta.hidden_since) / 1000);
         this.meta.hidden_since = null;
-        await this.addEntry("event", { text: `${who} page back on screen after ${s}s; nothing was heard in between` });
+        await this.addEntry("event", { text: `${who} page back on screen after ${s}s` +
+          (this.meta.hidden_heard ? "" : "; nothing was heard in between") });
       }
     }
+  }
+
+  // The page's own reading of its input: off screen no longer settles it (README: the Chrome flag).
+  async onMic(state) {
+    this.mic = { state, at: Date.now() };
+    const who = this.meta.ui ?? "device";
+    if (state === "silent" && this.meta.mic_silent_since == null) {
+      this.meta.mic_silent_since = Date.now();
+      const where = this.meta.hidden_since != null ? " with its page off screen" : "";
+      await this.addEntry("event", { text: `${who} mic went silent${where}: nothing is heard until it is back` });
+    } else if (state === "live" && this.meta.mic_silent_since != null) {
+      const s = Math.round((Date.now() - this.meta.mic_silent_since) / 1000);
+      this.meta.mic_silent_since = null;
+      await this.addEntry("event", { text: `${who} mic is back after ${s}s silent; nothing was heard in between` });
+    }
+  }
+
+  micHears() {
+    return this.mic?.state === "live" && Date.now() - this.mic.at < MIC_STALE_MS;
   }
 
   // The page closes its socket right after this; the close then counts as a pause, not a drop.
@@ -649,6 +677,8 @@ export class Session {
       ui: this.meta.ui ?? null,
       paused_s: s(this.meta.paused_at),
       hidden_s: s(this.meta.hidden_since),
+      mic: this.micHears() ? "live" : this.meta.mic_silent_since ? "silent" : "unknown",
+      mic_silent_s: s(this.meta.mic_silent_since),
       disconnected_s: s(this.meta.disconnected_at),
       last_audio_s: s(this.lastAudioAt),
       transcriber: this.stt ? "open" : this.sttOpening ? "opening" : "closed",

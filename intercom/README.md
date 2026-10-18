@@ -113,8 +113,17 @@ Chrome has the flag below.** Measured with a throwaway probe on a Pixel Watch 3
   but turns the mic off, so **silence keeps arriving**, indistinguishable from
   a quiet room.
 
-The page therefore reports `visibilitychange`, the relay logs "mic is OFF"
-entries, and `watch` names the device state on every return.
+The page therefore reports `visibilitychange` and reads its own mic, the relay
+logs both, and `watch` names the device state on every return.
+
+**A silenced mic delivers exact zeros.** Measured on the Pixel 11 Pro behind the
+lock screen: without the flag below every sample was 0.0, with it a quiet room
+read ~1e-5 even through noise suppression. So the page samples an analyser
+on recorder chunks, at most every 500 ms (a hidden page's timers are throttled,
+its recorder isn't), and reports `live`, `silent` (zeros for 3s) or `unknown` (the
+context stopped or its buffer froze), repeating it every 5s. Only a hidden page
+with no fresh `live` reading is logged as "mic is OFF", which covers the watch,
+whose socket dies anyway, and pages cached from before the probe.
 
 **Picture-in-picture keeps the phone's mic across app switches.** Chrome on
 Android silences a background page's mic after ~5s (crbug 445356777) unless
@@ -147,8 +156,8 @@ It survives reboots and Chrome updates. Clearing Chrome's data or resetting its
 flags undoes step 1, a factory reset undoes both, and `adb shell rm
 /data/local/tmp/chrome-command-line` undoes it on purpose (in Git Bash, set
 `MSYS_NO_PATHCONV=1` or the path gets rewritten). The feature is experimental:
-if the mic goes silent on lock again, check `chrome://version` first. The relay
-can't tell either way; it still logs a hidden page as "mic is OFF".
+if the relay logs the mic going silent on lock again, check `chrome://version`
+first.
 
 **No browser audio processing in listen mode.** `noiseSuppression` and
 `autoGainControl` are off and the recorder runs at 64 kbps: both flatten the

@@ -449,6 +449,28 @@ class Device(unittest.TestCase):
         wait_entries(sid, lambda es: any("back on screen" in t for t in texts(es, "event")))
         ws.close()
 
+    def test_a_mic_that_still_hears_off_screen_is_not_called_off(self):
+        sid = create()
+        ws = device(sid)
+        ws.send(json.dumps({"type": "mic", "state": "live"}))
+        ws.send(json.dumps({"type": "vis", "state": "hidden"}))
+        out = http("/watch", id=sid, since=0, interval=0, wait=3)[1]
+        events = texts(out["entries"], "event")
+        self.assertTrue(any("still hears" in t for t in events), events)
+        self.assertFalse(any("mic is OFF" in t for t in events), events)
+        self.assertEqual(out["device"]["mic"], "live")
+        ws.send(json.dumps({"type": "mic", "state": "silent"}))
+        es = wait_entries(sid, lambda es: any("went silent" in t for t in texts(es, "event")))
+        self.assertTrue(any("page off screen" in t for t in texts(es, "event")))
+        self.assertIsNotNone(http("/status", id=sid)[1]["device"]["mic_silent_s"])
+        ws.send(json.dumps({"type": "mic", "state": "live"}))
+        wait_entries(sid, lambda es: any("mic is back after" in t for t in texts(es, "event")))
+        ws.send(json.dumps({"type": "vis", "state": "visible"}))
+        es = wait_entries(sid, lambda es: any("back on screen" in t for t in texts(es, "event")))
+        back = next(t for t in texts(es, "event") if "back on screen" in t)
+        self.assertNotIn("nothing was heard", back)
+        ws.close()
+
     def test_disconnect_and_reconnect_are_reported(self):
         sid = create()
         ws = device(sid)

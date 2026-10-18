@@ -309,8 +309,9 @@ exact text in chat, saying out loud that it's there.
 
 | `device` says | meaning | do |
 |---|---|---|
-| `streaming` | fine | nothing |
-| `page OFF SCREEN for Ns: mic is off` | the page left the foreground (crown press, screen lock, app switch). **The watch stops its mic** (after ~5s). **The phone's usually keeps going** (below). | watch: tell Louie in chat at once: "your watch page left the screen, I'm not hearing anything". Phone: nothing while his turns keep arriving |
+| `streaming` | fine; `, page off screen for Ns but its mic hears` too: the page checks its own mic | nothing |
+| `mic SILENT for Ns` | the mic delivers pure zeros: Android silenced it (below) | tell Louie in chat at once: "your mic went silent, I'm not hearing anything" |
+| `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no mic reading from it: a watch (crown press, its mic stops after ~5s) or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
 | `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
 | `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
 | `connected but no audio for Ns` | the mic went silent without the page leaving | tell him if it lasts |
@@ -318,16 +319,14 @@ exact text in chat, saying out loud that it's there.
 
 Louie's phone runs Chrome with a flag that keeps the mic on through screen lock
 and app switches (README, "A Chrome feature flag keeps the phone's mic"), so he
-can talk with it locked in his pocket. The relay still says "mic is off" for a
-phone page off screen; his transcribed turns are what tell you it's hearing him.
+can talk with it locked in his pocket. A silenced mic still sends audio, so this
+line is all that tells a quiet room from a dead one.
 
-If they stop while the phone page is off screen, the flag has probably been
-lost. A phone page without it still sends audio, but it is silence, so this line
-is then all that tells a quiet room from a dead mic. Tell him, and fall back to
-the picture-in-picture button (left of pause): it keeps the mic across app
-switches, not screen lock. Before you operate his phone in talk mode, tap it
-yourself (it is labelled "picture in picture"; a tap from the phone tools
-counts), or ask him to.
+If the phone's mic goes SILENT with its page off screen, the flag has probably
+been lost. Tell him, and fall back to the picture-in-picture button (left of
+pause): it keeps the mic across app switches, not screen lock. Before you
+operate his phone in talk mode without the flag, tap it yourself (it is
+labelled "picture in picture"; a tap from the phone tools counts), or ask him to.
 
 ## Watch notes
 

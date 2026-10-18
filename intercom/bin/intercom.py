@@ -145,16 +145,22 @@ def describe_device(d, state):
     if not d.get("connected"):
         gone = d.get("disconnected_s")
         return f"{who} DISCONNECTED" + (f" for {gone}s" if gone is not None else "") + ": no audio"
+    if d.get("mic_silent_s") is not None:
+        where = " with its page off screen" if d.get("hidden_s") is not None else ""
+        return f"{who} mic SILENT for {d['mic_silent_s']}s{where}: nothing is being heard"
+    off = ""
     if d.get("hidden_s") is not None:
-        return f"{who} page OFF SCREEN for {d['hidden_s']}s: mic is off, nothing is being heard"
+        if d.get("mic") != "live":
+            return f"{who} page OFF SCREEN for {d['hidden_s']}s: mic is off, nothing is being heard"
+        off = f", page off screen for {d['hidden_s']}s but its mic hears"
     if d.get("transcriber") != "open":
-        return f"{who} connected, transcriber {d.get('transcriber')}"
+        return f"{who} connected, transcriber {d.get('transcriber')}{off}"
     audio = d.get("last_audio_s")
     if audio is None:
-        return f"{who} connected, no audio received yet"
+        return f"{who} connected, no audio received yet{off}"
     if audio > 5:
-        return f"{who} connected but no audio for {audio}s"
-    return f"{who} streaming"
+        return f"{who} connected but no audio for {audio}s{off}"
+    return f"{who} streaming{off}"
 
 
 # --- commands --------------------------------------------------------------------

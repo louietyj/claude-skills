@@ -320,9 +320,11 @@ and app switches (README, "A Chrome feature flag keeps the phone's mic"), so he
 can talk with it locked in his pocket. A silenced mic still sends audio, so this
 line is all that tells a quiet room from a dead one.
 
-If the phone's mic goes SILENT with its page off screen, the flag has probably
-been lost. Tell him, and fall back to the picture-in-picture button (left of
-pause): it keeps the mic across app switches, not screen lock. Before you
+If the phone's mic goes SILENT with its page off screen, another app has taken
+the mic (a call, a recorder, the assistant), or the flag has been lost. Tell
+him. If it stays silent once nothing else is recording, fall back to the
+picture-in-picture button (left of pause): it keeps the mic across app
+switches, not screen lock. Before you
 operate his phone in talk mode without the flag, tap it yourself (it is
 labelled "picture in picture"; a tap from the phone tools counts), or ask him to.
 

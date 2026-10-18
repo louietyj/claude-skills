@@ -104,8 +104,9 @@ clear to a human ear; its spectrum is thin above 2 kHz with image energy at
 8–12 kHz, which seems to be what Deepgram's streaming model cannot cluster.
 Soniox is also about a quarter of the price.
 
-**The page must stay on screen, on both devices.** Measured with a throwaway probe on a
-Pixel Watch 3 (Samsung Internet 5.2) and a Pixel 11 Pro (Chrome 154):
+**The page must stay on screen: on the watch always, on the phone unless
+Chrome has the flag below.** Measured with a throwaway probe on a Pixel Watch 3
+(Samsung Internet 5.2) and a Pixel 11 Pro (stock Chrome 154):
 - Watch: a crown press releases Wake Lock, and ~5s later the socket dies. The
   page reconnects by itself when reopened.
 - Phone: a screen lock or app switch keeps the socket and the recorder alive
@@ -123,6 +124,31 @@ page at once. The page reports itself visible while the tile is open, and
 hidden if it is closed while away, which silences the mic again
 (crbug 491996749). Screen lock still stops it. With Wake Lock
 held, the watch stayed awake in ambient mode, wrist down.
+
+**A Chrome feature flag keeps the phone's mic through screen lock.** Android
+14+ lets a backgrounded app record only under a `microphone` foreground
+service. Chrome's manifest declares one, but Chrome starts it only behind
+`AndroidEnableBackgroundMediaCapturing`, which is off by default and not in
+`chrome://flags` (see `MediaCaptureNotificationServiceImpl.java`). With it on, a
+tab that opens the mic starts the service while still on screen, and the mic
+survives screen lock and app switches without the PiP tile. Tested on the Pixel
+11 Pro (Chrome 155), locked in a pocket, talking through earbuds. Louie's phone
+has it, set up once over adb:
+
+1. `chrome://flags/#enable-command-line-on-non-rooted-devices` → Enabled, relaunch.
+2. Write the flag to Chrome's command-line file and restart Chrome:
+   ```bash
+   adb shell 'echo "_ --enable-features=AndroidEnableBackgroundMediaCapturing" > /data/local/tmp/chrome-command-line'
+   adb shell am force-stop com.android.chrome
+   ```
+3. `chrome://version` should list the flag under "Command Line".
+
+It survives reboots and Chrome updates. Clearing Chrome's data or resetting its
+flags undoes step 1, a factory reset undoes both, and `adb shell rm
+/data/local/tmp/chrome-command-line` undoes it on purpose (in Git Bash, set
+`MSYS_NO_PATHCONV=1` or the path gets rewritten). The feature is experimental:
+if the mic goes silent on lock again, check `chrome://version` first. The relay
+can't tell either way; it still logs a hidden page as "mic is OFF".
 
 **No browser audio processing in listen mode.** `noiseSuppression` and
 `autoGainControl` are off and the recorder runs at 64 kbps: both flatten the

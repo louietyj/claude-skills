@@ -671,6 +671,17 @@ def wrap(line):
     return out + [line]
 
 
+def edit_line(role, sent, target):
+    """Resend from the start of the first sentence that changed, quoting the
+    words it replaces from, rather than the whole turn again."""
+    same = os.path.commonprefix([sent, target])
+    start = len(last_sentence_end(same))
+    if not start:
+        return f"{role} (edited): {target}"
+    old = " ".join(sent[start:].split()[:4])
+    return f'{role} (edited from "{old}"): {target[start:].strip()}'
+
+
 def describe(item):
     """A line for an item nobody speaks."""
     role = item.get("role")
@@ -769,7 +780,7 @@ class Stream:
                 label = f"{role} (cont.)" if sent else role
                 out.append(f"{label}: {target[len(sent):].strip()}{tail}")
             else:
-                out.append(f"{role} (edited): {target}{tail}")
+                out.append(edit_line(role, sent, target) + tail)
             self.sent[iid] = target
         return out
 

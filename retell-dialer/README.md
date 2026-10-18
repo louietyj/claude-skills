@@ -100,8 +100,9 @@ one phrase flipped five times over 13 seconds, a full stop taken back. So a
 turn goes out up to a sentence end every version of the last 2 s agrees on,
 which produced no edits on that call, and in full once a later turn exists and
 it has gone 2 s unchanged. Without that second condition, a goodbye talked
-over went out as "Thanks". Revisions that do come are sent, marked; case and
-punctuation count, since they can change meaning.
+over went out as "Thanks". Revisions that do come are sent, marked, from the
+first sentence that changed; case and punctuation count, since they can change
+meaning.
 
 **`follow` batches for Monitor.** Every event wakes Claude, so dialogue goes
 out at most every 10 s, and a consult or the end goes out at once. Monitor cuts

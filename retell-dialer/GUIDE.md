@@ -240,8 +240,9 @@ CALL ENDED: agent_hangup, 184s. Full transcript: dialer transcript call_8f2e
 - **`[...still speaking]`**: that turn is still going. Everything on the line is
   a whole sentence Retell has stopped revising, but the speaker has not
   finished the thought.
-- **`(edited)`**: Retell revised text you already had. The line is that turn
-  so far, in full, replacing what came before.
+- **`(edited)`**: Retell revised text you already had, and the line replaces
+  that turn so far. **`(edited from "Second, new patients get")`** replaces it
+  only from those words on: the sentence where the change starts, and what follows.
 - **`answer` and `steer` send and return** while follow runs, since the
   stream already carries what happens next. Act, then wait for the next event.
 - **A long call outlives Monitor's 30 minutes.** On the expiry notice, arm the

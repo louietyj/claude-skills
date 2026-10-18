@@ -776,6 +776,34 @@ class FollowRecordedCall(unittest.TestCase):
                   if l.startswith("user") and ("48 hours" in l or "(cont.)" in l)]
         self.assertEqual(" ".join(pieces), final.strip())
 
+    def test_edits_from_real_revisions_still_add_up(self):
+        # A 0.5s window sends text before Retell is done revising it, so the
+        # recording's real revisions arrive as edits, several sentences deep.
+        saved, dialer.FOLLOW_SETTLE = dialer.FOLLOW_SETTLE, 0.5
+        try:
+            out = replay(dialer.Stream(), self.frames)
+        finally:
+            dialer.FOLLOW_SETTLE = saved
+        text = ""
+        partial = 0
+        for _, line in out:
+            if not line.startswith("user") or "I mean" in line or "next bill" in line:
+                continue
+            head, body = line.replace(dialer.STILL, "").split(": ", 1)
+            if head.startswith('user (edited from "'):
+                anchor = head[len('user (edited from "'):-2]
+                text = text[:text.rindex(anchor)] + body
+                partial += 1
+            elif head == "user (edited)":
+                text = body
+            else:
+                text = f"{text} {body}".strip()
+        self.assertGreater(partial, 1)
+        final = [f["frame"]["transcripts"][0]["content"] for f in self.frames
+                 if f["frame"].get("transcripts")
+                 and f["frame"]["transcripts"][0]["id"] == "user_1"][-1]
+        self.assertEqual(text, final.strip())
+
 
 class FollowStream(unittest.TestCase):
     def test_agent_sentences_go_out_without_settling(self):
@@ -821,6 +849,21 @@ class FollowStream(unittest.TestCase):
         self.assertEqual(s.lines(5.0), [])
         self.assertEqual(s.lines(6.0),
                          ["user (edited): We charge 50. Then more." + dialer.STILL])
+
+    def test_an_edit_resends_from_the_first_sentence_that_changed(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "One fine. Two fine. Three fine. ", 1.0)), 1.0)
+        s.lines(3.0)
+        s.feed(frame(said("user_0", "One fine. Two fixed. Three fixed. Four. ", 1.0)), 4.0)
+        self.assertEqual(s.lines(6.0), ['user (edited from "Two fine. Three fine."): '
+                                        "Two fixed. Three fixed. Four." + dialer.STILL])
+
+    def test_a_change_in_the_first_sentence_resends_the_turn(self):
+        s = dialer.Stream()
+        s.feed(frame(said("user_0", "Sure. We ask. ", 1.0)), 1.0)
+        s.lines(3.0)
+        s.feed(frame(said("user_0", "Sure, so we ask. ", 1.0)), 4.0)
+        self.assertEqual(s.lines(6.0), ["user (edited): Sure, so we ask." + dialer.STILL])
 
     def test_a_taken_back_full_stop_is_not_an_edit_until_it_settles(self):
         s = dialer.Stream()

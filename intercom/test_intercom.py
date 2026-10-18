@@ -81,6 +81,45 @@ def watch_body(**kw):
     return body
 
 
+class Follow(Base):
+    def setUp(self):
+        super().setUp()
+        intercom.write_state("current.json", {"id": "K7QM"})
+
+    def follow(self, watches, mode="talk", argv=("follow",)):
+        answers = iter(watches)
+        relay = Relay({"/status": (200, {"mode": mode}), "/watch": lambda p, b: next(answers)})
+        with mock.patch.object(intercom.time, "sleep", lambda s: None):
+            code, out, _ = self.run_cli(list(argv), relay)
+        return relay, [json.loads(l) for l in out.splitlines()]
+
+    def test_entries_stream_one_line_each_until_the_end_without_claudes_own(self):
+        relay, lines = self.follow([
+            (200, watch_body(last=3, entries=[{"n": 2, "kind": "turn", "text": "Hi."},
+                                              {"n": 3, "kind": "said", "text": "Hello."}])),
+            (0, {"error": "TimeoutError"}),
+            (200, watch_body(event="idle")),
+            (200, watch_body(event="ended", last=4, entries=[{"n": 4, "kind": "event", "text": "session ended"}])),
+        ], argv=("follow", "--since", "1"))
+        self.assertEqual([l["n"] for l in lines], [2, 4])
+        self.assertEqual([c["params"]["since"] for c in relay.calls if c["path"] == "/watch"],
+                         ["1", "3", "3", "3"])
+        self.assertEqual(relay.calls[1]["params"]["interval"], "0")
+
+    def test_listen_mode_gathers_turns_like_the_event_stream(self):
+        relay, _ = self.follow([(200, watch_body(event="ended"))], mode="listen")
+        self.assertEqual(relay.calls[1]["params"]["interval"], str(intercom.WATCH_INTERVAL))
+
+    def test_a_gone_session_stops_with_a_line_instead_of_retrying(self):
+        _, lines = self.follow([(404, {"error": "no such session"})])
+        self.assertEqual(lines[0]["kind"], "error")
+
+    def test_follow_never_moves_the_cursor_speak_defaults_to(self):
+        intercom.write_state("cursor-K7QM.json", {"since": 1})
+        self.follow([(200, watch_body(event="ended", last=9))])
+        self.assertEqual(intercom.read_state("cursor-K7QM.json"), {"since": 1})
+
+
 class Watch(Base):
     def setUp(self):
         super().setUp()
@@ -229,7 +268,7 @@ class Talk(Base):
         code, out, _ = self.run_cli(["start", "--mode", "talk"], relay)
         self.assertEqual((code, relay.calls[-1]["body"]["mode"]), (0, "talk"))
         self.assertIn("TALK", json.loads(out)["next"])
-        self.assertIn("monitor-url", json.loads(out)["next"])
+        self.assertIn("intercom follow", json.loads(out)["next"])
 
     def test_listen_is_the_default_mode(self):
         intercom.write_state("current.json", {})

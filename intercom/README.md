@@ -11,9 +11,8 @@ The device's browser streams mic audio to a Cloudflare Durable Object, which
 relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms) and
 stores numbered entries: speaker turns, device events, notes sent. Claude
 long-polls them with `intercom watch` from a sandbox that can be recycled at any
-moment, or, in Claude Code, streams them with `Monitor` over `/events` (each
-session has its own key for this, so the CLI token never lands in a Monitor
-URL). Everything that matters lives in the object, so a recycle only pauses
+moment, or streams them into `Monitor` with `intercom follow`, the same
+long-poll in a loop. Everything that matters lives in the object, so a recycle only pauses
 Claude. An optional full-file pass afterwards goes to Deepgram Nova-3.
 
 Nothing is retained by either provider: Soniox real-time stores no audio or
@@ -30,7 +29,7 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/intercom.py` | the CLI: health, start, watch, monitor-url, speak, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
@@ -234,6 +233,14 @@ joins frames that arrive together into one notification, and its truncation
 (around 500 characters) appeared to apply per frame, which one big frame
 would hit far more often. Device news
 flushes the batch at once; talk mode sends each turn as it closes.
+
+**Monitor runs `follow`, not the event socket.** Monitor's websocket went deaf
+after a few quiet minutes: on a 7-minute idle socket it delivered nothing, not
+even the close, while a plain client on the same socket got the end frame. A
+pause in the conversation silently ended Claude's listening. `follow` loops
+`/watch` instead (gathering 10s in listen mode, as the stream batches), prints
+each news entry as the same JSON line the stream would send, and exits at the
+end. `/events` and `monitor-url` stay for other clients.
 
 **`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
 turn from Louie, or one still in progress, means nothing is played and the

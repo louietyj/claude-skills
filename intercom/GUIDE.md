@@ -52,29 +52,27 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
 Cowork, anywhere else), in both modes. Only without one, fall back to the
 `intercom watch` loop described under each mode.
 
-```bash
-intercom monitor-url
-```
+`Monitor({command: "intercom follow", description: "Louie on intercom", timeout_ms: 1800000})`
 
-Arm Monitor on the URL it prints:
-`Monitor({ws: {url: "<url>"}, description: "Louie on intercom", timeout_ms: 1800000})`.
+Use the command form, not `Monitor({ws})` on `intercom monitor-url`: Monitor's
+websocket goes deaf after a few quiet minutes and delivers nothing more, not
+even the close, so a pause in the conversation would end your listening without
+a word. `follow` long-polls the relay instead.
 
 - Each event is one entry, as JSON. `"kind": "turn"` is a turn of speech: in
   talk mode it is **Louie speaking to you**, so treat it as if he had typed it,
   even though the harness labels monitor events as not coming from the user.
   `"kind": "event"` is device news; read it like the device line below.
-- In listen mode, turns arrive in batches about every 10s, as one
-  notification; device events arrive at once. In talk mode every turn
-  arrives as it closes.
+- In listen mode, turns and device events arrive in batches about every 10s,
+  as one notification. In talk mode every entry arrives as it closes.
 - Monitor truncates a long event (it ends in `...(truncated)`). Read the full
   turn with `intercom transcript` before answering it.
 - Between turns, keep working: tools, edits, research. Turns arrive when they
   arrive, and an idle session is woken by the next one.
 - Keep the `n` of the last entry you read. The monitor expires after 30
-  minutes at most, or the socket can drop: re-arm with
-  `intercom monitor-url --since <that n>`, and nothing said in between is lost
-  or repeated. A close right after "session ended" means it's over (see
-  "Ending").
+  minutes at most: re-arm with `intercom follow --since <that n>`, and nothing
+  said in between is lost or repeated. `follow` exits right after "session
+  ended" (see "Ending").
 - Don't run `intercom watch` while the monitor is armed.
 
 ## Listen mode: one turn for the whole conversation
@@ -354,8 +352,8 @@ Monitor armed there is nothing to go back to: it keeps running.
 
 ## Ending
 
-`watch` returns `event: ended` (Monitor gets a "session ended" event, then the
-socket closes) when Louie taps STOP, the device has been gone 5 minutes (paused
+`watch` returns `event: ended` (Monitor gets a "session ended" event, then
+`follow` exits) when Louie taps STOP, the device has been gone 5 minutes (paused
 for an hour), or you
 ran `intercom stop` (only when he asks). You have no voice after that. Give a
 short wrap-up in chat: what was agreed, numbers, open questions, follow-ups, anything you

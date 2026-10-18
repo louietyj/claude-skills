@@ -28,6 +28,7 @@ NOTE_MAX = 120
 SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a technical limit
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 IN_PROGRESS = "  [...still speaking]"
+NOT_NEWS = {"note", "said"}   # as the relay's: Claude's own doings, which wake nobody
 
 
 def die(msg, code=1):
@@ -213,7 +214,7 @@ def cmd_start(cfg, args):
     write_state(f"cursor-{sid}.json", {"since": 0})
     tap = (f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id matches; "
            f"it should say {args.mode.upper()}).")
-    then = (" Then, if you have a Monitor tool (in any environment), arm it on `intercom monitor-url`;"
+    then = (" Then, if you have a Monitor tool (in any environment), arm it on the command `intercom follow`;"
             " only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
           "archive": args.archive, "next": tap + then})
@@ -332,6 +333,35 @@ def cmd_monitor_url(cfg, args):
     base = cfg["worker_url"].replace("https://", "wss://", 1).replace("http://", "ws://", 1)
     query = urllib.parse.urlencode({"id": sid, "k": body["event_key"], "since": args.since})
     print(f"{base}/events?{query}")
+
+
+def cmd_follow(cfg, args):
+    """For Monitor's command mode, whose websocket goes deaf on a quiet socket
+    (README). Keeps its own cursor, not watch's, because `speak` defaults to that one."""
+    sid = current_id(args)
+    status, body = relay(cfg, "/status", id=sid, timeout=15)
+    if status != 200 or not isinstance(body, dict):
+        die(f"status failed: {status} {error_text(body)}")
+    # Listen-mode turns are gathered for 10s, as the event stream does; talk turns go at once.
+    interval = 0 if body.get("mode") == "talk" else WATCH_INTERVAL
+    since, backoff = args.since, 1
+    while True:
+        status, body = relay(cfg, "/watch", id=sid, since=since, interval=interval,
+                             wait=WATCH_BUDGET, timeout=WATCH_BUDGET + 20)
+        if status in (401, 403, 404):
+            print(json.dumps({"kind": "error", "text": f"follow stopped: {status} {error_text(body)}"}), flush=True)
+            return
+        if status != 200 or not isinstance(body, dict):
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+            continue
+        backoff = 1
+        for e in body.get("entries", []):
+            if e.get("kind") not in NOT_NEWS:
+                print(json.dumps(e, ensure_ascii=False), flush=True)
+        since = max(since, body.get("last") or 0)
+        if body["event"] == "ended" and not body.get("more"):
+            return
 
 
 def cmd_stop(cfg, args):
@@ -456,11 +486,17 @@ def main():
     sp.add_argument("--id")
     sp.set_defaults(fn=cmd_speak)
 
-    mu = sub.add_parser("monitor-url", help="the websocket URL for Monitor({ws}): news entries past "
-                                            "--since, then each new one")
+    mu = sub.add_parser("monitor-url", help="the websocket URL of the event stream (not for Monitor({ws}), "
+                                            "which goes deaf on a quiet socket: use follow)")
     mu.add_argument("--since", type=int, default=0, help="the last entry number you saw (default 0)")
     mu.add_argument("--id")
     mu.set_defaults(fn=cmd_monitor_url)
+
+    fo = sub.add_parser("follow", help="for Monitor({command}): each news entry past --since as a "
+                                       "JSON line, until the session ends")
+    fo.add_argument("--since", type=int, default=0, help="the last entry number you saw (default 0)")
+    fo.add_argument("--id")
+    fo.set_defaults(fn=cmd_follow)
 
     st = sub.add_parser("stop", help="end the session")
     st.add_argument("--id")

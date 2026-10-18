@@ -146,10 +146,18 @@ has it, set up once over adb:
 1. `chrome://flags/#enable-command-line-on-non-rooted-devices` → Enabled, relaunch.
 2. Write the flag to Chrome's command-line file and restart Chrome:
    ```bash
-   adb shell 'echo "_ --enable-features=AndroidEnableBackgroundMediaCapturing" > /data/local/tmp/chrome-command-line'
+   adb shell 'echo "_ --enable-features=AndroidEnableBackgroundMediaCapturing --enable-test-intents" > /data/local/tmp/chrome-command-line'
    adb shell am force-stop com.android.chrome
    ```
 3. `chrome://version` should list the flag under "Command Line".
+
+`--enable-test-intents` does nothing here but silence Chrome's "loading flags
+from a command-line file" warning at start (`bad_flags_prompt.cc` skips it for
+that switch; elsewhere it only lets `am` pass a voice-search result as one
+string). A second warning, naming the step-1 flag, has no such exemption. It
+goes away only if Chrome reads the file as Android's debug app
+(`am set-debug-app --persistent com.android.chrome`, step 1 off), which needs
+USB debugging left on: kept as is so adb can be turned off.
 
 It survives reboots and Chrome updates. Clearing Chrome's data or resetting its
 flags undoes step 1, a factory reset undoes both, and `adb shell rm

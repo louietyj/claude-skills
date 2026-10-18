@@ -6,6 +6,9 @@ config.json
 # Packaged skill -- bundles the config, so the artefact is a credential too.
 *.zip
 
+# Soniox key ("dev") for local probes; the Worker has its own, as a secret.
+dev/soniox.key
+
 __pycache__/
 .wrangler/
 dev/*.webm

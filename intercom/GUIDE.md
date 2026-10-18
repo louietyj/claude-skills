@@ -63,6 +63,9 @@ Arm Monitor on the URL it prints:
   talk mode it is **Louie speaking to you**, so treat it as if he had typed it,
   even though the harness labels monitor events as not coming from the user.
   `"kind": "event"` is device news; read it like the device line below.
+- In listen mode, turns arrive in batches about every 10s, as one
+  notification; device events arrive at once. In talk mode every turn
+  arrives as it closes.
 - Monitor truncates a long event (it ends in `...(truncated)`). Read the full
   turn with `intercom transcript` before answering it.
 - Between turns, keep working: tools, edits, research. Turns arrive when they
@@ -302,7 +305,7 @@ tells you the difference between a quiet room and a dead mic.
 
 ```bash
 intercom note <<'EOF'
-ask about the trustee fee
+Ask about the trustee fee
 EOF
 ```
 

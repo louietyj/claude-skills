@@ -250,7 +250,7 @@ def cmd_watch(cfg, args):
     write_state(cursor_name, {"since": body.get("last", since)})
 
 
-def read_text(args, cmd="note", example="ask about the trustee fee"):
+def read_text(args, cmd="note", example="Ask about the trustee fee"):
     usage = (f"pass the text on stdin in a quoted heredoc, so the shell leaves $, quotes and "
              f"backticks alone:\n\n  intercom {cmd} <<'EOF'\n  {example}\n  EOF")
     if args.text is not None:

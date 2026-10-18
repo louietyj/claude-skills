@@ -34,6 +34,7 @@ const ID_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679";  // no 0/O, 1/I, 2/Z, 5/S, 8/B
 const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
 const ARMED_TTL_MS = 15 * 60_000;
 const DEVICE_GONE_MS = 5 * 60_000;
+const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const PAUSE_MAX_MS = 60 * 60_000;
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
@@ -289,7 +290,29 @@ export class Session {
     return e;
   }
 
+  // Each Monitor event wakes Claude, and a conversation has a turn every few
+  // seconds, so listen-mode turns are held and then sent back to back: Monitor
+  // delivers frames that close together as one notification, and each frame
+  // keeps its own length budget. Device news and talk turns go at once.
   broadcast(e) {
+    if (!this.talk() && e.kind === "turn") {
+      (this.held ??= []).push(e);
+      this.heldTimer ??= setTimeout(() => this.flushHeld(), Number(this.env.LISTEN_BATCH_MS ?? LISTEN_BATCH_MS));
+      return;
+    }
+    this.flushHeld();
+    this.sendEvent(e);
+  }
+
+  flushHeld() {
+    clearTimeout(this.heldTimer);
+    this.heldTimer = null;
+    const held = this.held ?? [];
+    this.held = [];
+    for (const e of held) this.sendEvent(e);
+  }
+
+  sendEvent(e) {
     const frame = JSON.stringify(e);
     for (const ws of this.events) {
       try { ws.send(frame); } catch { this.events.delete(ws); }

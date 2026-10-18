@@ -181,6 +181,14 @@ off the mic, the recorder, Claude's voice and the socket; resuming reconnects
 like a rejoin. The relay logs it as a pause rather than a drop, and gives it an
 hour rather than five minutes before ending the session.
 
+**Listen mode batches Monitor events.** Each event wakes Claude, and a
+conversation has a turn every few seconds, so the relay holds listen-mode
+turns for 10s and then sends them back to back as separate frames: Monitor
+joins frames that arrive together into one notification, and its truncation
+(around 500 characters) appeared to apply per frame, which one big frame
+would hit far more often. Device news
+flushes the batch at once; talk mode sends each turn as it closes.
+
 **`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
 turn from Louie, or one still in progress, means nothing is played and the
 turn comes back instead, so Claude never answers a moment that has passed.

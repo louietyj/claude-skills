@@ -38,7 +38,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  "--var SONIOX_TTS_URL:http://127.0.0.1:8798/tts-websocket "
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
-                 "--var VOICE_READY_WAIT_MS:2000 "
+                 "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
 FAKE = None
 WRANGLER = None
@@ -749,6 +749,27 @@ class Events(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             ev2.recv(timeout=1.5)
         ev.close(); ev2.close(); ws.close()
+
+    def test_listen_turns_are_held_then_sent_together_and_device_news_flushes_them(self):
+        out = http("/session", "POST", {"label": "test"})[1]
+        sid, key = out["id"], out["event_key"]
+        ws = device(sid)
+        ws.send(json.dumps({"type": "seg"}))
+        wait_streams(len(FAKE.streams) or 1)
+        ev = self.events(sid, key, since=10_000)
+        script(ws, emit=[FAKE.tokens([("Hello", 1), ("there.", 1)], end=True),
+                         FAKE.tokens([("Hi.", 2)], end=True)])
+        with self.assertRaises(TimeoutError):
+            ev.recv(timeout=0.8)
+        got = [self.recv_json(ev, timeout=5)["text"] for _ in range(2)]
+        self.assertEqual(got, ["Hello there.", "Hi."])
+        script(ws, emit=[FAKE.tokens([("Wait.", 1)], end=True)])
+        wait_entries(sid, lambda es: "Wait." in texts(es, "turn"))
+        ws.send(json.dumps({"type": "vis", "state": "hidden"}))
+        got = [self.recv_json(ev, timeout=1)["text"] for _ in range(2)]
+        self.assertEqual(got[0], "Wait.", "device news must not wait behind held turns")
+        self.assertIn("mic is OFF", got[1])
+        ev.close(); ws.close()
 
     def test_session_end_closes_the_stream(self):
         sid, key, ws = live_talk()

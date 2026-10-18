@@ -39,6 +39,7 @@ const PAUSE_MAX_MS = 60 * 60_000;
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
 const MIC_STALE_MS = 12_000;      // the page repeats its mic reading every ~5s
+const AUDIO_STALL_MS = 10_000;    // the recorder sends a chunk every 250 ms
 const ARCHIVE_ROW_BYTES = 120_000;   // ~30s of opus per row: rows written are capped per day
 const NOTE_MAX = 120;
 const TURN_SPLIT_S = 12;
@@ -234,7 +235,8 @@ export class Session {
     this.cur = null;             // turn being assembled: {spk, t, text}
     this.pending = null;         // words still being recognised, never stored
     this.lastAudioAt = 0;
-    this.mic = null;             // the page's latest mic reading: {state, at}
+    this.audioStalledAt = null;  // the last chunk before the page stopped sending
+    this.mic = null;            // the page's latest mic reading: {state, at}
     this.arch = null;            // {seg, part, chunks, bytes}
     this.keepalive = null;
     this.events = new Set();     // Monitor sockets
@@ -426,6 +428,7 @@ export class Session {
       if (this.stt === ws && Date.now() - this.lastAudioAt > 3000) {
         try { ws.send(JSON.stringify({ type: "keepalive" })); } catch {}
       }
+      this.checkAudioStall();
     }, KEEPALIVE_MS);
   }
 
@@ -462,6 +465,16 @@ export class Session {
 
   // --- audio and archive -----------------------------------------------------
 
+  // A connected page that stops sending is otherwise silent news: Chrome froze a
+  // hidden page with its socket still open and its mic still held.
+  checkAudioStall() {
+    if (this.audioStalledAt || !this.device || !this.live() || !this.lastAudioAt) return;
+    if (Date.now() - this.lastAudioAt < AUDIO_STALL_MS) return;
+    this.audioStalledAt = this.lastAudioAt;
+    const who = this.meta.ui ?? "device";
+    this.addEntry("event", { text: `${who} stopped sending audio, with its socket still open: nothing is heard until it resumes` }).catch(() => {});
+  }
+
   async onAudio(chunk) {
     this.lastAudioAt = Date.now();
     // Forward before any await, so chunks reach the transcriber in arrival order.
@@ -469,6 +482,12 @@ export class Session {
       try { this.stt.send(chunk); } catch {}
     } else if (this.sttOpening && this.pendingAudio.length < PENDING_AUDIO_MAX) {
       this.pendingAudio.push(chunk);
+    }
+    if (this.audioStalledAt) {
+      const s = Math.round((this.lastAudioAt - this.audioStalledAt) / 1000);
+      this.audioStalledAt = null;
+      const who = this.meta.ui ?? "device";
+      this.addEntry("event", { text: `${who} audio is back after ${s}s; nothing was heard in between` }).catch(() => {});
     }
     if (this.meta.archive) await this.archive(chunk);
   }
@@ -562,6 +581,7 @@ export class Session {
     this.meta.hidden_since = null;
     this.meta.mic_silent_since = null;
     this.mic = null;
+    this.audioStalledAt = null;
     await this.saveMeta();
 
     server.addEventListener("message", (m) => {

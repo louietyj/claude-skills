@@ -100,7 +100,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
 
 let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
-let meterCtx = null, meterTimer = null, probe = null;
+let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -226,6 +226,7 @@ async function start(s) {
   $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
   if (talk) startMeter();
   startProbe();
+  startChirps();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
@@ -378,6 +379,7 @@ function startProbe() {
 // Driven by recorder chunks, not a timer: Chrome throttles a hidden page's timers
 // to once a minute, but chunks keep coming as long as the recorder runs.
 function probeTick() {
+  scheduleChirps();
   const p = probe, now = Date.now();
   if (!p || now - p.at < PROBE_MS) return;
   p.at = now;
@@ -392,6 +394,45 @@ function probeTick() {
     p.sent = state; p.sentAt = now;
     send({ type: "mic", state });
   }
+}
+
+// Chrome freezes a hidden page 90s after it last made a sound (Blink's
+// StopInBackground), mic or not; sound is the only exemption. So the page chirps
+// 19 kHz at -49 dBFS (audible to Chrome above -72, not to Louie) for a second
+// every 20s, scheduled ahead on the audio clock, which throttling doesn't touch.
+const CHIRP_HZ = 19000;
+const CHIRP_GAIN = 0.005;
+const CHIRP_EVERY_S = 20;
+const CHIRP_S = 1;
+const CHIRP_RAMP_S = 0.05;      // a hard edge would click across the whole spectrum
+const CHIRP_AHEAD_S = 3600;
+function startChirps() {
+  chirp = null;
+  if (!meterCtx) return;
+  const osc = meterCtx.createOscillator();
+  osc.frequency.value = CHIRP_HZ;
+  const gain = meterCtx.createGain();
+  gain.gain.value = 0;
+  osc.connect(gain).connect(meterCtx.destination);
+  osc.start();
+  chirp = { gain, until: 0 };
+  scheduleChirps();
+}
+
+function scheduleChirps() {
+  const c = chirp;
+  if (!c) return;
+  const now = meterCtx.currentTime;
+  if (c.until - now > CHIRP_AHEAD_S / 2) return;
+  const g = c.gain.gain;
+  let t = Math.max(c.until, now + 0.1);
+  for (; t < now + CHIRP_AHEAD_S; t += CHIRP_EVERY_S) {
+    g.setValueAtTime(0, t);
+    g.linearRampToValueAtTime(CHIRP_GAIN, t + CHIRP_RAMP_S);
+    g.setValueAtTime(CHIRP_GAIN, t + CHIRP_S - CHIRP_RAMP_S);
+    g.linearRampToValueAtTime(0, t + CHIRP_S);
+  }
+  c.until = t;
 }
 
 function closeVoice() {
@@ -467,6 +508,7 @@ function release() {
   claudeTalking = false;
   clearInterval(meterTimer);
   probe = null;
+  chirp = null;
   try { meterCtx && meterCtx.close(); } catch {}
   meterCtx = null;
   closePip();

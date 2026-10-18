@@ -449,6 +449,18 @@ class Device(unittest.TestCase):
         wait_entries(sid, lambda es: any("back on screen" in t for t in texts(es, "event")))
         ws.close()
 
+    def test_a_page_that_stops_sending_audio_is_reported(self):
+        n = stream_count()
+        sid = create()
+        ws = device(sid)
+        ws.send(json.dumps({"type": "seg"}))
+        wait_streams(n + 1)
+        script(ws)
+        wait_entries(sid, lambda es: any("stopped sending audio" in t for t in texts(es, "event")), timeout=25)
+        script(ws)
+        wait_entries(sid, lambda es: any("audio is back after" in t for t in texts(es, "event")))
+        ws.close()
+
     def test_a_mic_that_still_hears_off_screen_is_not_called_off(self):
         sid = create()
         ws = device(sid)

@@ -311,10 +311,10 @@ exact text in chat, saying out loud that it's there.
 |---|---|---|
 | `streaming` | fine; `, page off screen for Ns but its mic hears` too: the page checks its own mic | nothing |
 | `mic SILENT for Ns` | the mic delivers pure zeros: Android silenced it (below) | tell Louie in chat at once: "your mic went silent, I'm not hearing anything" |
-| `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no mic reading from it: a watch (crown press, its mic stops after ~5s) or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
+| `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no fresh mic reading: a watch (crown press, its mic stops after ~5s), a frozen phone page (an event says "stopped sending audio"), or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
 | `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
 | `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
-| `connected but no audio for Ns` | the mic went silent without the page leaving | tell him if it lasts |
+| `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
 | `has not tapped START` | session armed, nobody started it | remind him of the id |
 
 Louie's phone runs Chrome with a flag that keeps the mic on through screen lock

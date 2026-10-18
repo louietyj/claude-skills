@@ -159,6 +159,17 @@ flags undoes step 1, a factory reset undoes both, and `adb shell rm
 if the relay logs the mic going silent on lock again, check `chrome://version`
 first.
 
+**A near-silent chirp keeps Chrome from freezing the page.** With the mic
+kept, Chrome still froze a hidden page 90s after it last made a sound (Blink's
+`StopInBackground`: 30s "recently audible", then a minute): JavaScript, the
+recorder and the AudioContext clock all stopped, while the socket stayed open
+and the mic stayed held. Sound is the only exemption, so the page plays a
+19 kHz tone at -49 dBFS (Chrome counts above -72 as audible) for a second every
+20s, scheduled an hour ahead on the audio clock rather than by timers. Locked
+and silent for 6.5 minutes, the page kept streaming. The relay also logs a
+connected page that stops sending audio for 10s, which is what a frozen page
+looks like from outside.
+
 **No browser audio processing in listen mode.** `noiseSuppression` and
 `autoGainControl` are off and the recorder runs at 64 kbps: both flatten the
 differences between voices that diarization relies on. Talk mode turns all

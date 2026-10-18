@@ -1,4 +1,4 @@
-# live-listen
+# intercom
 
 Claude listens to a live conversation through Louie's phone or Pixel Watch and
 steers him in chat while it runs.
@@ -6,7 +6,7 @@ steers him in chat while it runs.
 The device's browser streams mic audio to a Cloudflare Durable Object, which
 relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms) and
 stores numbered entries: speaker turns, device events, notes sent. Claude
-long-polls them with `listen watch` from a sandbox that can be recycled at any
+long-polls them with `intercom watch` from a sandbox that can be recycled at any
 moment. Everything that matters lives in the object, so a recycle only pauses
 Claude. An optional full-file pass afterwards goes to Deepgram Nova-3.
 
@@ -24,8 +24,8 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/listen.py` | the CLI: health, start, watch, note, stop, transcript, audio, status, pair, bookmark |
-| `test_listen.py` | offline CLI tests: `python test_listen.py` |
+| `bin/intercom.py` | the CLI: health, start, watch, note, stop, transcript, audio, status, pair, bookmark |
+| `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
 | `dev/fake_stt.py` | Soniox-shaped live and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
@@ -49,10 +49,10 @@ npx wrangler secret put DEEPGRAM_API_KEY   # only for `transcript --batch`
 ```
 
 `config.json` (gitignored; see `config.example.json`) holds `worker_url`,
-`cli_token` and `device_token`. Then `python bin/listen.py health`.
+`cli_token` and `device_token`. Then `python bin/intercom.py health`.
 
 **Devices:** bookmark the plain worker URL. The first visit asks for a pairing
-code: `listen pair` issues one (6 digits, single use, 5 minutes, 5 tries, and 20
+code: `intercom pair` issues one (6 digits, single use, 5 minutes, 5 tries, and 20
 wrong guesses an hour across all codes). The page then keeps the device token
 in localStorage and finds whatever Claude armed by itself. The layout sizes
 itself to the screen; the phone also shows the running transcript.
@@ -64,7 +64,7 @@ survives, but the seconds in between are lost.
 ## Packaging
 
 ```bash
-python package.py     # -> live-listen.zip, upload to claude.ai
+python package.py     # -> intercom.zip, upload to claude.ai
 ```
 
 The zip bundles `config.json`, so **the artefact is a credential**: the CLI
@@ -73,18 +73,18 @@ token reads any live conversation's transcript.
 ## Tests
 
 ```bash
-python test_listen.py                 # offline, instant
+python test_intercom.py                 # offline, instant
 python worker/test_session.py         # starts wrangler dev + fakes, ~2 min
 ```
 
 End to end against the real providers, no phone:
 
 ```bash
-python bin/listen.py start --label sample --term "Wooga Family Trust" --term trustee --archive
+python bin/intercom.py start --label sample --term "Wooga Family Trust" --term trustee --archive
 python dev/feed.py dev/sample.webm --stop      # in one shell
-python bin/listen.py watch                     # in another, repeatedly
-python bin/listen.py audio --out .             # before --batch, which deletes it
-python bin/listen.py transcript --batch
+python bin/intercom.py watch                     # in another, repeatedly
+python bin/intercom.py audio --out .             # before --batch, which deletes it
+python bin/intercom.py transcript --batch
 ```
 
 ## Design notes

@@ -45,11 +45,11 @@ def main():
     base, k = cfg["worker_url"].rstrip("/"), cfg["device_token"]
     sid = args.id
     if not sid:
-        req = urllib.request.Request(f"{base}/armed?k={k}", headers={"user-agent": "live-listen-feed"})
+        req = urllib.request.Request(f"{base}/armed?k={k}", headers={"user-agent": "intercom-feed"})
         sessions = json.load(urllib.request.urlopen(req, timeout=15))["sessions"]
         armed = [s for s in sessions if s["state"] == "armed"]
         if not armed:
-            sys.exit("nothing armed -- run `listen start` first")
+            sys.exit("nothing armed -- run `intercom start` first")
         sid = armed[0]["id"]
 
     data = Path(args.file).read_bytes()

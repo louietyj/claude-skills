@@ -1,4 +1,4 @@
-# live-listen
+# intercom
 
 Louie's phone or watch is the microphone. A relay transcribes it with speaker
 labels and stores every turn; you read it a few seconds behind. You never speak
@@ -17,18 +17,18 @@ from what Louie said, memory, his calendar entry, documents. Twenty good terms
 beat five. Write them to a file, one per line.
 
 ```bash
-listen start --label "estate lawyer" --terms-file terms.txt [--archive]
+intercom start --label "estate lawyer" --terms-file terms.txt [--archive]
 ```
 
 - `--label` shows under the id on the device: a few words.
-- `--archive` keeps the audio so `listen transcript --batch` can run a
+- `--archive` keeps the audio so `intercom transcript --batch` can run a
   full-file pass afterwards. That transcript is far more accurate, and is the
   input for the transcript-humanize skill. The audio is deleted once the batch
   pass has run. Ask Louie only if he'd want a clean record; the default is off.
 - It prints an id like `K7QM`. Tell Louie: **"Tap START K7QM."** The bookmark
   shows whatever is waiting; the id is how he knows it's yours.
 - If his page says to ask for a pairing code (a new device, or cleared browser
-  data), run `listen pair` and tell him the 6 digits. They work once, for 5
+  data), run `intercom pair` and tell him the 6 digits. They work once, for 5
   minutes.
 - **The phone is the better mic.** The watch mic's audio can still be split
   into speakers, but less reliably. If Louie is on the watch, expect more `S?`
@@ -37,7 +37,7 @@ listen start --label "estate lawyer" --terms-file terms.txt [--archive]
 ## The loop: one turn for the whole conversation
 
 ```bash
-listen watch
+intercom watch
 ```
 
 `watch` blocks until there is speech worth returning (it gathers for
@@ -59,7 +59,7 @@ Then:
 1. Read what came back. If something is worth saying (see below), research it
    if needed (web, memory, calendar, documents) and say it in whichever channel
    fits. If nothing is, say nothing.
-2. **In the same message, run `listen watch` again.** Text that is not followed
+2. **In the same message, run `intercom watch` again.** Text that is not followed
    by a tool call ends your turn, and nothing after it is read until Louie
    types. The relay keeps recording either way. Your cursor is saved, so
    nothing is lost, but you stop listening.
@@ -69,7 +69,7 @@ to 90s, and tool calls made together return together, so a lookup run in
 parallel with `watch` holds its answer back until `watch` returns. On a real
 call, Louie asked at 00:50, the answer arrived at 01:27, and he had asked
 again by then. The order is always: lookups (in parallel with each other is
-fine), then your message, note or file update, then `listen watch` on its own.
+fine), then your message, note or file update, then `intercom watch` on its own.
 
 **End your turn only when** `watch` returns `event: ended` (then wrap up), or
 Louie tells you to stop. Not on a quiet stretch (`idle` means watch again), not
@@ -180,7 +180,7 @@ tells you the difference between a quiet room and a dead mic.
 ## Watch notes
 
 ```bash
-listen note <<'EOF'
+intercom note <<'EOF'
 ask about the trustee fee
 EOF
 ```
@@ -196,20 +196,20 @@ something now. Put any detail in chat as well; the note is the nudge to look.
 ## Interruptions
 
 When Louie types, answer it (research if needed), then go straight back to
-`listen watch`. On **any** new turn while a session is live, run `listen watch`
+`intercom watch`. On **any** new turn while a session is live, run `intercom watch`
 first: it resumes from the saved cursor and catches you up on everything said
 meanwhile (`more` means the backlog continues; watch again at once).
 
 ## Ending
 
 `watch` returns `event: ended` when Louie taps STOP, the device has been gone
-5 minutes, or you ran `listen stop` (only when he asks). Then give a short
+5 minutes, or you ran `intercom stop` (only when he asks). Then give a short
 wrap-up: what was agreed, numbers, open questions, follow-ups, anything you
 flagged that never got answered. If you kept a whiteboard, make sure everything
 decided is in the plan, then offer to clean up what was only there to show the
 room things (the "Under discussion" section, a scratch whiteboard) and to save
 what is worth keeping to memory. If the session was archived, offer
-`listen transcript --batch` (and transcript-humanize after it). `listen
+`intercom transcript --batch` (and transcript-humanize after it). `intercom
 transcript` prints the live transcript at any point.
 
-Other commands: `listen status` (one session's state), `listen health`.
+Other commands: `intercom status` (one session's state), `intercom health`.

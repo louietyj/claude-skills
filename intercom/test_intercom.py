@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Offline tests for the listen CLI. No network: the relay is stubbed in this
+"""Offline tests for the intercom CLI. No network: the relay is stubbed in this
 process. Named for the symptom Claude or Louie would see, not the function.
 
-    python test_listen.py
+    python test_intercom.py
 """
 import contextlib
 import importlib.util
@@ -17,9 +17,9 @@ from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("listen", HERE / "bin" / "listen.py")
-listen = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(listen)
+spec = importlib.util.spec_from_file_location("intercom", HERE / "bin" / "intercom.py")
+intercom = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(intercom)
 
 CFG = {"worker_url": "https://relay.test", "cli_token": "tok", "device_token": "dev"}
 
@@ -43,8 +43,8 @@ class Relay:
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.patches = [mock.patch.object(listen, "STATE", self.tmp.name),
-                        mock.patch.object(listen, "load_config", lambda: dict(CFG))]
+        self.patches = [mock.patch.object(intercom,"STATE", self.tmp.name),
+                        mock.patch.object(intercom,"load_config", lambda: dict(CFG))]
         for p in self.patches:
             p.start()
 
@@ -56,12 +56,12 @@ class Base(unittest.TestCase):
     def run_cli(self, argv, relay, stdin=None):
         out, err = io.StringIO(), io.StringIO()
         code = 0
-        with mock.patch.object(listen, "request", relay), \
-             mock.patch.object(sys, "argv", ["listen", *argv]), \
+        with mock.patch.object(intercom,"request", relay), \
+             mock.patch.object(sys, "argv", ["intercom", *argv]), \
              mock.patch.object(sys, "stdin", stdin), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                listen.main()
+                intercom.main()
             except SystemExit as e:
                 code = e.code or 0
         return code, out.getvalue(), err.getvalue()
@@ -84,24 +84,24 @@ def watch_body(**kw):
 class Watch(Base):
     def setUp(self):
         super().setUp()
-        listen.write_state("current.json", {"id": "K7QM"})
+        intercom.write_state("current.json", {"id": "K7QM"})
 
     def test_lost_since_resumes_from_saved_cursor_not_from_the_start(self):
-        listen.write_state("cursor-K7QM.json", {"since": 41})
+        intercom.write_state("cursor-K7QM.json", {"since": 41})
         relay, out, _ = self.watch_json(body=watch_body(last=44, entries=[
             {"n": 42, "kind": "turn", "t": 61, "spk": 1, "text": "Only medical."}]))
         self.assertEqual(relay.calls[0]["params"]["since"], "41")
         self.assertEqual(out["new"], ["[01:01 S1] Only medical."])
-        self.assertEqual(listen.read_state("cursor-K7QM.json"), {"since": 44})
+        self.assertEqual(intercom.read_state("cursor-K7QM.json"), {"since": 44})
 
     def test_failed_watch_keeps_the_cursor_so_nothing_is_skipped(self):
-        listen.write_state("cursor-K7QM.json", {"since": 41})
+        intercom.write_state("cursor-K7QM.json", {"since": 41})
         _, out, _ = self.watch_json(body={"error": "boom"}, status=0)
         self.assertEqual(out["event"], "error")
-        self.assertEqual(listen.read_state("cursor-K7QM.json"), {"since": 41})
+        self.assertEqual(intercom.read_state("cursor-K7QM.json"), {"since": 41})
 
     def test_explicit_since_overrides_the_cursor(self):
-        listen.write_state("cursor-K7QM.json", {"since": 41})
+        intercom.write_state("cursor-K7QM.json", {"since": 41})
         relay, _, _ = self.watch_json(argv=("watch", "--since", "0"), body=watch_body())
         self.assertEqual(relay.calls[0]["params"]["since"], "0")
 
@@ -112,7 +112,7 @@ class Watch(Base):
     def test_budget_rides_inside_the_bash_timeout(self):
         relay, _, _ = self.watch_json(body=watch_body())
         self.assertEqual(relay.calls[0]["params"]["wait"], "90")
-        self.assertLess(listen.WATCH_BUDGET + 20, 120)
+        self.assertLess(intercom.WATCH_BUDGET + 20, 120)
 
     def test_phone_off_screen_is_not_mistaken_for_a_quiet_room(self):
         dev = {"connected": True, "ui": "phone", "hidden_s": 16, "disconnected_s": None,
@@ -124,11 +124,11 @@ class Watch(Base):
     def test_dead_device_and_silent_stream_are_named(self):
         gone = {"connected": False, "ui": "watch", "hidden_s": None, "disconnected_s": 40,
                 "last_audio_s": 41, "transcriber": "closed"}
-        self.assertEqual(listen.describe_device(gone, "live"), "watch DISCONNECTED for 40s: no audio")
+        self.assertEqual(intercom.describe_device(gone, "live"), "watch DISCONNECTED for 40s: no audio")
         quiet = {"connected": True, "ui": "watch", "hidden_s": None, "disconnected_s": None,
                  "last_audio_s": 12, "transcriber": "open"}
-        self.assertIn("no audio for 12s", listen.describe_device(quiet, "live"))
-        self.assertIn("has not tapped START", listen.describe_device({"connected": False}, "armed"))
+        self.assertIn("no audio for 12s", intercom.describe_device(quiet, "live"))
+        self.assertIn("has not tapped START", intercom.describe_device({"connected": False}, "armed"))
 
     def test_events_and_notes_render_distinctly_from_speech(self):
         _, out, _ = self.watch_json(body=watch_body(last=3, entries=[
@@ -156,7 +156,7 @@ class Watch(Base):
 class Note(Base):
     def setUp(self):
         super().setUp()
-        listen.write_state("current.json", {"id": "K7QM"})
+        intercom.write_state("current.json", {"id": "K7QM"})
 
     def test_long_note_is_refused_before_it_reaches_the_relay(self):
         relay = Relay({})
@@ -179,7 +179,7 @@ class Note(Base):
 
 class Start(Base):
     def test_second_start_is_refused_while_one_is_live(self):
-        listen.write_state("current.json", {"id": "K7QM"})
+        intercom.write_state("current.json", {"id": "K7QM"})
         relay = Relay({"/status": (200, {"state": "live"})})
         code, _, err = self.run_cli(["start"], relay)
         self.assertEqual(code, 1)
@@ -187,13 +187,13 @@ class Start(Base):
         self.assertNotIn("/session", [c["path"] for c in relay.calls])
 
     def test_force_starts_anyway_and_resets_the_cursor(self):
-        listen.write_state("current.json", {"id": "K7QM"})
+        intercom.write_state("current.json", {"id": "K7QM"})
         relay = Relay({"/status": (200, {"state": "live"}), "/session": (200, {"id": "ACDE"})})
         code, out, _ = self.run_cli(["start", "--force", "--label", "lawyer"], relay)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["id"], "ACDE")
-        self.assertEqual(listen.read_state("current.json")["id"], "ACDE")
-        self.assertEqual(listen.read_state("cursor-ACDE.json"), {"since": 0})
+        self.assertEqual(intercom.read_state("current.json")["id"], "ACDE")
+        self.assertEqual(intercom.read_state("cursor-ACDE.json"), {"since": 0})
         self.assertIn("START ACDE", json.loads(out)["next"])
 
     def test_keyterms_merge_dedupe_and_split_on_commas(self):
@@ -244,17 +244,17 @@ class Pair(Base):
 
 class Plumbing(unittest.TestCase):
     def test_request_never_raises_on_a_dead_network(self):
-        with mock.patch.object(listen.urllib.request, "urlopen",
+        with mock.patch.object(intercom.urllib.request, "urlopen",
                                side_effect=urllib.error.URLError("down")):
-            status, body = listen.request("https://relay.test/health")
+            status, body = intercom.request("https://relay.test/health")
         self.assertEqual(status, 0)
         self.assertIn("down", body["error"])
 
     def test_no_session_yet_says_to_start(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(listen, "STATE", d):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(intercom,"STATE", d):
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
-                listen.current_id(type("A", (), {"id": None})())
-        self.assertIn("listen start", err.getvalue())
+                intercom.current_id(type("A", (), {"id": None})())
+        self.assertIn("intercom start", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client for live-listen: Claude's side of a conversation Louie's phone or
+"""Client for intercom: Claude's side of a conversation Louie's phone or
 watch is recording.
 
 The relay keeps every speaker turn, device event and note as numbered entries,
@@ -19,7 +19,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
 # The skill directory can be read-only (/mnt/skills), so state goes under $HOME.
-STATE = os.environ.get("LIVE_LISTEN_STATE") or os.path.expanduser("~/.live-listen")
+STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 
 # Inside the Bash tool's default 120s timeout; it only caps silence.
 WATCH_BUDGET = 90
@@ -49,7 +49,7 @@ def request(url, *, method="GET", body=None, timeout=30):
     """(status, parsed_or_text); never raises, so errors stay readable mid-conversation."""
     data = json.dumps(body).encode() if body is not None else None
     # Cloudflare answers urllib's default User-Agent with a 403 (error 1010).
-    hdrs = {"content-type": "application/json", "user-agent": "live-listen/1.0"}
+    hdrs = {"content-type": "application/json", "user-agent": "intercom/1.0"}
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -105,7 +105,7 @@ def write_state(name, value):
 def current_id(args):
     sid = getattr(args, "id", None) or (read_state("current.json") or {}).get("id")
     if not sid:
-        die("no session -- run `listen start` first, or pass --id")
+        die("no session -- run `intercom start` first, or pass --id")
     return sid.upper()
 
 
@@ -188,7 +188,7 @@ def cmd_start(cfg, args):
     if prev and not args.force:
         status, body = relay(cfg, "/status", id=prev, timeout=15)
         if status == 200 and body.get("state") in ("armed", "live"):
-            die(f"session {prev} is still {body['state']}. Keep watching it, `listen stop` it, "
+            die(f"session {prev} is still {body['state']}. Keep watching it, `intercom stop` it, "
                 "or pass --force to start another alongside it.")
     terms = read_terms(args)
     status, body = relay(cfg, "/session", method="POST", timeout=20,
@@ -199,8 +199,8 @@ def cmd_start(cfg, args):
     write_state("current.json", {"id": sid, "label": args.label or "", "at": time.time()})
     write_state(f"cursor-{sid}.json", {"since": 0})
     emit({"id": sid, "state": "armed", "keyterms": len(terms), "archive": args.archive,
-          "next": f"Tell Louie: open the listen bookmark and tap START {sid} (check the id "
-                  "matches). Then run `listen watch` and keep watching in this same turn."})
+          "next": f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id "
+                  "matches). Then run `intercom watch` and keep watching in this same turn."})
 
 
 def cmd_watch(cfg, args):
@@ -212,7 +212,7 @@ def cmd_watch(cfg, args):
                          wait=budget, timeout=budget + 20)
     if status != 200 or not isinstance(body, dict):
         emit({"event": "error", "id": sid, "error": f"{status} {error_text(body)}",
-              "hint": "the relay holds everything; run `listen watch` again"})
+              "hint": "the relay holds everything; run `intercom watch` again"})
         return
     tail = body.get("tail")
     out = {
@@ -228,10 +228,10 @@ def cmd_watch(cfg, args):
     if body["event"] == "ended":
         out["end_reason"] = body.get("end_reason")
         out["hint"] = ("The session is over. Give Louie a short wrap-up. If it was archived, "
-                       "`listen transcript --batch` gets the clean full-file transcript.")
+                       "`intercom transcript --batch` gets the clean full-file transcript.")
     else:
         out["hint"] = ("speak only if it adds something (no 'still listening'), "
-                       "then `listen watch` again in this same turn")
+                       "then `intercom watch` again in this same turn")
     emit(out)
     # Only after the output is out: a kill mid-request must replay, not skip.
     write_state(cursor_name, {"since": body.get("last", since)})
@@ -239,7 +239,7 @@ def cmd_watch(cfg, args):
 
 def read_text(args):
     usage = ("pass the note on stdin in a quoted heredoc, so the shell leaves $, quotes and "
-             "backticks alone:\n\n  listen note <<'EOF'\n  ask about the trustee fee\n  EOF")
+             "backticks alone:\n\n  intercom note <<'EOF'\n  ask about the trustee fee\n  EOF")
     if args.text is not None:
         die(f"text given as an argument has already been rewritten by the shell -- {usage}")
     if sys.stdin is None or sys.stdin.isatty():
@@ -312,7 +312,7 @@ def cmd_audio(cfg, args):
     for seg in body.get("segs") or []:
         query = urllib.parse.urlencode({"token": cfg["cli_token"], "id": sid, "seg": seg["n"]})
         req = urllib.request.Request(f"{cfg['worker_url']}/audio?{query}",
-                                     headers={"user-agent": "live-listen/1.0"})
+                                     headers={"user-agent": "intercom/1.0"})
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 data = resp.read()
@@ -336,14 +336,14 @@ def cmd_pair(cfg, args):
 def cmd_bookmark(cfg, args):
     """--with-token adds a link that pairs without a code: a credential."""
     base = cfg["worker_url"]
-    out = {"bookmark": f"{base}/", "pairing": "open it and enter a code from `listen pair`"}
+    out = {"bookmark": f"{base}/", "pairing": "open it and enter a code from `intercom pair`"}
     if args.with_token and cfg.get("device_token"):
         out["prepaired"] = f"{base}/#k={urllib.parse.quote(cfg['device_token'])}"
     emit(out)
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="listen", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="intercom", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("health", help="check the relay, its secrets and the token").set_defaults(fn=cmd_health)

@@ -464,8 +464,20 @@ $("pause").onclick = async () => {
     release();
     $("pause").innerHTML = PLAY_ICON;
     status("Paused", "amber");
+    retryTimer = setTimeout(checkPaused, 5000);
   }, 300);
 };
+
+// No socket while paused, so nothing else would tell the page that Claude ended the session.
+async function checkPaused() {
+  if (mode !== "paused") return;
+  try {
+    const r = await fetch(`/armed?k=${encodeURIComponent(K)}`, { cache: "no-store" });
+    const ids = ((await r.json()).sessions || []).map((s) => s.id);
+    if (mode === "paused" && !ids.includes(sid)) return finish("Session is over");
+  } catch {}
+  if (mode === "paused") retryTimer = setTimeout(checkPaused, 5000);
+}
 
 document.addEventListener("visibilitychange", () => {
   if (mode !== "live") { if (document.visibilityState === "visible") poll(); return; }

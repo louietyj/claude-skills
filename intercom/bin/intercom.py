@@ -258,7 +258,8 @@ def read_text(args, cmd="note", example="ask about the trustee fee"):
         die(f"text given as an argument has already been rewritten by the shell -- {usage}")
     if sys.stdin is None or sys.stdin.isatty():
         die(usage)
-    text = " ".join(sys.stdin.read().split())
+    # Windows PowerShell 5.1 starts piped text with a byte-order mark, which isn't whitespace.
+    text = " ".join(sys.stdin.read().replace("﻿", "").split())
     if not text:
         die(f"refusing to send nothing -- {usage}")
     return text

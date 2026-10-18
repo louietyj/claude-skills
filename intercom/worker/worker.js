@@ -586,7 +586,7 @@ export class Session {
     this.bargeIn("Louie paused the device");
     await this.flushTurn();
     this.meta.paused_at = Date.now();
-    await this.addEntry("event", { text: "Louie paused the device: nothing is heard, and you can't speak, until he resumes" });
+    await this.addEntry("event", { text: `Louie paused the device: nothing is heard${this.talk() ? ", and you can't speak," : ""} until he resumes` });
   }
 
   // --- echo gate (talk mode) ---------------------------------------------------------

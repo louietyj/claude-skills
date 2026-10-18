@@ -141,8 +141,12 @@ waits (up to 10s) for the page to say it is connected and playing.
 words of Louie's live transcript (or a pause) make the relay stop feeding the
 track and tell the page to mute. Playback position is time since the first
 frame less the SFU-plus-jitter delay (`VOICE_PLAYOUT_MS`), and Soniox's
-character timestamps turn that into the words he heard. `speak` takes at most
-400 characters, so an interruption costs one paragraph.
+character timestamps turn that into the words he heard.
+
+**`speak` takes at most 400 characters.** That isn't a technical limit:
+calls chained in one command lose and report the same as one long call
+would. It's there because a hard refusal reshapes an answer into short
+spoken paragraphs where a guideline alone doesn't.
 
 **While Claude speaks, only sustained sound counts.** The watch's own echo
 canceller leaves loud but brief bursts, while Louie's speech holds 70-100% of

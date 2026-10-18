@@ -63,7 +63,7 @@ const VOICE_CHUNK_BYTES = 9600;          // 100 ms mono; doubled to stereo it st
 const VOICE_PLAYOUT_MS = 700;
 // The page's WebRTC connection takes a few seconds after START; audio fed before it is up is lost.
 const VOICE_READY_WAIT_MS = 10_000;
-// A paragraph per call: an interruption then costs at most one paragraph.
+// A nudge toward short spoken paragraphs, not a technical limit.
 const SPEAK_MAX = 400;
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;

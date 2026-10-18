@@ -232,7 +232,7 @@ class Talk(Base):
         code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("word " * 100))
         self.assertEqual(code, 1)
         self.assertIn("400 at most", err)
-        self.assertIn("another `intercom speak`", err)
+        self.assertIn("one `intercom speak` each", err)
         self.assertEqual(relay.calls, [])
 
     def test_speech_as_an_argument_is_refused(self):

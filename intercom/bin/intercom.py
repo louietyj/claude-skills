@@ -25,7 +25,7 @@ STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 WATCH_BUDGET = 90
 WATCH_INTERVAL = 10
 NOTE_MAX = 120
-SPEAK_MAX = 400           # one paragraph a call: an interruption costs at most one
+SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a technical limit
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 IN_PROGRESS = "  [...still speaking]"
 
@@ -287,8 +287,8 @@ def cmd_speak(cfg, args):
     sid = current_id(args)
     text = read_text(args, "speak", "Okay, the tests are back and two failed.")
     if len(text) > SPEAK_MAX:
-        die(f"{len(text)} chars; {SPEAK_MAX} at most per call. Say one paragraph, then the next "
-            "in another `intercom speak`: an interruption then only cuts the one being spoken.")
+        die(f"{len(text)} chars; {SPEAK_MAX} at most per call. Say it as short spoken paragraphs, "
+            "one `intercom speak` each (chained with the same --since is fine), not a written answer read out.")
     # Monitor users pass the last event's n; watch users have it in the saved cursor.
     since = args.since if args.since is not None else (read_state(f"cursor-{sid}.json") or {}).get("since")
     status, body = relay(cfg, "/speak", method="POST", id=sid,

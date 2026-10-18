@@ -93,6 +93,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
 
 let mode = "idle", sid = null, ws = null, stream = null, rec = null, lock = null;
 let talk = false, voice = null, voiceEl = null, voiceHow = "", speaking = null;
+let meterCtx = null, meterTimer = null, micDb = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -192,11 +193,13 @@ async function start(s) {
     voiceEl.autoplay = true;
     voiceEl.play().catch(() => {});   // claims the tap's permission to play
   }
+  if (talk && !meterCtx) { try { meterCtx = new AudioContext(); meterCtx.resume(); } catch {} }
   try {
     // Listen: processing off, it flattens the voice differences diarization
     // relies on. Talk: echo cancellation on, or Claude transcribes its own voice.
+    // Auto gain stays off in both: in talk mode it would boost echo residue to speaking level.
     stream = await navigator.mediaDevices.getUserMedia({ audio: talk
-      ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      ? { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
       : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
   sid = s.id; mode = "live"; failures = 0;
@@ -205,6 +208,7 @@ async function start(s) {
   show("live");
   $("sid").textContent = talk ? `${s.id} · TALK` : s.id;
   showBuild();
+  if (talk) startMeter();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
@@ -294,9 +298,47 @@ function idleStatus() { talk ? status("Claude can talk", "talk") : status(""); }
 // playback Chrome on Android cancels from the mic. The relay paces it and keeps
 // time; the page just mutes it the moment Louie cuts in.
 
-const BUILD = "v4";
+const BUILD = "v7";
+// Measured on the watch: echo residue comes in bursts of a few loud frames;
+// Louie's speech holds 70-100% of frames above -35 dB. A one-second window let
+// echo bursts through, so the gate wants most of two seconds: an interruption
+// takes real talking, and a tap still stops Claude at once.
+const GATE_FLOOR_DB = -35;
+const GATE_WINDOW = 20;
+const GATE_MIN_FRAMES = 12;
 const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
-function showBuild() { $("build").textContent = talk ? `${BUILD} · voice: ${voiceHow}` : BUILD; }
+function showBuild() {
+  $("build").textContent = talk ? `${BUILD} · voice: ${voiceHow}${micDb == null ? "" : ` · mic ${micDb} dB`}` : BUILD;
+}
+
+// The mic's level after the browser's echo cancellation, every 100 ms: it
+// drives the echo gate, and goes to the relay a second at a time for diagnostics.
+function startMeter() {
+  if (!meterCtx || !stream) return;
+  const an = meterCtx.createAnalyser();
+  an.fftSize = 2048;
+  meterCtx.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+  let batch = [], recent = [], loud = false;
+  clearInterval(meterTimer);
+  meterTimer = setInterval(() => {
+    an.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (const v of buf) sum += v * v;
+    const db = Math.round(20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9));
+    batch.push(db);
+    // The echo gate: sustained energy, not a spike. Only transitions are sent.
+    recent.push(db > GATE_FLOOR_DB);
+    if (recent.length > GATE_WINDOW) recent.shift();
+    const now = recent.filter(Boolean).length >= GATE_MIN_FRAMES;
+    if (now !== loud) { loud = now; send({ type: "loud", on: loud }); }
+    if (batch.length < 10) return;
+    micDb = Math.max(...batch);
+    send({ type: "level", db: batch });
+    batch = [];
+    showBuild();
+  }, 100);
+}
 
 function closeVoice() {
   try { voice && voice.close(); } catch {}
@@ -375,6 +417,8 @@ function finish(why) {
   clearTimeout(retryTimer);
   closeVoice();
   speaking = null;
+  clearInterval(meterTimer);
+  micDb = null;
   stopRecorder();
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;

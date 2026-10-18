@@ -466,15 +466,30 @@ def speak_in_background(sid, text):
     return th, got
 
 
+SEG_T0 = 0.0
+
+
 def live_talk(with_transcriber=False):
+    global SEG_T0
     sid, key = create_talk()
     ws = device(sid)
     wait_entries(sid, lambda es: es)
     if with_transcriber:
         n = stream_count()
+        SEG_T0 = time.time()
         ws.send(json.dumps({"type": "seg"}))
         wait_streams(n + 1)
     return sid, key, ws
+
+
+def tokens_now(words, final=True, end=False):
+    """Words said right now, by the segment's audio clock: the echo gate matches on it."""
+    base = int((time.time() - SEG_T0) * 1000)
+    toks = [{"text": (" " if i else "") + w, "start_ms": base + 100 * i, "end_ms": base + 100 * i + 80,
+             "is_final": final, "speaker": "0"} for i, w in enumerate(words)]
+    if end:
+        toks.append({"text": "<end>", "is_final": True})
+    return {"tokens": toks}
 
 
 class Modes(unittest.TestCase):
@@ -494,6 +509,27 @@ class Modes(unittest.TestCase):
         sid, _ = create_talk()
         listed = http("/armed", token=None, k=DEV)[1]["sessions"]
         self.assertEqual([s["mode"] for s in listed if s["id"] == sid], ["talk"])
+
+    def test_mic_levels_are_sorted_by_who_was_talking(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        ws.send(json.dumps({"type": "level", "db": [-70, -62, -65]}))
+        script(ws, emit=[FAKE.tokens([("so", 0), ("anyway", 0)], final=False)])
+        end = time.time() + 5
+        while time.time() < end and not http("/watch", id=sid, since=0, interval=0, wait=1)[1]["tail"]:
+            time.sleep(0.2)
+        ws.send(json.dumps({"type": "level", "db": [-30, -24, -28]}))
+        end = time.time() + 5
+        while time.time() < end:
+            levels = http("/status", id=sid)[1].get("levels", {})
+            if "louie" in levels and "quiet" in levels:
+                break
+            time.sleep(0.2)
+        self.assertEqual((levels["quiet"]["max"], levels["louie"]["max"]), (-62, -24), levels)
+        frames = http("/levels", id=sid)[1]["frames"]
+        self.assertEqual([(f[1], f[2]) for f in frames],
+                         [(-70, "quiet"), (-62, "quiet"), (-65, "quiet"), (-30, "louie"), (-24, "louie"), (-28, "louie")])
+        self.assertEqual(frames, sorted(frames), "frame times must run forward")
+        ws.close()
 
     def test_talk_transcriber_waits_patiently_and_skips_diarization(self):
         _, _, ws = live_talk(with_transcriber=True)
@@ -555,7 +591,8 @@ class Speak(unittest.TestCase):
         th, got = speak_in_background(sid, "one two three four five six seven eight")
         recv_until(ws, lambda m: m.get("type") == "tts_start")
         time.sleep(1.6)
-        script(ws, emit=[FAKE.tokens([("hold", 0), ("on", 0)], final=False)])
+        ws.send(json.dumps({"type": "loud", "on": True}))
+        script(ws, emit=[tokens_now(["hold", "on"], final=False)])
         recv_until(ws, lambda m: m.get("type") == "tts_stop")
         th.join(20)
         out = got["out"]
@@ -579,9 +616,33 @@ class Speak(unittest.TestCase):
             "/speak", "POST", {"text": "one two three", "barge_in": False}, id=sid, timeout=60))))
         th.start()
         recv_until(ws, lambda m: m.get("type") == "tts_start")
-        script(ws, emit=[FAKE.tokens([("hold", 0), ("on", 0)], final=False)])
+        ws.send(json.dumps({"type": "loud", "on": True}))
+        script(ws, emit=[tokens_now(["hold", "on"], final=False)])
         th.join(20)
         self.assertEqual(got["out"]["status"], "done", got)
+        ws.close()
+
+    def test_words_without_sustained_energy_while_claude_speaks_are_echo(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        th, got = speak_in_background(sid, "one two three four five six seven eight")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        time.sleep(1.0)
+        script(ws, emit=[tokens_now(["please", "stay", "silent."], end=True)])
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", "echo interrupted Claude")
+        time.sleep(1.0)
+        self.assertEqual(texts(entries(sid), "turn"), [], "echo became a turn")
+        ws.close()
+
+    def test_after_claude_stops_every_word_counts_again(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        th, got = speak_in_background(sid, "one two")
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done")
+        time.sleep(2.0)                    # past the echo tail
+        script(ws, emit=[tokens_now(["Okay."], end=True)])
+        es = wait_entries(sid, lambda es: texts(es, "turn"))
+        self.assertEqual(texts(es, "turn"), ["Okay."])
         ws.close()
 
     def test_tap_on_the_device_stops_speech(self):
@@ -687,12 +748,11 @@ class TalkTurns(unittest.TestCase):
         # Mid-sentence is refused too, whatever Claude has read.
         script(ws, emit=[FAKE.tokens([("wait", 0), ("actually", 0)], final=False)])
         end = time.time() + 5
-        while time.time() < end:
-            status, out = http("/speak", "POST", {"text": "Okay.", "since": turn["n"]}, id=sid)
-            if out.get("reason") == "Louie is talking":
-                break
-            time.sleep(0.2)
-        self.assertEqual((out["status"], out["heard_so_far"]), ("not_spoken", "wait actually"))
+        while time.time() < end and not http("/watch", id=sid, since=0, interval=0, wait=1)[1]["tail"]:
+            time.sleep(0.1)
+        status, out = http("/speak", "POST", {"text": "Okay.", "since": turn["n"]}, id=sid)
+        self.assertEqual((out["status"], out["reason"], out["heard_so_far"]),
+                         ("not_spoken", "Louie is talking", "wait actually"))
         self.assertEqual(len(FAKE.speeches), before, "a refused line must not reach TTS")
         ws.close()
 

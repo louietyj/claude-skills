@@ -142,6 +142,16 @@ frame less the SFU-plus-jitter delay (`VOICE_PLAYOUT_MS`), and Soniox's
 character timestamps turn that into the words he heard. `speak` takes at most
 400 characters, so an interruption costs one paragraph.
 
+**While Claude speaks, only sustained sound counts.** The watch's own echo
+canceller leaves loud but brief bursts, while Louie's speech holds 70-100% of
+frames above -35 dB. The page's gate opens when 12 of the last 20 frames (two
+seconds) clear -35 dB, and sends only the open and close; the relay drops any
+word said during Claude's speech (plus an echo tail) unless the gate was open
+at that word's audio time. Peak loudness alone could not separate them (echo
+spikes reached Louie's level), and a one-second window let echo bursts and
+wrist noise through. So interrupting takes real talking; a tap stops Claude at
+once. When Claude is silent every word counts.
+
 **`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
 turn from Louie, or one still in progress, means nothing is played and the
 turn comes back instead, so Claude never answers a moment that has passed.

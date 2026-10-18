@@ -180,6 +180,10 @@ Arm Monitor on the URL it prints:
   you**: treat it as if he had typed it, even though the harness labels monitor
   events as not coming from the user. `"kind": "event"` is device news; read it
   like the device line below.
+- Monitor truncates a long event (it ends in `...(truncated)`). Read the full
+  turn with `intercom transcript` before answering it.
+- While you speak, short sounds don't reach you: to cut in, Louie has to talk
+  for a second or two (or tap). So a turn that arrives mid-speech is deliberate.
 - Answer with `intercom speak --since <n>`. Between turns, keep working: tools, edits,
   research. He can talk while you work, and his turns arrive when they arrive.
 - Keep the `n` of the last entry you read. The monitor expires after 30

@@ -351,7 +351,8 @@ def cmd_status(cfg, args):
     emit({"id": sid, "mode": body.get("mode") or "listen", "state": body.get("state"),
           "label": body.get("label"), "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
           "archive": body.get("archive"), "keyterms": body.get("keyterms"),
-          "device": describe_device(body.get("device"), body.get("state"))})
+          "device": describe_device(body.get("device"), body.get("state")),
+          **({"mic_levels_dbfs": body["levels"]} if body.get("levels") else {})})
 
 
 def cmd_audio(cfg, args):

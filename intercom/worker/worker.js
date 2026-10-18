@@ -65,6 +65,17 @@ const SPEAK_MAX = 400;
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
 const MODES = new Set(["listen", "talk"]);
+const LEVELS_MAX = 900;                  // per-second peaks kept per class: 15 minutes
+// While Claude speaks, a word counts only if the page's sustained-energy gate
+// was open when it was said: echo residue comes in brief spikes, Louie's
+// speech is sustained. The gate reports late (it needs most of two seconds of
+// loud frames), so its open edge is pulled back; words are matched by audio time.
+const GATE_LAG_S = 1.5;
+const GATE_MARGIN_S = 0.3;
+// Echo of the last words still in flight after the relay stops feeding.
+const ECHO_TAIL_S = 1.5;
+const SPANS_MAX = 50;
+const LEVEL_FRAMES_MAX = 6000;           // 100 ms frames for the timeline: 10 minutes
 // Claude's own notes and speech are logged but are not news.
 const NOT_NEWS = new Set(["note", "said"]);
 const BATCH_PARAMS = {
@@ -227,6 +238,9 @@ export class Session {
     this.voiceOut = null;        // the SFU adapter's socket: PCM in, Claude's voice track out
     this.voicePending = null;
     this.voiceSub = null;        // the page's SFU session, awaiting its answer
+    this.speechSpans = [];       // [start, end|null] in session seconds: when Claude's voice could echo
+    this.loudSpans = [];         // [start, end] when the page's sustained-energy gate was open
+    this.loudFrom = null;
   }
 
   talk() { return this.meta?.mode === "talk"; }
@@ -306,6 +320,8 @@ export class Session {
     if (tokens.length) this.quickFails = 0;
     let pending = "", pendingSpk = null;
     for (const tok of tokens) {
+      const at = offset + (tok.start_ms ?? 0) / 1000;
+      if (tok.text !== "<end>" && this.isEcho(at)) continue;
       if (!tok.is_final) {
         if (tok.text !== "<end>") { pending += tok.text; pendingSpk ??= tok.speaker; }
         continue;
@@ -313,7 +329,6 @@ export class Session {
       if (tok.text === "<end>") { await this.flushTurn(); continue; }
       const spk = Number(tok.speaker ?? 0) || 0;
       if (this.cur && this.cur.spk !== spk) await this.flushTurn();
-      const at = offset + (tok.start_ms ?? 0) / 1000;
       if (!this.cur) this.cur = { spk, t: at, text: "" };
       this.cur.text += tok.text;
       if (!this.talk() && at - this.cur.t >= TURN_SPLIT_S && /[.?!]$/.test(tok.text)) await this.flushTurn();
@@ -540,6 +555,8 @@ export class Session {
     if (msg.type === "seg") return this.startSegment();
     if (msg.type === "stop") return this.end("stopped on the device");
     if (msg.type === "stop_speaking") return this.bargeIn("Louie tapped stop");
+    if (msg.type === "level") return this.onLevel(msg);
+    if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
     if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
     if (msg.type === "vis") {
@@ -553,6 +570,60 @@ export class Session {
         await this.addEntry("event", { text: `${who} page back on screen after ${s}s; nothing was heard in between` });
       }
     }
+  }
+
+  // --- echo gate (talk mode) ---------------------------------------------------------
+
+  onLoud(on) {
+    const t = this.elapsed();
+    if (on && this.loudFrom == null) this.loudFrom = t - GATE_LAG_S;
+    else if (!on && this.loudFrom != null) {
+      this.loudSpans.push([this.loudFrom, t]);
+      if (this.loudSpans.length > SPANS_MAX) this.loudSpans.shift();
+      this.loudFrom = null;
+    }
+  }
+
+  // A word said while Claude's voice was playing, without sustained energy behind it, is echo.
+  isEcho(at) {
+    if (!this.talk()) return false;
+    const speaking = this.speechSpans.some(([a, b]) => at >= a && (b == null || at <= b));
+    if (!speaking) return false;
+    const m = GATE_MARGIN_S;
+    if (this.loudFrom != null && at >= this.loudFrom - m) return false;
+    return !this.loudSpans.some(([a, b]) => at >= a - m && at <= b + m);
+  }
+
+  // --- mic levels (talk mode, diagnostic) ------------------------------------------
+  //
+  // Each second the page sends ten 100 ms mic levels in dBFS, kept by who was
+  // talking (status) and as a timeline (/levels), for tuning the echo gate.
+
+  onLevel(msg) {
+    const db = (Array.isArray(msg.db) ? msg.db : []).map(Number).filter(Number.isFinite);
+    if (!db.length) return;
+    const cls = this.speaking ? "claude" : this.tail() ? "louie" : "quiet";
+    this.levels ??= { claude: [], louie: [], quiet: [] };
+    const list = this.levels[cls];
+    list.push(Math.round(Math.max(...db)));
+    if (list.length > LEVELS_MAX) list.shift();
+    // Every frame, for a timeline: the batch covers the second just gone.
+    this.levelLog ??= [];
+    // A batch delayed in transit lands behind the next one; never let time run backwards.
+    const t0 = Math.max(this.elapsed() - db.length * 0.1, this.levelLog.at(-1)?.[0] ?? -Infinity);
+    db.forEach((v, i) => this.levelLog.push([Math.round((t0 + (i + 1) * 0.1) * 10) / 10, v, cls]));
+    if (this.levelLog.length > LEVEL_FRAMES_MAX) this.levelLog.splice(0, this.levelLog.length - LEVEL_FRAMES_MAX);
+  }
+
+  levelSummary() {
+    const out = {};
+    for (const [cls, list] of Object.entries(this.levels ?? {})) {
+      if (!list.length) continue;
+      const s = [...list].sort((a, b) => a - b);
+      const at = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+      out[cls] = { seconds: s.length, p10: at(0.1), p50: at(0.5), p90: at(0.9), max: s.at(-1) };
+    }
+    return out;
   }
 
   // --- what Claude reads ---------------------------------------------------------
@@ -780,6 +851,9 @@ export class Session {
     ws.send(JSON.stringify({ ...TTS_CONFIG, stream_id: sid }));
     ws.send(JSON.stringify({ stream_id: sid, text, text_end: true }));
     this.toDevice({ type: "tts_start", sid });
+    sp.span = [this.elapsed(), null];
+    this.speechSpans.push(sp.span);
+    if (this.speechSpans.length > SPANS_MAX) this.speechSpans.shift();
     sp.pump = setInterval(() => this.pumpVoice(sp), PUMP_MS);
     sp.guard = setTimeout(() => this.finishSpeak(sp, "error", "TTS produced no end of audio"), SPEAK_GEN_TIMEOUT_MS);
     return json(await done);
@@ -870,6 +944,7 @@ export class Session {
     if (this.speaking !== sp) return;
     this.speaking = null;
     const played = this.played(sp);
+    if (sp.span) sp.span[1] = this.elapsed() + ECHO_TAIL_S;
     clearTimeout(sp.guard);
     clearInterval(sp.pump);
     if (!sp.genDone) { try { sp.ws.send(JSON.stringify({ stream_id: sp.sid, cancel: true })); } catch {} }
@@ -1000,8 +1075,10 @@ export class Session {
       }
       return new Response(concat(parts), { headers: { "content-type": "audio/webm" } });
     }
+    if (path === "/levels") return json({ id: this.meta.id, frames: this.levelLog ?? [] });
     if (path === "/status") {
-      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()) });
+      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()),
+                    levels: this.levelSummary() });
     }
     return json({ error: "not found" }, 404);
   }
@@ -1011,7 +1088,7 @@ export class Session {
 
 const DEVICE_ROUTES = new Set(["/armed", "/device"]);
 const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/stop", "/transcript", "/status",
-                            "/audio", "/pair"]);
+                            "/audio", "/pair", "/levels"]);
 // Gated inside the session by its own keys: a Monitor URL never carries the CLI
 // token, and the SFU adapter never sees it.
 const EVENT_ROUTES = new Set(["/events", "/tts-in"]);

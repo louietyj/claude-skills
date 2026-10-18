@@ -285,6 +285,10 @@ exact text in chat, saying out loud that it's there.
 |---|---|---|
 | `streaming` | fine | nothing |
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground (crown press, screen lock, app switch). **Both phone and watch stop the mic** (a watch after ~5s). | tell Louie in chat at once: "your watch page left the screen, I'm not hearing anything" |
+
+On the phone, the picture-in-picture button (left of pause) keeps the mic on
+while Louie, or you through his phone, use other apps; screen lock still stops
+it. Before you operate his phone in talk mode, ask him to tap it.
 | `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
 | `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
 | `connected but no audio for Ns` | the mic went silent without the page leaving | tell him if it lasts |

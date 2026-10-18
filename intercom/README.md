@@ -113,7 +113,15 @@ Pixel Watch 3 (Samsung Internet 5.2) and a Pixel 11 Pro (Chrome 154):
   a quiet room.
 
 The page therefore reports `visibilitychange`, the relay logs "mic is OFF"
-entries, and `watch` names the device state on every return. With Wake Lock
+entries, and `watch` names the device state on every return.
+
+**Picture-in-picture keeps the phone's mic across app switches.** Chrome on
+Android silences a background page's mic after ~5s (crbug 445356777) unless
+the page has a picture-in-picture window, here a square canvas tile opened by
+a button: Chrome needs a tap for it, and opening it on START collapsed the
+page at once. The page reports itself visible while the tile is open, and
+hidden if it is closed while away, which silences the mic again
+(crbug 491996749). Screen lock still stops it. With Wake Lock
 held, the watch stayed awake in ambient mode, wrist down.
 
 **No browser audio processing in listen mode.** `noiseSuppression` and

@@ -40,7 +40,7 @@ button:active{background:#2a2a2a}
      align-items:center;justify-content:center;font-size:7vmin}
 .big b{font-size:10vmin;letter-spacing:.04em}
 .big small{font-size:5vmin;color:var(--amber);letter-spacing:.15em}
-#stop,#pause{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
+#stop,#pause,#pip{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
 #bot svg{width:7vmin;height:7vmin;fill:var(--clock)}
 #stop{border-color:#4a2a2a}
 #list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
@@ -72,6 +72,7 @@ button:active{background:#2a2a2a}
   </div>
 </div>
 <div id="bot">
+  <button id="pip" class="hide" aria-label="picture in picture"><svg viewBox="0 0 10 10"><path fill-rule="evenodd" d="M0.5 1.5h9v7h-9zM1.5 2.5v5h7v-5zM5 5h3v2H5z"/></svg></button>
   <button id="pause" class="hide" aria-label="pause"></button>
   <button id="stop" class="hide" aria-label="stop"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></button>
 </div>
@@ -91,6 +92,9 @@ let K = new URLSearchParams(location.hash.slice(1)).get("k") || "";
 if (K) { store(K); history.replaceState(null, "", location.pathname + location.search); }
 else { try { K = localStorage.getItem(KEY) || ""; } catch {} }
 
+// The watch's browser has no picture-in-picture, so no button there.
+const PIP_OK = !!document.pictureInPictureEnabled;
+
 const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
   (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 
@@ -109,6 +113,7 @@ function show(screen) {
   for (const s of ["pair", "idle", "live"]) $(s).classList.toggle("hide", s !== screen);
   $("stop").classList.toggle("hide", screen !== "live");
   $("pause").classList.toggle("hide", screen !== "live");
+  $("pip").classList.toggle("hide", screen !== "live" || !PIP_OK);
   if (screen !== "live") $("sid").textContent = "";
 }
 // Only trouble and pauses: an empty status leaves the room to the steer note.
@@ -240,7 +245,7 @@ function connect() {
     backoff = 1000; failures = 0;
     status("");
     send({ type: "hello", ui: UI });
-    send({ type: "vis", state: document.visibilityState });
+    reportVis();
     segment();
     if (talk) startVoice();
   };
@@ -424,6 +429,7 @@ function release() {
   clearInterval(meterTimer);
   try { meterCtx && meterCtx.close(); } catch {}
   meterCtx = null;
+  closePip();
   stopRecorder();
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -496,9 +502,67 @@ async function checkPaused() {
   if (mode === "paused") retryTimer = setTimeout(checkPaused, 5000);
 }
 
+// ---- picture-in-picture (phones) ---------------------------------------------------
+// Chrome on Android silences a background page's mic after ~5s, unless the page
+// has a picture-in-picture window open. Closing that window while away silences
+// it again, so the page then counts as hidden (crbug 491996749).
+
+let pipVideo = null;
+
+function pipTile() {
+  if (pipVideo) return pipVideo;
+  const c = document.createElement("canvas");
+  c.width = c.height = 160;
+  const g = c.getContext("2d");
+  const icon = new Image();
+  icon.src = document.querySelector('link[rel="icon"]').href;
+  const draw = () => {
+    // Tucked against the screen edge, only a strip of one side shows: orange
+    // to the edges stands out on dark and light apps alike.
+    g.fillStyle = "#d97757";
+    g.fillRect(0, 0, 160, 160);
+    g.fillStyle = "#f0eee6";
+    g.beginPath(); g.roundRect(26, 8, 108, 108, 20); g.fill();
+    if (icon.complete) g.drawImage(icon, 32, 14, 96, 96);
+    g.fillStyle = "#fff";
+    g.font = "600 30px system-ui, sans-serif";
+    g.textAlign = "center";
+    g.fillText(sid || "", 80, 146);
+  };
+  draw();
+  setInterval(draw, 1000);
+  pipVideo = document.createElement("video");
+  pipVideo.muted = true;
+  pipVideo.playsInline = true;
+  pipVideo.srcObject = c.captureStream(1);
+  pipVideo.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none";
+  document.body.appendChild(pipVideo);
+  for (const e of ["enterpictureinpicture", "leavepictureinpicture"]) {
+    pipVideo.addEventListener(e, () => { if (mode === "live") reportVis(); });
+  }
+  return pipVideo;
+}
+
+async function openPip() {
+  if (!PIP_OK) return;
+  const v = pipTile();
+  try { await v.play(); await v.requestPictureInPicture(); } catch {}
+}
+
+function closePip() {
+  if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+}
+
+// A page in picture-in-picture keeps its mic, so it reports as visible.
+function reportVis() {
+  send({ type: "vis", state: document.pictureInPictureElement ? "visible" : document.visibilityState });
+}
+
+$("pip").onclick = () => openPip();
+
 document.addEventListener("visibilitychange", () => {
   if (mode !== "live") { if (document.visibilityState === "visible") poll(); return; }
-  send({ type: "vis", state: document.visibilityState });
+  reportVis();
   if (document.visibilityState === "visible") {
     wake();
     if (!ws || ws.readyState > 1) { backoff = 1000; connect(); }

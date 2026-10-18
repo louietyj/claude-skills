@@ -517,13 +517,13 @@ function pipTile() {
   const icon = new Image();
   icon.src = document.querySelector('link[rel="icon"]').href;
   const draw = () => {
-    // Tucked against the screen edge, only a strip of one side shows: orange
-    // to the edges stands out on dark and light apps alike.
+    // Tucked against the screen edge, ~17% of one side shows: orange that far
+    // in stands out on dark and light apps alike.
     g.fillStyle = "#d97757";
     g.fillRect(0, 0, 160, 160);
     g.fillStyle = "#f0eee6";
-    g.beginPath(); g.roundRect(26, 8, 108, 108, 20); g.fill();
-    if (icon.complete) g.drawImage(icon, 32, 14, 96, 96);
+    g.beginPath(); g.roundRect(40, 14, 80, 80, 16); g.fill();
+    if (icon.complete) g.drawImage(icon, 44, 18, 72, 72);
     g.fillStyle = "#fff";
     g.font = "600 30px system-ui, sans-serif";
     g.textAlign = "center";

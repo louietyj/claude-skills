@@ -288,7 +288,8 @@ exact text in chat, saying out loud that it's there.
 
 On the phone, the picture-in-picture button (left of pause) keeps the mic on
 while Louie, or you through his phone, use other apps; screen lock still stops
-it. Before you operate his phone in talk mode, ask him to tap it.
+it. Before you operate his phone in talk mode, tap it yourself (it is labelled
+"picture in picture"; a tap from the phone tools counts), or ask him to.
 | `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
 | `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
 | `connected but no audio for Ns` | the mic went silent without the page leaving | tell him if it lasts |

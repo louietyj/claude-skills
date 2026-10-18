@@ -122,17 +122,29 @@ differences between voices that diarization relies on. Talk mode turns all
 three on, echo cancellation above all: without it Claude transcribes its own
 voice from the speaker.
 
-**Talk mode cuts turns late on purpose.** Soniox endpointing is at its most
-patient (`max_endpoint_delay_ms` 3000, sensitivity -1), then `<end>` opens a
-2.5s merge window that more speech extends. A turn is something Claude acts on,
-so a mid-thought pause must not split it; latency matters less than it would
-for a voice bot.
+**Talk mode lets Soniox end turns.** Its semantic endpointing runs at its most
+patient (`max_endpoint_delay_ms` 3000, sensitivity -1), and a monologue is not
+split. A fixed merge window on top was tried and dropped: it keyed off
+Soniox's punctuation, a guess stacked on a guess.
 
-**The relay decides barge-in, the page only plays.** While Claude speaks, two
-words of Louie's live transcript (or a tap) make the relay send `tts_stop` and
-cancel the TTS stream. The page reports how many seconds it played, and
-Soniox's character timestamps turn that into the words he heard. `speak`
-takes at most 400 characters, so an interruption costs one paragraph.
+**Claude's voice goes through Cloudflare's Realtime SFU.** Chrome on Android
+only cancels echo of audio that arrives from a real peer connection: Web Audio
+playback, and even an on-page WebRTC loopback, came back through the phone's
+mic word for word. The relay creates a WebSocket adapter that dials `/tts-in`,
+paces Soniox's 48 kHz PCM into it at real time (as stereo, in protobuf
+packets), and the page subscribes to the published track over WebRTC and plays
+it through `<audio>` with a ~500 ms jitter buffer.
+
+**The relay decides barge-in and keeps the clock.** While Claude speaks, two
+words of Louie's live transcript (or a tap) make the relay stop feeding the
+track and tell the page to mute. Playback position is time since the first
+frame less the SFU-plus-jitter delay (`VOICE_PLAYOUT_MS`), and Soniox's
+character timestamps turn that into the words he heard. `speak` takes at most
+400 characters, so an interruption costs one paragraph.
+
+**`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
+turn from Louie, or one still in progress, means nothing is played and the
+turn comes back instead, so Claude never answers a moment that has passed.
 
 **One recorder run = one webm header = one transcriber stream** (a "segment").
 A stream that resumes mid-container is not reliably decodable, so every

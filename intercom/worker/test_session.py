@@ -30,11 +30,14 @@ import fake_stt  # noqa: E402
 
 PORT = 8799
 BASE = sys.argv[1] if len(sys.argv) > 1 else f"http://127.0.0.1:{PORT}"
-CLI, DEV, DGKEY, SXKEY = "clitok", "devtok", "dgkey", "sxkey"
+CLI, DEV, DGKEY, SXKEY, SFUKEY = "clitok", "devtok", "dgkey", "sxkey", "sfukey"
+PLAYOUT_MS = 200
 WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM_API_KEY:{DGKEY} "
                  f"--var SONIOX_API_KEY:{SXKEY} "
                  "--var SONIOX_URL:http://127.0.0.1:8798/transcribe-websocket "
                  "--var SONIOX_TTS_URL:http://127.0.0.1:8798/tts-websocket "
+                 f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
+                 f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
 FAKE = None
 WRANGLER = None
@@ -151,7 +154,8 @@ class Gates(unittest.TestCase):
         status, out = http("/health", token=None)
         self.assertEqual(status, 200)
         self.assertEqual(out["secrets"], {"CLI_TOKEN": True, "DEVICE_TOKEN": True,
-                                          "SONIOX_API_KEY": True, "DEEPGRAM_API_KEY": True})
+                                          "SONIOX_API_KEY": True, "DEEPGRAM_API_KEY": True,
+                                          "REALTIME_APP_ID": True, "REALTIME_APP_TOKEN": True})
 
     def test_wrong_tokens_are_refused(self):
         self.assertEqual(http("/watch", token="nope", id="AAAA")[0], 401)
@@ -514,62 +518,108 @@ class Speak(unittest.TestCase):
         self.assertEqual((status, out["status"]), (200, "not_delivered"))
         self.assertEqual(len(FAKE.speeches), before)
 
-    def test_speech_plays_through_and_is_logged_but_not_news(self):
+    def packets_since(self, i):
+        return FAKE.sfu["packets"][i:]
+
+    def test_speech_is_paced_into_the_voice_track_and_logged_but_not_news(self):
         sid, _, ws = live_talk()
         last = entries(sid)[-1]["n"]
+        before = len(FAKE.sfu["packets"])
+        t0 = time.time()
         th, got = speak_in_background(sid, "The tests are back.")
         recv_until(ws, lambda m: m.get("type") == "tts_start")
-        chunks = 0
-        while True:
-            m = recv_until(ws, lambda m: m.get("type") in ("tts", "tts_end"))
-            if m["type"] == "tts_end":
-                break
-            chunks += 1
-        ws.send(json.dumps({"type": "tts_done", "sid": m["sid"], "played_s": 2.0}))
+        recv_until(ws, lambda m: m.get("type") == "tts_done", timeout=15)
         th.join(20)
-        self.assertEqual(got["status"], 200, got)
-        self.assertEqual(got["out"]["status"], "done")
-        self.assertEqual(got["out"]["spoken"], "The tests are back.")
-        self.assertEqual(chunks, 4)
+        self.assertEqual((got["out"]["status"], got["out"]["spoken"]), ("done", "The tests are back."), got)
+        # Four 0.5 s words of 48 kHz mono, doubled to stereo, fed at real time.
+        pk = self.packets_since(before)
+        self.assertEqual(sum(p["len"] for p in pk), 4 * 48000 * 2)
+        self.assertTrue(all(p["size"] <= 32 * 1024 for p in pk))
+        self.assertGreater(pk[-1]["t"] - pk[0]["t"], 1.5, "audio was not paced at real time")
+        self.assertGreater(time.time() - t0, 2.0)
+        adapter = FAKE.sfu["adapters"][-1]
+        self.assertEqual(adapter["auth"], f"Bearer {SFUKEY}")
+        self.assertEqual({k: adapter["track"][k] for k in ("location", "trackName", "inputCodec")},
+                         {"location": "local", "trackName": "claude", "inputCodec": "pcm"})
         rec = FAKE.speeches[-1]
         self.assertEqual(rec["auth"], f"Bearer {SXKEY}")
-        self.assertEqual({k: rec["config"][k] for k in ("model", "voice", "speed", "return_timestamps")},
-                         {"model": "tts-rt-v2", "voice": "Hazel", "speed": 1.2, "return_timestamps": True})
+        self.assertEqual({k: rec["config"][k] for k in ("model", "voice", "speed", "sample_rate")},
+                         {"model": "tts-rt-v2", "voice": "Hazel", "speed": 1.2, "sample_rate": 48000})
         self.assertIn("The tests are back.", texts(entries(sid), "said"))
         out = http("/watch", id=sid, since=last, interval=0, wait=2)[1]
         self.assertEqual(out["event"], "idle", "Claude's own speech must not wake its watch")
         ws.close()
 
-    def test_louie_cutting_in_stops_speech_at_the_word_he_heard(self):
+    def test_louie_cutting_in_mutes_the_page_and_stops_feeding_the_track(self):
         sid, _, ws = live_talk(with_transcriber=True)
         th, got = speak_in_background(sid, "one two three four five six seven eight")
-        start = recv_until(ws, lambda m: m.get("type") == "tts_start")
-        for _ in range(3):                 # the device can only have played audio it received
-            recv_until(ws, lambda m: m.get("type") == "tts")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        time.sleep(1.6)
         script(ws, emit=[FAKE.tokens([("hold", 0), ("on", 0)], final=False)])
         recv_until(ws, lambda m: m.get("type") == "tts_stop")
-        # Two 0.5s words fully played.
-        ws.send(json.dumps({"type": "tts_stopped", "sid": start["sid"], "played_s": 1.2}))
         th.join(20)
         out = got["out"]
         self.assertEqual(out["status"], "interrupted", out)
-        self.assertEqual(out["spoken"], "one two")
-        self.assertEqual(out["unspoken"], "three four five six seven eight")
+        words = "one two three four five six seven eight".split()
+        heard = out["spoken"].split()
+        # About 1.6 s played less the playout delay: two or three 0.5 s words.
+        self.assertIn(len(heard), (2, 3), out)
+        self.assertEqual(heard + out["unspoken"].split(), words)
         self.assertEqual(out["heard_so_far"], "hold on")
-        self.assertTrue(FAKE.speeches[-1]["cancelled"])
-        self.assertIn("one two", texts(entries(sid), "said"))
+        # Generation finished long before; what matters is that the queued audio never reaches the track.
+        n = len(FAKE.sfu["packets"])
+        time.sleep(0.6)
+        self.assertEqual(len(FAKE.sfu["packets"]), n, "audio kept flowing after the barge-in")
+        ws.close()
+
+    def test_barge_in_can_be_switched_off_for_one_call(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        got = {}
+        th = threading.Thread(target=lambda: got.update(zip(("status", "out"), http(
+            "/speak", "POST", {"text": "one two three", "barge_in": False}, id=sid, timeout=60))))
+        th.start()
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        script(ws, emit=[FAKE.tokens([("hold", 0), ("on", 0)], final=False)])
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", got)
         ws.close()
 
     def test_tap_on_the_device_stops_speech(self):
         sid, _, ws = live_talk()
         th, got = speak_in_background(sid, "one two three four")
-        start = recv_until(ws, lambda m: m.get("type") == "tts_start")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
         ws.send(json.dumps({"type": "stop_speaking"}))
         recv_until(ws, lambda m: m.get("type") == "tts_stop")
-        ws.send(json.dumps({"type": "tts_stopped", "sid": start["sid"], "played_s": 0}))
         th.join(20)
-        self.assertEqual((got["out"]["status"], got["out"]["spoken"]), ("interrupted", ""))
-        self.assertEqual(got["out"]["reason"], "Louie tapped stop")
+        self.assertEqual((got["out"]["status"], got["out"]["reason"]), ("interrupted", "Louie tapped stop"))
+        ws.close()
+
+    def test_page_subscribes_to_the_voice_track_through_the_relay(self):
+        sid, _, ws = live_talk()
+        ws.send(json.dumps({"type": "voice_request"}))
+        offer = recv_until(ws, lambda m: m.get("type") == "voice_offer")
+        self.assertEqual(offer["sdp"], {"type": "offer", "sdp": "v=0 fake-offer"})
+        sub = FAKE.sfu["subscribes"][-1]
+        pub = FAKE.sfu["adapters"][-1]["sessionId"]
+        self.assertEqual(sub["tracks"], [{"location": "remote", "sessionId": pub, "trackName": "claude"}])
+        ws.send(json.dumps({"type": "voice_answer", "sdp": {"type": "answer", "sdp": "v=0 fake-answer"}}))
+        end = time.time() + 5
+        while time.time() < end and not any(a["session"] == sub["session"] for a in FAKE.sfu["answers"]):
+            time.sleep(0.1)
+        answer = [a for a in FAKE.sfu["answers"] if a["session"] == sub["session"]][-1]
+        self.assertEqual(answer["sessionDescription"], {"type": "answer", "sdp": "v=0 fake-answer"})
+        ws.close()
+
+    def test_ending_the_session_closes_the_voice_adapter(self):
+        sid, _, ws = live_talk()
+        ws.send(json.dumps({"type": "voice_request"}))
+        recv_until(ws, lambda m: m.get("type") == "voice_offer")
+        adapter = FAKE.sfu["adapters"][-1]["adapterId"]
+        http("/stop", "POST", {}, id=sid)
+        end = time.time() + 5
+        while time.time() < end and adapter not in FAKE.sfu["closed"]:
+            time.sleep(0.1)
+        self.assertIn(adapter, FAKE.sfu["closed"])
         ws.close()
 
 
@@ -614,15 +664,36 @@ class Events(unittest.TestCase):
 
 
 class TalkTurns(unittest.TestCase):
-    def test_pause_after_an_end_marker_joins_the_same_turn(self):
+    def test_turn_closes_on_the_end_marker_and_a_monologue_is_not_split(self):
         sid, _, ws = live_talk(with_transcriber=True)
-        script(ws, emit=[FAKE.tokens([("So", 0), ("um", 0)], end=True)])
-        time.sleep(1.0)                    # inside the merge window
-        script(ws, emit=[FAKE.tokens([("drop", 0), ("the", 0), ("cache.", 0)], lead=True, end=True)])
-        time.sleep(1.5)
-        self.assertEqual(texts(entries(sid), "turn"), [], "turn closed inside the merge window")
-        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=6)
-        self.assertEqual(texts(es, "turn"), ["So um drop the cache."])
+        tok = lambda text, ms: {"text": text, "start_ms": ms, "is_final": True, "speaker": "0"}
+        script(ws, emit=[{"tokens": [tok("First.", 0), tok(" Still", 13000), tok(" going.", 13500)]}])
+        time.sleep(1.0)
+        self.assertEqual(texts(entries(sid), "turn"), [], "talk mode split a monologue")
+        script(ws, emit=[{"tokens": [{"text": "<end>", "is_final": True}]}])
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=3)
+        self.assertEqual(texts(es, "turn"), ["First. Still going."])
+        ws.close()
+
+    def test_speech_is_refused_while_louie_has_unread_or_unfinished_turns(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        seen = entries(sid)[-1]["n"]
+        script(ws, emit=[FAKE.tokens([("Use", 0), ("the", 0), ("blue", 0), ("one.", 0)], end=True)])
+        turn = [e for e in wait_entries(sid, lambda es: texts(es, "turn")) if e["kind"] == "turn"][-1]
+        before = len(FAKE.speeches)
+        status, out = http("/speak", "POST", {"text": "The red one is better.", "since": seen}, id=sid)
+        self.assertEqual((status, out["status"]), (200, "not_spoken"), out)
+        self.assertEqual(out["turns"], [{"n": turn["n"], "text": "Use the blue one."}])
+        # Mid-sentence is refused too, whatever Claude has read.
+        script(ws, emit=[FAKE.tokens([("wait", 0), ("actually", 0)], final=False)])
+        end = time.time() + 5
+        while time.time() < end:
+            status, out = http("/speak", "POST", {"text": "Okay.", "since": turn["n"]}, id=sid)
+            if out.get("reason") == "Louie is talking":
+                break
+            time.sleep(0.2)
+        self.assertEqual((out["status"], out["heard_so_far"]), ("not_spoken", "wait actually"))
+        self.assertEqual(len(FAKE.speeches), before, "a refused line must not reach TTS")
         ws.close()
 
 

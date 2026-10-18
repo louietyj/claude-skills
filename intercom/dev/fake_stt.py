@@ -16,6 +16,11 @@ TTS, Soniox-shaped (`/tts-websocket`): records the config and auth header, then
 speaks the text one word per TTS_WORD_S of audio, each word its own audio frame
 with character timestamps, paced so a test can cut in. `cancel` stops it.
 
+SFU, Cloudflare Realtime-shaped (`/v1/apps/{app}/...`): creating a WebSocket
+adapter dials its endpoint, as the real one does, and records the payload size
+and arrival time of every packet the relay sends. Sessions, track requests,
+renegotiation and adapter closes are recorded.
+
 Import it and call start() to run in a background thread with its state
 inspectable (test_session.py does), or run it directly to serve on :8798.
 """
@@ -24,7 +29,9 @@ import base64
 import json
 import sys
 import threading
+import time
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 CANNED_BATCH = {"results": {"channels": [{"alternatives": [{"words": [
@@ -43,6 +50,9 @@ class Fake:
         self.streams = []      # one dict per live connection
         self.batches = []      # one dict per POST
         self.speeches = []     # one dict per TTS connection
+        self.sfu = {"adapters": [], "packets": [], "sessions": 0, "subscribes": [],
+                    "answers": [], "closed": []}
+        self._client = None
 
     def tokens(self, words, *, final=True, end=False, lead=False):
         """A Soniox response. words: [(text, speaker), ...]; tokens carry their
@@ -112,7 +122,8 @@ class Fake:
         speaking = None
 
         async def speak(sid, text):
-            pcm = base64.b64encode(b"\0" * int(TTS_WORD_S * 48000)).decode()
+            rate = rec["config"].get("sample_rate", 24000)
+            pcm = base64.b64encode(b"\0" * int(TTS_WORD_S * rate * 2)).decode()
             t = 0.0
             for i, word in enumerate(text.split()):
                 chars = list(word) + ([" "] if i < len(text.split()) - 1 else [])
@@ -144,12 +155,72 @@ class Fake:
                     speaking = asyncio.ensure_future(speak(m["stream_id"], rec["text"]))
         return ws
 
+    # --- SFU -------------------------------------------------------------------------
+
+    @staticmethod
+    def payload_len(packet):
+        """Length of `bytes payload = 5` in the adapter's protobuf Packet."""
+        assert packet[0] == (5 << 3) | 2, packet[:4]
+        n, shift, i = 0, 0, 1
+        while True:
+            b = packet[i]
+            n |= (b & 0x7F) << shift
+            i += 1
+            if b < 0x80:
+                return n if len(packet) - i == n else -1
+            shift += 7
+
+    async def adapter_new(self, request):
+        body = await request.json()
+        t = body["tracks"][0]
+        n = len(self.sfu["adapters"]) + 1
+        rec = {"auth": request.headers.get("Authorization"), "track": t, "adapterId": f"ad{n}",
+               "sessionId": f"pub{n}"}
+        self.sfu["adapters"].append(rec)
+        self._client = self._client or aiohttp.ClientSession()
+        ws = await self._client.ws_connect(t["endpoint"])       # the real SFU dials before answering
+
+        async def drain():
+            async for msg in ws:
+                if msg.type == WSMsgType.BINARY:
+                    self.sfu["packets"].append({"adapter": rec["adapterId"], "t": time.time(),
+                                                "len": self.payload_len(msg.data), "size": len(msg.data)})
+        asyncio.ensure_future(drain())
+        return web.json_response({"tracks": [{"trackName": t["trackName"], "adapterId": rec["adapterId"],
+                                              "sessionId": rec["sessionId"], "endpoint": t["endpoint"]}]})
+
+    async def adapter_close(self, request):
+        body = await request.json()
+        self.sfu["closed"] += [t["adapterId"] for t in body["tracks"]]
+        return web.json_response({"tracks": body["tracks"]})
+
+    async def session_new(self, request):
+        self.sfu["sessions"] += 1
+        return web.json_response({"sessionId": f"sub{self.sfu['sessions']}"})
+
+    async def tracks_new(self, request):
+        body = await request.json()
+        self.sfu["subscribes"].append({"session": request.match_info["sid"], "tracks": body["tracks"]})
+        return web.json_response({"requiresImmediateRenegotiation": True,
+                                  "sessionDescription": {"type": "offer", "sdp": "v=0 fake-offer"},
+                                  "tracks": [{"mid": "0", **body["tracks"][0]}]})
+
+    async def renegotiate(self, request):
+        body = await request.json()
+        self.sfu["answers"].append({"session": request.match_info["sid"], **body})
+        return web.json_response({})
+
 
 def start(port=8798):
     fake = Fake()
     app = web.Application(client_max_size=64 * 1024 * 1024)
     app.router.add_route("GET", "/transcribe-websocket", fake.live)
     app.router.add_route("GET", "/tts-websocket", fake.tts)
+    app.router.add_route("POST", "/v1/apps/{app}/adapters/websocket/new", fake.adapter_new)
+    app.router.add_route("POST", "/v1/apps/{app}/adapters/websocket/close", fake.adapter_close)
+    app.router.add_route("POST", "/v1/apps/{app}/sessions/new", fake.session_new)
+    app.router.add_route("POST", "/v1/apps/{app}/sessions/{sid}/tracks/new", fake.tracks_new)
+    app.router.add_route("PUT", "/v1/apps/{app}/sessions/{sid}/renegotiate", fake.renegotiate)
     app.router.add_route("POST", "/v1/listen", fake.batch)
     ready = threading.Event()
 

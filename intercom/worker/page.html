@@ -28,6 +28,7 @@ button:active{background:#2a2a2a}
 #pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
 #bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
+#build{color:var(--dim);font-size:4vmin}
 #msg{color:var(--dim);font-size:8vmin}
 #status{font-size:7vmin;font-weight:600}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
@@ -67,6 +68,7 @@ button:active{background:#2a2a2a}
   <div id="live" class="hide">
     <div id="status"></div>
     <div id="note"></div>
+    <div id="build"></div>
   </div>
 </div>
 <div id="bot"><button id="stop" class="hide" aria-label="stop">⏹</button></div>
@@ -90,7 +92,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
   (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 
 let mode = "idle", sid = null, ws = null, stream = null, rec = null, lock = null;
-let talk = false, actx = null, player = null;
+let talk = false, voice = null, voiceEl = null, voiceHow = "", speaking = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
 
 function tick() {
@@ -185,7 +187,11 @@ async function start(s) {
   if (!MIME) { $("msg").classList.remove("hide"); $("msg").textContent = "This browser can't record audio"; return; }
   talk = s.mode === "talk";
   // Before the first await: mobile browsers only let a tap start audio output.
-  if (talk) { try { actx = actx || new AudioContext(); actx.resume(); } catch {} }
+  if (talk && !voiceEl) {
+    voiceEl = new Audio();
+    voiceEl.autoplay = true;
+    voiceEl.play().catch(() => {});   // claims the tap's permission to play
+  }
   try {
     // Listen: processing off, it flattens the voice differences diarization
     // relies on. Talk: echo cancellation on, or Claude transcribes its own voice.
@@ -198,6 +204,7 @@ async function start(s) {
   $("note").textContent = "";
   show("live");
   $("sid").textContent = talk ? `${s.id} · TALK` : s.id;
+  showBuild();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   await wake();
   connect();
@@ -216,6 +223,7 @@ function connect() {
     send({ type: "hello", ui: UI });
     send({ type: "vis", state: document.visibilityState });
     segment();
+    if (talk) startVoice();
   };
   sock.onmessage = (m) => { try { onMessage(JSON.parse(m.data)); } catch {} };
   sock.onclose = (e) => {
@@ -265,82 +273,78 @@ function onMessage(m) {
   if (m.type === "restart") segment();
   else if (m.type === "note") showNote(m.text);
   else if (m.type === "ended") finish("Session ended");
-  else if (m.type === "tts_start") ttsStart(m.sid);
-  else if (m.type === "tts") ttsChunk(m.sid, m.audio);
-  else if (m.type === "tts_end") ttsEnd(m.sid);
-  else if (m.type === "tts_stop") ttsStop(m.sid);
+  else if (m.type === "tts_start") {
+    speaking = m.sid;
+    if (voiceEl) voiceEl.muted = false;
+    status("Claude speaking · tap to stop", "talk");
+  } else if (m.type === "tts_stop" || m.type === "tts_done") {
+    // Muting drops what is still in flight, so the interruption is heard at once.
+    if (m.type === "tts_stop" && voiceEl) voiceEl.muted = true;
+    speaking = null;
+    idleStatus();
+  } else if (m.type === "voice_offer") answerVoice(m.sdp);
+  else if (m.type === "voice_restart" && talk) startVoice();
+  else if (m.type === "voice_failed") { voiceHow = `failed: ${m.error}`; showBuild(); }
 }
 
 function idleStatus() { talk ? status("Claude can talk", "talk") : status(""); }
 
-// ---- speech (talk mode) ------------------------------------------------------------
-// 24 kHz 16-bit PCM, scheduled back to back. played() is how much Louie has
-// heard: the relay turns it into the words he heard when he cuts in.
+// ---- Claude's voice (talk mode) ------------------------------------------------------
+// A WebRTC track from Cloudflare's SFU, played by an <audio> element: the only
+// playback Chrome on Android cancels from the mic. The relay paces it and keeps
+// time; the page just mutes it the moment Louie cuts in.
 
-const RATE = 24000;
+const BUILD = "v4";
+const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
+function showBuild() { $("build").textContent = talk ? `${BUILD} · voice: ${voiceHow}` : BUILD; }
 
-function ttsStart(id) {
-  ttsStop(player && player.sid, false);
-  if (!actx) { send({ type: "tts_stopped", sid: id, played_s: 0 }); return; }
-  actx.resume();
-  player = { sid: id, next: 0, t0: null, gaps: 0, total: 0, srcs: [], carry: null, ended: false, timer: null };
-  status("Claude speaking · tap to stop", "talk");
+function closeVoice() {
+  try { voice && voice.close(); } catch {}
+  voice = null;
 }
 
-function played() {
-  if (!player || player.t0 == null) return 0;
-  return Math.max(0, Math.min(player.total, actx.currentTime - player.t0 - player.gaps));
+function startVoice() {
+  closeVoice();
+  const pc = voice = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }] });
+  pc.ontrack = (e) => {
+    try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
+    voiceEl.srcObject = new MediaStream([e.track]);
+    voiceEl.play().catch((err) => { voiceHow = `won't play: ${err.name}`; showBuild(); });
+  };
+  pc.onconnectionstatechange = () => {
+    if (voice !== pc) return;
+    voiceHow = pc.connectionState === "connected" ? "webrtc sfu" : pc.connectionState;
+    showBuild();
+  };
+  voiceHow = "connecting";
+  showBuild();
+  send({ type: "voice_request" });
 }
 
-function ttsChunk(id, b64) {
-  if (!player || player.sid !== id || !b64) return;
-  let bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  if (player.carry) {                     // a sample split across two chunks
-    const joined = new Uint8Array(player.carry.length + bytes.length);
-    joined.set(player.carry); joined.set(bytes, player.carry.length);
-    bytes = joined; player.carry = null;
+async function answerVoice(sdp) {
+  const pc = voice;
+  if (!pc) return;
+  try {
+    await pc.setRemoteDescription(sdp);
+    await pc.setLocalDescription(await pc.createAnswer());
+    // Answer with candidates included; bounded, as gathering can stall on some networks.
+    await new Promise((res) => {
+      if (pc.iceGatheringState === "complete") return res();
+      const t = setTimeout(res, 2000);
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+      });
+    });
+    if (voice === pc) send({ type: "voice_answer", sdp: pc.localDescription });
+  } catch (err) {
+    voiceHow = `failed: ${err.name}`;
+    showBuild();
   }
-  if (bytes.length % 2) { player.carry = bytes.slice(-1); bytes = bytes.slice(0, -1); }
-  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
-  if (!pcm.length) return;
-  const buf = actx.createBuffer(1, pcm.length, RATE);
-  const ch = buf.getChannelData(0);
-  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
-  const src = actx.createBufferSource();
-  src.buffer = buf; src.connect(actx.destination);
-  const now = actx.currentTime;
-  if (player.t0 == null) { player.t0 = now + 0.05; player.next = player.t0; }
-  else if (player.next < now) { player.gaps += now - player.next; player.next = now; }   // a late chunk
-  src.start(player.next);
-  player.next += buf.duration; player.total += buf.duration;
-  player.srcs.push(src);
-}
-
-function ttsEnd(id) {
-  if (!player || player.sid !== id) return;
-  const p = player;
-  const left = p.t0 == null ? 0 : Math.max(0, p.next - actx.currentTime);
-  p.timer = setTimeout(() => {
-    if (player !== p) return;
-    send({ type: "tts_done", sid: p.sid, played_s: p.total });
-    player = null; idleStatus();
-  }, left * 1000 + 100);
-}
-
-function ttsStop(id, report = true) {
-  if (!player || player.sid !== id) return;
-  const p = player;
-  const at = played();
-  clearTimeout(p.timer);
-  for (const s of p.srcs) { try { s.stop(); } catch {} }
-  player = null;
-  if (report) send({ type: "tts_stopped", sid: p.sid, played_s: at });
-  idleStatus();
 }
 
 // Any tap while Claude speaks cuts it off, for when talking over it won't do.
 $("stage").addEventListener("click", (e) => {
-  if (player && e.target.id !== "stop") send({ type: "stop_speaking" });
+  if (speaking && e.target.id !== "stop") send({ type: "stop_speaking" });
 });
 
 // A long steer shrinks until it fits between the session id and stop.
@@ -369,7 +373,8 @@ function showNote(text) {
 function finish(why) {
   mode = "idle";
   clearTimeout(retryTimer);
-  if (player) ttsStop(player.sid, false);
+  closeVoice();
+  speaking = null;
   stopRecorder();
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;

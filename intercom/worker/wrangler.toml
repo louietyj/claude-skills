@@ -7,6 +7,7 @@ compatibility_date = "2026-01-01"
 [vars]
 SONIOX_URL = "https://stt-rt.soniox.com/transcribe-websocket"
 SONIOX_TTS_URL = "https://tts-rt.soniox.com/tts-websocket"
+SFU_URL = "https://rtc.live.cloudflare.com/v1/apps"
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 [[durable_objects.bindings]]

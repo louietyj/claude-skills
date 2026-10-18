@@ -252,6 +252,28 @@ class Talk(Base):
         self.assertEqual(out["spoken"], "one two")
         self.assertIn("next event", out["hint"])
 
+    def test_barge_in_switch_reaches_the_relay(self):
+        relay = Relay({"/speak": (200, {"status": "done", "spoken": "hi", "unspoken": ""})})
+        self.run_cli(["speak", "--no-barge-in"], relay, stdin=io.StringIO("hi"))
+        self.assertIs(relay.calls[-1]["body"]["barge_in"], False)
+        self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertIs(relay.calls[-1]["body"]["barge_in"], True)
+
+    def test_since_comes_from_the_flag_or_else_the_watch_cursor(self):
+        relay = Relay({"/speak": (200, {"status": "done", "spoken": "hi", "unspoken": ""})})
+        self.run_cli(["speak", "--since", "41"], relay, stdin=io.StringIO("hi"))
+        self.assertEqual(relay.calls[-1]["body"]["since"], 41)
+        intercom.write_state("cursor-K7QM.json", {"since": 12})
+        self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertEqual(relay.calls[-1]["body"]["since"], 12)
+
+    def test_refused_speech_says_to_read_louies_turn_first(self):
+        relay = Relay({"/speak": (200, {"status": "not_spoken", "turns": [{"n": 9, "text": "blue"}]})})
+        _, out, _ = self.run_cli(["speak", "--since", "8"], relay, stdin=io.StringIO("red"))
+        out = json.loads(out)
+        self.assertEqual(out["turns"], [{"n": 9, "text": "blue"}])
+        self.assertIn("nothing was played", out["hint"])
+
     def test_longest_speech_still_fits_the_bash_timeout(self):
         self.assertLess(intercom.speak_timeout("x" * intercom.SPEAK_MAX), 120)
 

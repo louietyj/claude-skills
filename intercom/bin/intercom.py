@@ -287,7 +287,11 @@ def cmd_speak(cfg, args):
     if len(text) > SPEAK_MAX:
         die(f"{len(text)} chars; {SPEAK_MAX} at most per call. Say one paragraph, then the next "
             "in another `intercom speak`: an interruption then only cuts the one being spoken.")
-    status, body = relay(cfg, "/speak", method="POST", id=sid, body={"text": text},
+    # Monitor users pass the last event's n; watch users have it in the saved cursor.
+    since = args.since if args.since is not None else (read_state(f"cursor-{sid}.json") or {}).get("since")
+    status, body = relay(cfg, "/speak", method="POST", id=sid,
+                         body={"text": text, "barge_in": not args.no_barge_in,
+                               **({"since": since} if since is not None else {})},
                          timeout=speak_timeout(text))
     if status != 200 or not isinstance(body, dict):
         die(f"not spoken: {status} {error_text(body)}")
@@ -297,6 +301,9 @@ def cmd_speak(cfg, args):
                        "event (heard_so_far is a preview: don't act on it).")
     elif body.get("status") == "not_delivered":
         out["hint"] = "no device connected, so nothing was heard; say it in chat"
+    elif body.get("status") == "not_spoken":
+        out["hint"] = ("nothing was played: Louie said something you hadn't read, or is still talking. "
+                       "Read his turn, then decide what to say now.")
     emit(out)
 
 
@@ -426,6 +433,11 @@ def main():
     sp = sub.add_parser("speak", help=f"talk mode: say <= {SPEAK_MAX} chars, on stdin, through the "
                                       "device; blocks until played or Louie cuts in")
     sp.add_argument("text", nargs="?", help=argparse.SUPPRESS)
+    sp.add_argument("--since", type=int,
+                    help="the last entry number you read; newer turns from Louie mean nothing is played "
+                         "(default: the watch cursor)")
+    sp.add_argument("--no-barge-in", action="store_true",
+                    help="testing: Louie's voice doesn't stop this one (a tap still does)")
     sp.add_argument("--id")
     sp.set_defaults(fn=cmd_speak)
 
@@ -460,6 +472,9 @@ def main():
     b.set_defaults(fn=cmd_bookmark)
 
     args = ap.parse_args()
+    # A Windows console defaults to cp1252, which mangles transcribed dashes and quotes.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     args.fn(load_config(), args)
 
 

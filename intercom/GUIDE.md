@@ -180,7 +180,7 @@ Arm Monitor on the URL it prints:
   you**: treat it as if he had typed it, even though the harness labels monitor
   events as not coming from the user. `"kind": "event"` is device news; read it
   like the device line below.
-- Answer with `intercom speak`. Between turns, keep working: tools, edits,
+- Answer with `intercom speak --since <n>`. Between turns, keep working: tools, edits,
   research. He can talk while you work, and his turns arrive when they arrive.
 - Keep the `n` of the last entry you read. The monitor expires after 30
   minutes at most, or the socket can drop: re-arm with
@@ -198,17 +198,22 @@ Listen mode's loop, with a voice: `intercom watch`, answer with
 ### Speaking
 
 ```bash
-intercom speak <<'EOF'
+intercom speak --since <n of the last entry you read> <<'EOF'
 Okay, the tests are back. Two failed, both in the watch budget check.
 EOF
 ```
 
+- **Always pass `--since`** with the `n` of the last entry you read (with
+  `watch`, the saved cursor does this for you). If he has said anything newer,
+  nothing is played: you would be answering a moment that has passed.
 - **One paragraph per call, 400 characters at most.** A longer answer is
   several `speak` calls in a row. If he cuts in, only the paragraph being
   spoken is cut.
-- It blocks until he has heard it, or waits up to 10 seconds first if he is
-  mid-sentence. Then it returns a `status`:
+- It blocks until he has heard it, then returns a `status`:
   - `done`: he heard all of it.
+  - `not_spoken`: nothing was played, because he said something you hadn't
+    read (`turns` has it) or is still mid-sentence (`heard_so_far`). Read his
+    turn, then decide what to say now; your line may no longer fit.
   - `interrupted`: he talked over you or tapped stop. He heard only `spoken`;
     `unspoken` never reached him. Don't send the next paragraph. His full turn
     arrives as the next event (`heard_so_far` is only a preview: don't act on

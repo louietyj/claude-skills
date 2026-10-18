@@ -246,7 +246,7 @@ function connect() {
   sock.onclose = (e) => {
     if (ws !== sock || mode !== "live") return;
     stopRecorder();
-    if (e.code === 4000) return finish("Opened on another device");
+    if (e.code === 4000) { finish("Opened on another device"); return window.close(); }
     failures++;
     if (failures >= 4) return checkStillLive();
     status("Reconnecting…", "amber");
@@ -487,6 +487,16 @@ if (new URLSearchParams(location.search).has("debug")) {
   };
   report(); addEventListener("resize", report);
 }
+
+// The watch's browser opens a new tab on every bookmark tap and has no tab
+// switcher, so a new copy tells older ones to close. A bookmark-opened tab has
+// one history entry, which lets it close itself.
+let others = null;
+try {
+  others = new BroadcastChannel("intercom-page");
+  others.onmessage = (e) => { if (e.data === "opened" && mode !== "live" && mode !== "paused") window.close(); };
+  others.postMessage("opened");
+} catch {}
 
 if (K) { show("idle"); poll(); } else needPairing();
 </script>

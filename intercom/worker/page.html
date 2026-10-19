@@ -22,12 +22,14 @@ button:active{background:#2a2a2a}
    only below ~8%. */
 #top{position:absolute;top:9%;left:0;right:0;display:flex;flex-direction:column;align-items:center}
 #clock{color:var(--clock);font-size:20vmin;line-height:1;font-variant-numeric:tabular-nums}
+#sidrow{position:relative}
 #sid{color:var(--dim);font-size:6vmin;letter-spacing:.15em}
 /* Centred between the clock and stop, not on the face, so a tall block
    never rides up into the clock. */
 #mid{position:absolute;top:54%;left:10%;right:10%;transform:translateY(-50%)}
 #pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
-#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:6vmin}
+/* Three buttons clear a round face's edge only this close together. */
+#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:4vmin}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
 #msg{color:var(--dim);font-size:8vmin}
 #status{font-size:7vmin;font-weight:600}
@@ -40,9 +42,16 @@ button:active{background:#2a2a2a}
      align-items:center;justify-content:center;font-size:7vmin}
 .big b{font-size:10vmin;letter-spacing:.04em}
 .big small{font-size:5vmin;color:var(--amber);letter-spacing:.15em}
-#stop,#pause,#pip{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
+#stop,#pause,#mute,#pip{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
 #bot svg{width:7vmin;height:7vmin;fill:var(--clock)}
 #stop{border-color:#4a2a2a}
+#mute path{fill:none;stroke:var(--clock);stroke-width:1;stroke-linecap:round}
+#mute:not(.on) .slash{display:none}
+#mute.on{border-color:var(--amber)}
+#mute.on rect{fill:var(--amber)} #mute.on path{stroke:var(--amber)}
+/* Hung off the id's right edge, so the id stays centred under the clock. */
+#pip{position:absolute;left:calc(100% + 2.5vmin);top:50%;transform:translateY(-50%);width:8vmin;height:8vmin;border-width:0.4vmin}
+#pip svg{width:4vmin;height:4vmin;fill:var(--dim)}
 #list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
 .row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
 .row small{display:block;color:var(--dim);font-size:5vmin}
@@ -54,7 +63,10 @@ button:active{background:#2a2a2a}
 <div id="stage">
 <div id="top">
   <div id="clock"></div>
-  <div id="sid"></div>
+  <div id="sidrow">
+    <span id="sid"></span>
+    <button id="pip" class="hide" aria-label="picture in picture"><svg viewBox="0 0 10 10"><path fill-rule="evenodd" d="M0.5 1.5h9v7h-9zM1.5 2.5v5h7v-5zM5 5h3v2H5z"/></svg></button>
+  </div>
 </div>
 <div id="mid">
   <div id="pair" class="hide">
@@ -72,7 +84,7 @@ button:active{background:#2a2a2a}
   </div>
 </div>
 <div id="bot">
-  <button id="pip" class="hide" aria-label="picture in picture"><svg viewBox="0 0 10 10"><path fill-rule="evenodd" d="M0.5 1.5h9v7h-9zM1.5 2.5v5h7v-5zM5 5h3v2H5z"/></svg></button>
+  <button id="mute" class="hide" aria-label="mute"><svg viewBox="0 0 10 10"><rect x="3.5" y="0.5" width="3" height="5.5" rx="1.5"/><path d="M2 4.5a3 3 0 0 0 6 0M5 7.5v2"/><path class="slash" d="M1.5 1l7 8.5"/></svg></button>
   <button id="pause" class="hide" aria-label="pause"></button>
   <button id="stop" class="hide" aria-label="stop"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></button>
 </div>
@@ -99,6 +111,7 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
   (t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 
 let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
+let sendStream = null, muted = false;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
@@ -113,6 +126,7 @@ function show(screen) {
   for (const s of ["pair", "idle", "live"]) $(s).classList.toggle("hide", s !== screen);
   $("stop").classList.toggle("hide", screen !== "live");
   $("pause").classList.toggle("hide", screen !== "live");
+  $("mute").classList.toggle("hide", screen !== "live");
   $("pip").classList.toggle("hide", screen !== "live" || !PIP_OK);
   if (screen !== "live") $("sid").textContent = "";
 }
@@ -214,6 +228,11 @@ async function start(s) {
       ? { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
       : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
+  // Mute disables only this clone: the transcriber gets silence on the same
+  // stream, and the probe still reads the real mic, so Claude isn't told it died.
+  sendStream = new MediaStream([stream.getAudioTracks()[0].clone()]);
+  if (mode !== "paused") muted = false;
+  applyMute();
   // Only after the mic, which puts Android in call mode: a context opened earlier
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams.
@@ -282,7 +301,7 @@ async function checkStillLive() {
 function segment() {
   stopRecorder();
   send({ type: "seg" });
-  rec = new MediaRecorder(stream, { mimeType: MIME, audioBitsPerSecond: 64000 });
+  rec = new MediaRecorder(sendStream, { mimeType: MIME, audioBitsPerSecond: 64000 });
   rec.ondataavailable = (e) => {
     if (e.data.size && ws && ws.readyState === 1) ws.send(e.data);
     probeTick();
@@ -335,10 +354,11 @@ function voiceFailed(why) { status(`No voice: ${why}`, "red"); }
 // The mic's level after the browser's echo cancellation, every 100 ms, drives
 // the echo gate: sustained energy, not a spike. Only transitions are sent.
 function startMeter() {
-  if (!meterCtx || !stream) return;
+  if (!meterCtx || !sendStream) return;
   const an = meterCtx.createAnalyser();
   an.fftSize = 2048;
-  meterCtx.createMediaStreamSource(stream).connect(an);
+  // The muted clone: talking to someone else while muted must not interrupt Claude.
+  meterCtx.createMediaStreamSource(sendStream).connect(an);
   const buf = new Float32Array(an.fftSize);
   let recent = [], loud = false, hotRun = 0, quietRun = 0;
   clearInterval(meterTimer);
@@ -513,8 +533,8 @@ function release() {
   meterCtx = null;
   closePip();
   stopRecorder();
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = null;
+  for (const s of [stream, sendStream]) if (s) s.getTracks().forEach((t) => t.stop());
+  stream = sendStream = null;
   const sock = ws; ws = null;
   try { sock && sock.close(1000); } catch {}
   try { lock && lock.release(); } catch {}
@@ -572,6 +592,14 @@ $("pause").onclick = async () => {
     retryTimer = setTimeout(checkPaused, 5000);
   }, 300);
 };
+
+// Mic off, everything else on: Claude still talks and works. A pause keeps it.
+function applyMute() {
+  if (sendStream) sendStream.getAudioTracks()[0].enabled = !muted;
+  $("mute").classList.toggle("on", muted);
+  $("mute").setAttribute("aria-label", muted ? "unmute" : "mute");
+}
+$("mute").onclick = () => { muted = !muted; applyMute(); };
 
 // No socket while paused, so nothing else would tell the page that Claude ended the session.
 async function checkPaused() {

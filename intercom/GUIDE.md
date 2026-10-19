@@ -202,6 +202,8 @@ whiteboard").
 - With Monitor (see "The loop"), answer each turn with `intercom speak --since <n>`.
 - While you speak, short sounds don't reach you: to cut in, Louie has to talk
   for a second or two. So a turn that arrives mid-speech is deliberate.
+- He can mute: his mic sends silence, he still hears you, and you are not
+  told. A long silence may be that, not inattention.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
   answer with `intercom speak`, then `intercom watch` again in the same
   message. Keep `watch` in a call on its own, as above.
@@ -334,7 +336,7 @@ line is all that tells a quiet room from a dead one.
 If the phone's mic goes SILENT with its page off screen, another app has taken
 the mic (a call, a recorder, the assistant), or the flag has been lost. Tell
 him. If it stays silent once nothing else is recording, fall back to the
-picture-in-picture button (left of pause): it keeps the mic across app
+picture-in-picture button (beside the session id): it keeps the mic across app
 switches, not screen lock. Before you
 operate his phone in talk mode without the flag, tap it yourself (it is
 labelled "picture in picture"; a tap from the phone tools counts), or ask him to.

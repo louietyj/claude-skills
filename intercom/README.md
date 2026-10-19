@@ -234,6 +234,12 @@ off the mic, the recorder, Claude's voice and the socket; resuming reconnects
 like a rejoin. The relay logs it as a pause rather than a drop, and gives it an
 hour rather than five minutes before ending the session.
 
+**Mute sends silence; it doesn't stop anything.** The recorder and the echo
+gate read a clone of the mic track, and mute disables only the clone, so the
+transcriber stream runs on (billed alike: Soniox charges for stream time, not
+audio) and Claude keeps talking. The mic probe reads the original, so a muted
+mic is never reported as silenced, and Claude isn't told about mute at all.
+
 **Listen mode batches Monitor events.** Each event wakes Claude, and a
 conversation has a turn every few seconds, so the relay holds listen-mode
 turns for 10s and then sends them back to back as separate frames: Monitor

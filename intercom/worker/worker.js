@@ -621,19 +621,20 @@ export class Session {
     if (msg.type === "voice_ready") { this.voiceReady = true; return; }
     if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
     if (msg.type === "mic") return this.onMic(msg.state);
+    // Off screen with the mic still hearing (a locked phone, an app switch) is
+    // not news: Claude hears of it only if the mic goes silent (onMic).
     if (msg.type === "vis") {
       const who = this.meta.ui ?? "device";
       if (msg.state === "hidden" && this.meta.hidden_since == null) {
         this.meta.hidden_since = Date.now();
         this.meta.hidden_heard = this.micHears();
-        await this.addEntry("event", { text: this.meta.hidden_heard
-          ? `${who} page left the screen; its mic still hears, and you'll be told if it goes silent`
-          : `${who} page left the screen: the mic is OFF (a watch keeps ~5s) until it is back` });
+        if (this.meta.hidden_heard) return this.saveMeta();
+        await this.addEntry("event", { text: `${who} page left the screen: the mic is OFF (a watch keeps ~5s) until it is back` });
       } else if (msg.state === "visible" && this.meta.hidden_since != null) {
         const s = Math.round((Date.now() - this.meta.hidden_since) / 1000);
         this.meta.hidden_since = null;
-        await this.addEntry("event", { text: `${who} page back on screen after ${s}s` +
-          (this.meta.hidden_heard ? "" : "; nothing was heard in between") });
+        if (this.meta.hidden_heard) return this.saveMeta();
+        await this.addEntry("event", { text: `${who} page back on screen after ${s}s; nothing was heard in between` });
       }
     }
   }

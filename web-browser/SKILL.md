@@ -141,17 +141,38 @@ doubt, end with it: it costs a few lines.
 
 ## Subagents for involved navigation
 
-If you have a subagent tool, hand the navigation to a Sonnet subagent
-(`model: "sonnet"`). This is the default, not an option -- above all when you
-are Opus. A single page fetch you can run yourself; clicking through a site --
-shop search results, filters, product listings, booking or checkout flows --
-is where an agent burns 30 tool calls and fills its context with screenshots
-and snaps. Delegated, only the findings come back, and you keep the last mile.
-Scope each task narrowly, with a clear stopping point. The most common case:
-"Find xyz's official booking site, go through its booking flow, and stop at
-the pricing page." Finding the site and clicking through the flow is research
-plus navigation, so it goes to Sonnet. The pricing page is the part you care
-about, so it comes back to you for the last mile.
+If you have a subagent tool, hand the navigation to a subagent. This is the
+default, not an option -- above all when you are Opus. A single page fetch you
+can run yourself; clicking through a site -- shop search results, filters,
+product listings, booking or checkout flows -- is where an agent burns 30 tool
+calls and fills its context with screenshots and snaps. Delegated, only the
+findings come back, and you keep the last mile.
+
+Pick the model by whether a failure would be loud or silent:
+
+- **Haiku at xhigh effort** (`model: "haiku"`, `effort: "xhigh"`) when you can
+  check "done" from what it returns: a page state it reached, saved page text
+  or screenshots, or the browser handed back. If it falls short, you can see.
+- **Sonnet** (`model: "sonnet"`) when the result is a judgment or a claim to
+  have covered everything -- cheapest, all of them, the official one -- or
+  the flow is long and full of form state, or it submits or buys anything.
+  There, an agent that gave up early returns a partial answer that looks
+  complete.
+
+Where you can, rewrite the brief so the task fits Haiku: "find the cheapest
+SFO-ANC flight in November" invites a silently partial answer; "load the
+results for these four dates and save each page's text" is checkable, and the
+comparison stays with you. Name the stopping point as a page state, not a goal.
+
+Never spawn Haiku without `effort`: at its default, medium, it gives up at the
+first failed click and drops rules from long instructions. If it comes back
+blocked or partial, give the task to Sonnet along with what Haiku tried
+rather than retrying Haiku.
+
+The most common case: "Find xyz's official booking site, go through its
+booking flow, and stop at the pricing page." Picking the official site is a
+judgment and the flow is full of form state, so it goes to Sonnet. The pricing
+page is the part you care about, so it comes back to you for the last mile.
 
 Spawn them whenever the need shows up, before or after you have browsed
 yourself. Give each a name no other subagent in this conversation has had

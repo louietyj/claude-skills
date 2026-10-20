@@ -64,6 +64,9 @@ const SONIOX_MODEL = "stt-rt-v5";
 // Talk mode: Soniox's semantic endpointing at its most patient decides when a turn is over.
 const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
                         endpoint_latency_adjustment_level: 0 };
+// Even so it ends a turn while Louie gathers his thoughts, so the turn stays
+// open until this much silence follows: Claude takes seconds to answer anyway.
+const TALK_HOLD_MS = 3000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
@@ -242,7 +245,8 @@ export class Session {
     this.sttOpening = false;
     this.quickFails = 0;
     this.pendingAudio = [];
-    this.cur = null;             // turn being assembled: {spk, t, text}
+    this.cur = null;             // turn being assembled: {spk, t, text, gap}
+    this.holdTimer = null;       // talk mode: delivers cur after TALK_HOLD_MS of silence
     this.pending = null;         // words still being recognised, never stored
     this.lastAudioAt = 0;
     this.audioStalledAt = null;  // the last chunk before the page stopped sending
@@ -336,6 +340,8 @@ export class Session {
   // --- turns -------------------------------------------------------------
 
   async flushTurn() {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = null;
     const cur = this.cur;
     this.cur = null;
     const text = cur?.text.trim();
@@ -361,14 +367,23 @@ export class Session {
     for (const tok of tokens) {
       const at = offset + (tok.start_ms ?? 0) / 1000;
       if (tok.text !== "<end>" && this.isEcho(at)) continue;
+      // Any speech while a talk turn is held pushes its delivery back.
+      if (this.holdTimer && tok.text !== "<end>") this.holdTurn();
       if (!tok.is_final) {
         if (tok.text !== "<end>") { pending += tok.text; pendingSpk ??= tok.speaker; }
         continue;
       }
-      if (tok.text === "<end>") { await this.flushTurn(); continue; }
+      if (tok.text === "<end>") {
+        if (this.talk() && this.cur) { this.cur.gap = true; this.holdTurn(); }
+        else await this.flushTurn();
+        continue;
+      }
       const spk = Number(tok.speaker ?? 0) || 0;
       if (this.cur && this.cur.spk !== spk) await this.flushTurn();
       if (!this.cur) this.cur = { spk, t: at, text: "" };
+      // Soniox spaces words within an utterance, not across one.
+      if (this.cur.gap && !/^\s/.test(tok.text)) this.cur.text += " ";
+      this.cur.gap = false;
       this.cur.text += tok.text;
       if (!this.talk() && at - this.cur.t >= TURN_SPLIT_S && /[.?!]$/.test(tok.text)) await this.flushTurn();
     }
@@ -377,6 +392,12 @@ export class Session {
       const heard = (this.tail()?.text ?? "").split(/\s+/).filter(Boolean).length;
       if (heard >= BARGE_IN_WORDS) this.bargeIn("Louie spoke");
     }
+  }
+
+  holdTurn() {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => this.flushTurn().catch(() => {}),
+                                Number(this.env.TALK_HOLD_MS ?? TALK_HOLD_MS));
   }
 
   // The open turn's finished words plus those still being recognised.

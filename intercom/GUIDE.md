@@ -91,7 +91,8 @@ intercom watch
 - `tail`: the turn still being spoken, so far. Its last words may still
   change; read it to stay current, but never steer on how it ends. A
   monologue is cut into turns at sentence ends every ~12s, so a long answer
-  doesn't stay invisible until it stops.
+  doesn't stay invisible until it stops. In talk mode a turn stays in `tail`
+  until Louie has been silent ~3s, so a pause to think doesn't end it.
 
 Leave `--interval` at the default 10s. Raising it saves tool calls but puts
 you that much further behind the conversation.

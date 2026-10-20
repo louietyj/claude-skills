@@ -38,7 +38,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  "--var SONIOX_TTS_URL:http://127.0.0.1:8798/tts-websocket "
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
-                 "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 "
+                 "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
 FAKE = None
 WRANGLER = None
@@ -826,6 +826,16 @@ class TalkTurns(unittest.TestCase):
         script(ws, emit=[{"tokens": [{"text": "<end>", "is_final": True}]}])
         es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=3)
         self.assertEqual(texts(es, "turn"), ["First. Still going."])
+        ws.close()
+
+    def test_a_pause_after_the_end_marker_keeps_the_turn_open(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        script(ws, emit=[tokens_now(["First", "thought."], end=True)])
+        time.sleep(0.5)
+        self.assertEqual(texts(entries(sid), "turn"), [], "delivered before the hold ran out")
+        script(ws, emit=[tokens_now(["And", "another."], end=True)])
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=5)
+        self.assertEqual(texts(es, "turn"), ["First thought. And another."])
         ws.close()
 
     def test_speech_is_refused_while_louie_has_unread_or_unfinished_turns(self):

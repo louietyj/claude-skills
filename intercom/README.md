@@ -184,10 +184,13 @@ differences between voices that diarization relies on. Talk mode turns all
 three on, echo cancellation above all: without it Claude transcribes its own
 voice from the speaker.
 
-**Talk mode lets Soniox end turns.** Its semantic endpointing runs at its most
-patient (`max_endpoint_delay_ms` 3000, sensitivity -1), and a monologue is not
-split. A fixed merge window on top was tried and dropped: it keyed off
-Soniox's punctuation, a guess stacked on a guess.
+**Talk mode lets Soniox end turns, then waits 3 s of silence.** Its semantic
+endpointing runs at its most patient (`max_endpoint_delay_ms` 3000,
+sensitivity -1), and a monologue is not split. Even so it closed turns while
+Louie paused to think, so the relay holds a turn until `TALK_HOLD_MS` passes
+with no new words. An earlier merge window keyed off Soniox's punctuation, a
+guess stacked on a guess; this one keys off silence alone. Claude answers in
+seconds anyway, and whole thoughts matter more than quick turn-taking.
 
 **Claude's voice goes through Cloudflare's Realtime SFU.** Chrome on Android
 only cancels echo of audio that arrives from a real peer connection: Web Audio

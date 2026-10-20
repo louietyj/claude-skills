@@ -10,6 +10,18 @@ SONIOX_TTS_URL = "https://tts-rt.soniox.com/tts-websocket"
 SFU_URL = "https://rtc.live.cloudflare.com/v1/apps"
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
+# The page's echo canceller is served, not run: the wasm as bytes, its JS as text.
+[[rules]]
+type = "Data"
+globs = ["**/aec3.wasm"]
+fallthrough = true
+
+# fallthrough keeps the default Text rule, which page.html needs.
+[[rules]]
+type = "Text"
+globs = ["**/aec/*.js"]
+fallthrough = true
+
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "Session"

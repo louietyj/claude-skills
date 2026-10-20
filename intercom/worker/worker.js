@@ -28,7 +28,17 @@
 //   GET  /status?id
 // Anyone:
 //   GET  /health      which secrets are set, never their values
+//   GET  /aec/*       the page's own echo canceller (../aec): wasm, wrapper, worklet
 import PAGE from "./page.html";
+import AEC3_WASM from "../aec/aec3.wasm";
+import AEC3_JS from "../aec/aec3.js";
+import AEC3_WORKLET from "../aec/worklet.js";
+
+const AEC_FILES = {
+  "/aec/aec3.wasm": [AEC3_WASM, "application/wasm"],
+  "/aec/aec3.js": [AEC3_JS, "text/javascript"],
+  "/aec/worklet.js": [AEC3_WORKLET, "text/javascript"],
+};
 
 const ID_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679";  // no 0/O, 1/I, 2/Z, 5/S, 8/B
 const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
@@ -1174,6 +1184,10 @@ export default {
 
     if (path === "/" && req.method === "GET") {
       return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+    if (AEC_FILES[path] && req.method === "GET") {
+      const [body, type] = AEC_FILES[path];
+      return new Response(body, { headers: { "content-type": type, "cache-control": "no-cache" } });
     }
     if (path === "/health") {
       return json({ ok: true, secrets: {

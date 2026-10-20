@@ -32,6 +32,7 @@ video call to join.
 | `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
+| `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
 | `dev/fake_stt.py` | Soniox-shaped live STT and TTS and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
@@ -227,7 +228,29 @@ spikes reached Louie's level), and a one-second window let echo bursts and
 wrist noise through. So interrupting takes real talking. When Claude is silent
 every word counts. Meanwhile the page ducks Claude to a quarter volume after
 200 ms of sound, as claude.ai's voice mode does, so Louie can be heard while
-the gate decides.
+the gate decides. Outside real Chrome the gate reads AEC3's output (below),
+where echo never reaches -42 dB twice in a row, so it opens on 3 of 5 frames:
+inside the relay's lookback, and an interruption keeps its first words.
+
+**Outside real Chrome, the page cancels Claude's echo itself.** The watch's
+browser hands echo cancellation to Wear OS, which gates rather than subtracts:
+silence, then bursts of Claude at Louie's own level, several a minute, which
+ducked Claude and got transcribed. The raw mic was fine: WebRTC's AEC3 on it
+left echo at -55 to -80 dB and Louie untouched. So the page runs AEC3 in an
+AudioWorklet on the raw mic, with Claude's track scaled by the duck volume as
+the reference (it must be what the speaker plays); the output is `sendStream`.
+The processed mic stays open, unsent, to keep Android in call mode. Real Chrome
+keeps its own (AEC3 on desktop, the phone's on Android); `?aec=on|off`
+overrides. The raw mic reads ~10 dB lower, hence its -42 dB floor.
+
+**`aec/aec3.wasm` is built here, not taken from npm.** The published wasm
+builds of AEC3 are scalar and cost the watch ~500 ms of CPU per audio second,
+~90% in the delay estimator, whose fast paths are SSE2/NEON. `build.sh` lets
+meson take the NEON paths on wasm32 (Emscripten maps `arm_neon.h` onto wasm
+SIMD), and `wap.cc` runs the delay estimator at 8x downsampling without
+pre-echo detection: ~120 ms per audio second, same output. Live that is ~20% of
+a core and ~9 mA (~7% of a session's draw), so the worklet runs AEC3 only
+while Claude has been audible in the last 2 s.
 
 **Pause is a deliberate disconnect.** The page tells the relay, then turns
 off the mic, the recorder, Claude's voice and the socket; resuming reconnects

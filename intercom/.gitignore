@@ -13,3 +13,6 @@ __pycache__/
 .wrangler/
 dev/*.webm
 dev/*.wav
+
+# AEC3 wasm build tree (sources, meson, objects); aec/aec3.wasm is the product.
+aec/.work/

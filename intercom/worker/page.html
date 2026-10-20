@@ -351,6 +351,9 @@ const GATE_FLOOR_DB = -35;
 const AEC_GATE_FLOOR_DB = -42;
 const AEC_GATE_WINDOW = 5;
 const AEC_GATE_MIN_FRAMES = 3;
+// Running water by the watch reads as loud as Louie; WebRTC's VAD called 1-2% of
+// it voice, and 58-72% of his speech over it.
+const AEC_VOICE_MIN = 0.2;
 const GATE_WINDOW = 20;
 const GATE_MIN_FRAMES = 12;
 const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
@@ -385,7 +388,8 @@ async function startAec() {
     node.connect(dest);
     sendStream.getTracks().forEach((t) => t.stop());
     sendStream = dest.stream;
-    aec = { gain, source: null };
+    aec = { gain, source: null, voice: null };
+    node.port.onmessage = (e) => { if (aec) aec.voice = e.data; };
     aecReference();
   } catch (e) {
     console.warn("own echo cancellation unavailable", e);
@@ -426,7 +430,8 @@ function startMeter() {
     let sum = 0;
     for (const v of buf) sum += v * v;
     const db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);
-    const hot = db > floor;
+    // No VAD reading (AEC3 paused or just starting) counts as no voice.
+    const hot = db > floor && (!aec || (aec.voice ?? 0) >= AEC_VOICE_MIN);
     recent.push(hot);
     if (recent.length > gateWindow) recent.shift();
     const now = recent.filter(Boolean).length >= gateMin;

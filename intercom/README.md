@@ -241,7 +241,12 @@ AudioWorklet on the raw mic, with Claude's track scaled by the duck volume as
 the reference (it must be what the speaker plays); the output is `sendStream`.
 The processed mic stays open, unsent, to keep Android in call mode. Real Chrome
 keeps its own (AEC3 on desktop, the phone's on Android); `?aec=on|off`
-overrides. The raw mic reads ~10 dB lower, hence its -42 dB floor.
+overrides. The raw mic reads ~10 dB lower, hence its -42 dB floor. Level alone
+isn't enough there: running water by the watch is as loud as Louie and ducked
+Claude throughout, so a frame also needs WebRTC's VAD (on AEC3's output) to
+call a fifth of it voice. That cut false ducks from 24% of the time to 2%;
+noise suppression only halved them. Interrupting still takes ~2 s: the relay
+waits for two transcribed words.
 
 **`aec/aec3.wasm` is built here, not taken from npm.** The published wasm
 builds of AEC3 are scalar and cost the watch ~500 ms of CPU per audio second,

@@ -152,6 +152,22 @@ no visible output", this host won't take a blank reply (Claude Code does this):
 answer that, and every quiet turn after it, with `.`. claude.ai and Cowork show
 a space as blank.
 
+The pattern, at a used-car dealership (notification wrappers trimmed):
+
+```
+user       <event>{..., "text": "Thanks for coming in. Can I get you a coffee?"}</event>
+assistant  
+user       <event>{..., "text": "So this is the 2021 Civic, one owner, thirty-eight thousand miles."}</event>
+assistant  
+user       <event>{..., "text": "Out the door it's twenty-four nine, including the
+           fifteen-hundred reconditioning fee, which is standard."}</event>
+assistant  [Bash] intercom note <<'EOF'
+           Recon fee is negotiable. Ask to drop it.
+           EOF
+assistant  The $1,500 reconditioning fee is a dealer add-on, not a standard
+           charge. Ask for it removed, or for the out-the-door price without it.
+```
+
 ### Steering: Louie's private aide
 
 Louie is in a conversation (a shop counter, an appointment, a negotiation, a

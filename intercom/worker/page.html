@@ -33,6 +33,8 @@ button:active{background:#2a2a2a}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
 #msg{color:var(--dim);font-size:8vmin}
 #status{font-size:7vmin;font-weight:600}
+#choices{display:flex;flex-direction:column;align-items:center;gap:3vmin}
+#where{color:var(--dim);font-size:6vmin}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
 #note{color:#fff;font-weight:700;font-size:6.5vmin;line-height:1.2}
 #note.flash{animation:flash .5s ease-in-out 6 alternate}
@@ -89,12 +91,17 @@ button:active{background:#2a2a2a}
   </div>
   <div id="live" class="hide">
     <div id="status" class="hide"></div>
+    <div id="choices" class="hide">
+      <div class="hint">No audio in the room yet</div>
+      <button id="usehere" class="pill">This device</button>
+    </div>
+    <div id="where" class="hide"></div>
     <div id="note"></div>
   </div>
 </div>
 <div id="bot">
   <button id="mute" class="hide" aria-label="mute"><svg viewBox="0 0 10 10"><rect x="3.5" y="0.5" width="3" height="5.5" rx="1.5"/><path d="M2 4.5a3 3 0 0 0 6 0M5 7.5v2"/><path class="slash" d="M1.5 1l7 8.5"/></svg></button>
-  <button id="pause" class="hide" aria-label="pause"></button>
+  <button id="pause" class="hide" aria-label="leave audio"><svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.5" height="8"/><rect x="6" y="1" width="2.5" height="8"/></svg></button>
   <button id="stop" class="hide" aria-label="stop"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></button>
 </div>
 <div id="sheet" class="hide">
@@ -107,6 +114,7 @@ button:active{background:#2a2a2a}
     </div>
     <div class="hint">silence before your turn goes to Claude</div>
   </div>
+  <button id="usehere2" class="pill hide">Use this device</button>
   <button id="pip" class="pill hide">Picture in picture</button>
   <button id="done" class="pill">Done</button>
 </div>
@@ -139,6 +147,9 @@ const OWN_AEC = (new URLSearchParams(location.search).get("aec")
 
 let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
 let sendStream = null, muted = false, raw = null, aec = null;
+// The room can have many screens; at most one holds the audio. `roomAudio` is
+// which ("watch", "phone"), null for none, undefined until the relay says.
+let holding = false, roomAudio;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
@@ -152,10 +163,20 @@ tick(); setInterval(tick, 1000);
 function show(screen) {
   for (const s of ["pair", "idle", "live"]) $(s).classList.toggle("hide", s !== screen);
   $("stop").classList.toggle("hide", screen !== "live");
-  $("pause").classList.toggle("hide", screen !== "live");
-  $("mute").classList.toggle("hide", screen !== "live");
-  $("menu").classList.toggle("hide", screen !== "live" || !(talk || PIP_OK));
+  $("menu").classList.toggle("hide", screen !== "live");
   if (screen !== "live") { $("sid").textContent = ""; closeSheet(); }
+  renderRoom();
+}
+
+// What this screen offers depends on where the room's audio is. The choice
+// pops up only when nothing has it; moving it from elsewhere is in the sheet.
+function renderRoom() {
+  const inRoom = mode === "live";
+  $("pause").classList.toggle("hide", !inRoom || !holding);
+  $("mute").classList.toggle("hide", !inRoom || !holding);
+  $("choices").classList.toggle("hide", !inRoom || holding || roomAudio !== null);
+  $("where").classList.toggle("hide", !inRoom || holding || !roomAudio);
+  $("where").textContent = roomAudio ? `Audio on the ${roomAudio}` : "";
 }
 // Only trouble and pauses: an empty status leaves the room to the steer note.
 function status(text, cls) {
@@ -214,8 +235,8 @@ function render(sessions) {
     const b = document.createElement("button");
     b.className = "big";
     // The mode is Louie's consent: only a TALK session can speak through this device.
-    b.innerHTML = `${s.state === "live" ? "Rejoin" : "Start"}<b>${s.id}</b><small>${s.mode === "talk" ? "TALK" : "LISTEN"}</small>`;
-    b.onclick = () => start(s);
+    b.innerHTML = `${s.state === "live" ? "Rejoin" : "Join"}<b>${s.id}</b><small>${s.mode === "talk" ? "TALK" : "LISTEN"}</small>`;
+    b.onclick = () => join(s);
     list.appendChild(b);
     return;
   }
@@ -224,7 +245,7 @@ function render(sessions) {
     b.className = "row";
     b.innerHTML = `${s.state === "live" ? "● " : ""}${s.id} · ${s.mode === "talk" ? "TALK" : "LISTEN"}<small></small>`;
     b.querySelector("small").textContent = s.label || "";
-    b.onclick = () => start(s);
+    b.onclick = () => join(s);
     list.appendChild(b);
   }
 }
@@ -238,14 +259,27 @@ async function wake() {
         lock.addEventListener("release", () => { lock = null; }); } } catch {}
 }
 
-async function start(s) {
-  if (!MIME) { $("msg").classList.remove("hide"); $("msg").textContent = "This browser can't record audio"; return; }
+// Joining makes this page a screen in the room, with no audio.
+async function join(s) {
   talk = s.mode === "talk";
-  // Before the first await: mobile browsers only let a tap start audio output.
+  session = s; sid = s.id; mode = "live"; failures = 0;
+  holding = false; roomAudio = undefined; holdMs = null; muted = false;
+  clearTimeout(noteTimer); $("note").textContent = "";
+  show("live");
+  $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
+  await wake();
+  connect();
+}
+
+// Called from a tap: mobile browsers only let a tap start audio output.
+async function takeAudio() {
+  closeSheet();
+  if (!MIME) return status("This browser can't record audio", "red");
+  // Before the first await, to claim the tap's permission to play.
   if (talk && !voiceEl) {
     voiceEl = new Audio();
     voiceEl.autoplay = true;
-    voiceEl.play().catch(() => {});   // claims the tap's permission to play
+    voiceEl.play().catch(() => {});
   }
   try {
     // Listen: processing off, it flattens the voice differences diarization
@@ -254,29 +288,32 @@ async function start(s) {
     stream = await navigator.mediaDevices.getUserMedia({ audio: talk
       ? { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
       : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  } catch { $("msg").classList.remove("hide"); $("msg").textContent = "Microphone blocked"; return; }
+  } catch { return status("Microphone blocked", "red"); }
   // Mute disables only this clone: the transcriber gets silence on the same
   // stream, and the probe still reads the real mic, so Claude isn't told it died.
   sendStream = new MediaStream([stream.getAudioTracks()[0].clone()]);
-  if (mode !== "paused") muted = false;
+  muted = false;
   // Only after the mic, which puts Android in call mode: a context opened earlier
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams. AEC3 runs at 48 kHz.
   try { meterCtx = new AudioContext(talk && OWN_AEC ? { sampleRate: 48000 } : {}); meterCtx.resume(); } catch {}
   if (talk && OWN_AEC && meterCtx) await startAec();
   applyMute();
-  // A resume keeps the last steer on screen.
-  if (mode !== "paused") { clearTimeout(noteTimer); $("note").textContent = ""; }
-  session = s; sid = s.id; mode = "live"; failures = 0; holdMs = null;
-  show("live");
-  $("pause").innerHTML = PAUSE_ICON;
-  $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
+  holding = true;
+  renderRoom();
   if (talk) startMeter();
   startProbe();
   startChirps();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
-  await wake();
-  connect();
+  send({ type: "take" });
+  startAudio();
+}
+
+// On a socket the relay knows holds the audio: a fresh segment, and Claude's voice.
+function startAudio() {
+  reportVis();
+  segment();
+  if (talk) startVoice();
 }
 
 function deviceUrl() {
@@ -293,16 +330,14 @@ function connect() {
   sock.onopen = () => {
     backoff = 1000; failures = 0;
     status("");
-    send({ type: "hello", ui: UI, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
-    reportVis();
-    segment();
-    if (talk) startVoice();
+    // A screen that held the mic before the drop takes it back, if nothing else has.
+    send({ type: "hello", ui: UI, holding, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+    if (holding) startAudio();
   };
   sock.onmessage = (m) => { try { onMessage(JSON.parse(m.data)); } catch {} };
-  sock.onclose = (e) => {
+  sock.onclose = () => {
     if (ws !== sock || mode !== "live") return;
     stopRecorder();
-    if (e.code === 4000) { finish("Opened on another device"); return window.close(); }
     failures++;
     if (failures >= 4) return checkStillLive();
     status("Reconnecting…", "amber");
@@ -357,6 +392,14 @@ function onMessage(m) {
   else if (m.type === "voice_restart" && talk) startVoice();
   else if (m.type === "voice_failed") voiceFailed(m.error);
   else if (m.type === "settings") { holdMs = m.hold_ms; renderSheet(); }
+  else if (m.type === "release") releaseAudio();
+  else if (m.type === "room") {
+    // Only a `release` takes the audio away: a room message sent before the
+    // relay saw this screen's take would otherwise undo it.
+    roomAudio = m.audio;
+    renderRoom();
+    renderSheet();
+  }
 }
 
 // ---- settings ----------------------------------------------------------------------
@@ -373,7 +416,8 @@ try {
 
 function renderSheet() {
   $("holdrow").classList.toggle("hide", !talk);
-  $("pip").classList.toggle("hide", !PIP_OK);
+  $("usehere2").classList.toggle("hide", holding || !roomAudio);
+  $("pip").classList.toggle("hide", !PIP_OK || !holding);
   if (holdMs == null) { $("holdval").textContent = "…"; return; }
   $("holdval").textContent = `${holdMs / 1000}s`;
   $("holddown").disabled = holdMs <= HOLD_STEPS[0];
@@ -394,6 +438,8 @@ function closeSheet() { $("sheet").classList.add("hide"); }
 
 $("menu").onclick = () => { renderSheet(); $("sheet").classList.remove("hide"); };
 $("done").onclick = closeSheet;
+$("usehere").onclick = takeAudio;
+$("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
 
@@ -649,11 +695,13 @@ function showNote(text) {
   noteTimer = setTimeout(() => { n.classList.remove("flash"); n.classList.add("old"); }, NOTE_FRESH_MS);
 }
 
-// Mic, recorder, voice and socket off; the mode is set first, so the close isn't retried.
-function release() {
-  clearTimeout(retryTimer);
+// Mic, recorder and Claude's voice off: nothing of the room's audio stays on
+// this device (Android's mic dot goes out). The screen stays in the room.
+function releaseAudio() {
+  holding = false;
   closeVoice();
   claudeTalking = false;
+  if (voiceEl) voiceEl.muted = true;
   clearInterval(meterTimer);
   probe = null;
   chirp = null;
@@ -663,6 +711,14 @@ function release() {
   stopRecorder();
   for (const s of [stream, sendStream, raw]) if (s) s.getTracks().forEach((t) => t.stop());
   stream = sendStream = raw = aec = null;
+  renderRoom();
+  renderSheet();
+}
+
+// Audio and socket off; the mode is set first, so the close isn't retried.
+function release() {
+  clearTimeout(retryTimer);
+  releaseAudio();
   const sock = ws; ws = null;
   try { sock && sock.close(1000); } catch {}
   try { lock && lock.release(); } catch {}
@@ -687,38 +743,18 @@ async function flushRecorder() {
 }
 
 $("stop").onclick = async () => {
-  if (mode === "paused") {
-    // No socket while paused: open one just to say so, until the relay confirms.
-    const sock = new WebSocket(deviceUrl());
-    sock.onopen = () => sock.send(JSON.stringify({ type: "stop" }));
-    sock.onmessage = (m) => { try { if (JSON.parse(m.data).type === "ended") sock.close(1000); } catch {} };
-    return finish("Stopped");
-  }
   await flushRecorder();
   send({ type: "stop" });
   setTimeout(() => finish("Stopped"), 300);
 };
 
-// Drawn, not font glyphs: those sit off-centre in a round button. The
-// triangle is nudged right so its weight, not its box, is centred.
-const PAUSE_ICON = '<svg viewBox="0 0 10 10"><rect x="1.5" y="1" width="2.5" height="8"/><rect x="6" y="1" width="2.5" height="8"/></svg>';
-const PLAY_ICON = '<svg viewBox="0 0 10 10"><path d="M2.5 1 L9.5 5 L2.5 9 Z"/></svg>';
-
-// Pause is a deliberate disconnect: everything off, nothing heard or said
-// until resume, which reconnects like a rejoin.
+// Leaving audio keeps this screen in the room; the choice comes back.
 $("pause").onclick = async () => {
-  if (mode === "paused") return start(session);
-  if (mode !== "live") return;
-  mode = "paused";
+  if (!holding) return;
   if (voiceEl) voiceEl.muted = true;
   await flushRecorder();
-  send({ type: "pause" });
-  setTimeout(() => {
-    release();
-    $("pause").innerHTML = PLAY_ICON;
-    status("Paused", "amber");
-    retryTimer = setTimeout(checkPaused, 5000);
-  }, 300);
+  send({ type: "leave" });
+  releaseAudio();
 };
 
 // Mic off, everything else on: Claude still talks and works. A pause keeps it.
@@ -728,17 +764,6 @@ function applyMute() {
   $("mute").setAttribute("aria-label", muted ? "unmute" : "mute");
 }
 $("mute").onclick = () => { muted = !muted; applyMute(); };
-
-// No socket while paused, so nothing else would tell the page that Claude ended the session.
-async function checkPaused() {
-  if (mode !== "paused") return;
-  try {
-    const r = await fetch(`/armed?k=${encodeURIComponent(K)}`, { cache: "no-store" });
-    const ids = ((await r.json()).sessions || []).map((s) => s.id);
-    if (mode === "paused" && !ids.includes(sid)) return finish("Session is over");
-  } catch {}
-  if (mode === "paused") retryTimer = setTimeout(checkPaused, 5000);
-}
 
 // ---- picture-in-picture (phones) ---------------------------------------------------
 // Chrome on Android silences a background page's mic after ~5s, unless the page
@@ -791,9 +816,10 @@ function closePip() {
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
 }
 
-// A page in picture-in-picture keeps its mic, so it reports as visible.
+// A page in picture-in-picture keeps its mic, so it reports as visible. Only the
+// screen holding the audio has a mic to report on.
 function reportVis() {
-  send({ type: "vis", state: document.pictureInPictureElement ? "visible" : document.visibilityState });
+  if (holding) send({ type: "vis", state: document.pictureInPictureElement ? "visible" : document.visibilityState });
 }
 
 // The tile takes the screen over at once, so the sheet goes first.
@@ -826,7 +852,7 @@ if (new URLSearchParams(location.search).has("debug")) {
 let others = null;
 try {
   others = new BroadcastChannel("intercom-page");
-  others.onmessage = (e) => { if (e.data === "opened" && mode !== "live" && mode !== "paused") window.close(); };
+  others.onmessage = (e) => { if (e.data === "opened" && mode !== "live") window.close(); };
   others.postMessage("opened");
 } catch {}
 

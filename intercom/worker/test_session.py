@@ -69,10 +69,16 @@ def create(**body):
     return out["id"]
 
 
-def device(sid, k=DEV):
+def screen(sid, ui="watch", k=DEV, **hello):
+    """A page in the room, with no audio."""
     ws = connect(f"{BASE.replace('http', 'ws')}/device?k={k}&id={sid}", open_timeout=10)
-    ws.send(json.dumps({"type": "hello", "ui": "watch"}))
+    ws.send(json.dumps({"type": "hello", "ui": ui, **hello}))
     return ws
+
+
+def device(sid, k=DEV):
+    """A page in the room holding its audio, as one does after a tap on This device or a reconnect."""
+    return screen(sid, k=k, holding=True)
 
 
 def script(ws, **s):
@@ -203,7 +209,7 @@ class Lifecycle(unittest.TestCase):
         self.assertIn({"id": sid, "label": "estate lawyer", "state": "armed"},
                       [{k: s[k] for k in ("id", "label", "state")} for s in listed])
         ws = device(sid)
-        es = wait_entries(sid, lambda es: "recording started" in texts(es, "event"))
+        es = wait_entries(sid, lambda es: "recording started on the watch" in texts(es, "event"))
         self.assertEqual(es[0]["n"], 1)
         listed = http("/armed", token=None, k=DEV)[1]["sessions"]
         self.assertEqual([s["state"] for s in listed if s["id"] == sid], ["live"])
@@ -230,7 +236,7 @@ class Lifecycle(unittest.TestCase):
         ws.send(json.dumps({"type": "stop"}))
         ws.close()
         es = wait_entries(sid, lambda es: any("session ended" in t for t in texts(es, "event")))
-        self.assertFalse(any("device disconnected" in t for t in texts(es, "event")), es)
+        self.assertFalse(any("disconnected" in t for t in texts(es, "event")), es)
 
     def test_last_words_land_before_the_end(self):
         sid = create()
@@ -253,16 +259,79 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(http("/stop", "POST", {}, id=sid)[0], 200)
         recv_until(ws, lambda m: m.get("type") == "ended")
 
-    def test_second_device_replaces_the_first(self):
+
+class Room(unittest.TestCase):
+    def room(self, ws):
+        return recv_until(ws, lambda m: m.get("type") == "room")
+
+    def test_joining_brings_no_audio_until_a_screen_takes_it(self):
+        n = stream_count()
+        sid = create()
+        ws = screen(sid, "phone")
+        self.assertEqual(self.room(ws), {"type": "room", "audio": None, "mine": False})
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((dev["screens"], dev["audio"], dev["no_audio_why"]), (["phone"], None, "unpicked"))
+        ws.send(json.dumps({"type": "seg"}))          # not the holder: ignored
+        time.sleep(0.5)
+        self.assertEqual(stream_count(), n)
+        ws.send(json.dumps({"type": "take"}))
+        self.assertEqual(self.room(ws), {"type": "room", "audio": "phone", "mine": True})
+        wait_entries(sid, lambda es: "recording started on the phone" in texts(es, "event"))
+        ws.close()
+
+    def test_a_second_screen_joins_and_can_take_the_audio(self):
         sid = create()
         a = device(sid)
         wait_entries(sid, lambda es: es)
-        b = device(sid)
-        with self.assertRaises(ConnectionClosed) as cm:
-            while True:
-                a.recv(timeout=5)
-        self.assertEqual(cm.exception.rcvd.code, 4000)
-        b.close()
+        b = screen(sid, "phone")
+        self.assertEqual(self.room(b), {"type": "room", "audio": "watch", "mine": False})
+        http("/note", "POST", {"text": "both see this"}, id=sid)
+        for ws in (a, b):
+            recv_until(ws, lambda m: m.get("type") == "note")
+        b.send(json.dumps({"type": "take"}))
+        recv_until(a, lambda m: m.get("type") == "release")
+        self.assertEqual(self.room(b)["mine"], True)
+        es = wait_entries(sid, lambda es: any("moved from the watch to the phone" in t for t in texts(es, "event")))
+        self.assertEqual(http("/status", id=sid)[1]["device"]["screens"].count("watch"), 1, es)
+        a.close(), b.close()
+
+    def test_audio_comes_only_from_the_holder(self):
+        n = stream_count()
+        sid = create()
+        a = device(sid)
+        b = screen(sid, "phone")
+        a.send(json.dumps({"type": "seg"}))
+        s = wait_streams(n + 1)
+        b.send(b"from-the-phone")
+        a.send(b"from-the-watch")
+        end = time.time() + 5
+        while time.time() < end and not s["audio"]:
+            time.sleep(0.1)
+        self.assertEqual(s["audio"], [b"from-the-watch"])
+        a.close(), b.close()
+
+    def test_a_dropped_holder_takes_the_audio_back_unless_another_has_it(self):
+        sid = create()
+        a = device(sid)
+        b = screen(sid, "phone")
+        wait_entries(sid, lambda es: es)
+        a.close()
+        wait_entries(sid, lambda es: any("holding the audio disconnected" in t for t in texts(es, "event")))
+        b.send(json.dumps({"type": "take"}))
+        wait_entries(sid, lambda es: any("audio back on the phone" in t for t in texts(es, "event")))
+        a = device(sid)                    # comes back still thinking it holds the mic
+        recv_until(a, lambda m: m.get("type") == "release")
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone")
+        a.close(), b.close()
+
+    def test_any_screen_can_stop_the_room(self):
+        sid = create()
+        a = device(sid)
+        b = screen(sid, "phone")
+        wait_entries(sid, lambda es: es)
+        b.send(json.dumps({"type": "stop"}))
+        for ws in (a, b):
+            recv_until(ws, lambda m: m.get("type") == "ended")
 
 
 class Turns(unittest.TestCase):
@@ -373,7 +442,7 @@ class Watch(unittest.TestCase):
         self.assertEqual(out["event"], "idle")
         self.assertEqual(out["entries"], [])
         self.assertEqual(out["last"], last)
-        self.assertTrue(out["device"]["connected"])
+        self.assertEqual(out["device"]["audio"], "watch")
         ws.close()
 
     def test_backlog_returns_at_once_and_news_waits_for_the_interval(self):
@@ -489,7 +558,7 @@ class Device(unittest.TestCase):
         ws = device(sid)
         wait_entries(sid, lambda es: es)
         ws.close()
-        wait_entries(sid, lambda es: any("device disconnected" in t for t in texts(es, "event")))
+        wait_entries(sid, lambda es: any("holding the audio disconnected" in t for t in texts(es, "event")))
         ws = device(sid)
         es = wait_entries(sid, lambda es: any("reconnected after" in t for t in texts(es, "event")))
         # A clean close is not an object restart, so nothing may claim one.
@@ -584,7 +653,7 @@ class Speak(unittest.TestCase):
         ws = device(sid)
         wait_entries(sid, lambda es: es)
         ws.close()
-        wait_entries(sid, lambda es: any("device disconnected" in t for t in texts(es, "event")))
+        wait_entries(sid, lambda es: any("holding the audio disconnected" in t for t in texts(es, "event")))
         status, out = http("/speak", "POST", {"text": "hello there"}, id=sid)
         self.assertEqual((status, out["status"]), (200, "not_delivered"))
         self.assertEqual(len(FAKE.speeches), before)
@@ -704,26 +773,23 @@ class Speak(unittest.TestCase):
         self.assertEqual(texts(es, "turn"), ["Okay."])
         ws.close()
 
-    def test_pause_stops_speech_and_is_not_a_drop(self):
+    def test_leaving_audio_stops_speech_and_keeps_the_screen(self):
         sid, _, ws = live_talk()
         th, got = speak_in_background(sid, "one two three four")
         recv_until(ws, lambda m: m.get("type") == "tts_start")
-        ws.send(json.dumps({"type": "pause"}))
-        recv_until(ws, lambda m: m.get("type") == "tts_stop")
+        ws.send(json.dumps({"type": "leave"}))
+        recv_until(ws, lambda m: m.get("type") == "release")
         th.join(20)
-        self.assertEqual((got["out"]["status"], got["out"]["reason"]), ("interrupted", "Louie paused the device"))
-        ws.close()
-        end = time.time() + 5
-        while time.time() < end and http("/status", id=sid)[1]["device"]["connected"]:
-            time.sleep(0.1)
-        self.assertIsNotNone(http("/status", id=sid)[1]["device"]["paused_s"])
+        self.assertEqual((got["out"]["status"], got["out"]["reason"]), ("interrupted", "Louie left audio"))
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((dev["audio"], dev["screens"], dev["no_audio_why"]), (None, ["watch"], "left"))
         out = http("/speak", "POST", {"text": "hello there"}, id=sid)[1]
-        self.assertEqual((out["status"], out.get("reason")), ("not_delivered", "Louie paused the device"))
-        ws = device(sid)
-        es = wait_entries(sid, lambda es: any("resumed after" in t for t in texts(es, "event")))
-        self.assertTrue(any("Louie paused" in t for t in texts(es, "event")), es)
-        self.assertFalse(any("device disconnected" in t for t in texts(es, "event")), es)
-        self.assertIsNone(http("/status", id=sid)[1]["device"]["paused_s"])
+        self.assertEqual((out["status"], out.get("reason")), ("not_delivered", "Louie left audio"))
+        ws.send(json.dumps({"type": "take"}))
+        es = wait_entries(sid, lambda es: any("turned audio back on" in t for t in texts(es, "event")))
+        self.assertTrue(any("Louie left audio" in t for t in texts(es, "event")), es)
+        self.assertFalse(any("disconnected" in t for t in texts(es, "event")), es)
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "watch")
         ws.close()
 
     def test_page_subscribes_to_the_voice_track_through_the_relay(self):
@@ -913,6 +979,7 @@ class TurnWait(unittest.TestCase):
         sid, _ = create_talk()
         ws = self.talk_device(sid, hold_ms=0)
         self.assertEqual(self.settings(ws), 0)
+        ws.send(json.dumps({"type": "take"}))
         n = stream_count()
         global SEG_T0
         SEG_T0 = time.time()

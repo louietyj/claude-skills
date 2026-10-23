@@ -30,15 +30,18 @@ beat five. Write them to a file, one per line.
 intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--archive]
 ```
 
-- `--mode listen|talk`, default listen. The device shows it on the START
-  button, so Louie knows whether you can talk before he taps.
+- `--mode listen|talk`, default listen. The device shows it on the room's
+  button, so Louie knows whether you can talk before he turns audio on.
 - `--label` shows under the id on the device: a few words.
 - `--archive` keeps the audio so `intercom transcript --batch` can run a
   full-file pass afterwards. That transcript is far more accurate, and is the
   input for the transcript-humanize skill. The audio is deleted once the batch
   pass has run. Ask Louie only if he'd want a clean record; the default is off.
-- It prints an id like `K7QM`. Tell Louie: **"Tap START K7QM."** The bookmark
-  shows whatever is waiting; the id is how he knows it's yours.
+- It prints an id like `K7QM`. Tell Louie: **"Join K7QM."** The bookmark
+  shows whatever is waiting; the id is how he knows it's yours. Joining opens
+  the room with no audio; he then taps **This device** to use that page's mic.
+  Any number of his screens (phone, watch) can be in the room, and any of them
+  can take the audio, but only one holds it at a time.
 - If his page says to ask for a pairing code (a new device, or cleared browser
   data), run `intercom pair` and tell him the 6 digits. They work once, for 5
   minutes.
@@ -298,13 +301,14 @@ EOF
   - `not_spoken`: nothing was played, because he said something you hadn't
     read (`turns` has it) or is still mid-sentence (`heard_so_far`). Read his
     turn, then decide what to say now; your line may no longer fit.
-  - `interrupted`: he talked over you or paused. He heard only `spoken`;
-    `unspoken` never reached him. Don't send the next paragraph. If he talked,
-    his full turn arrives as the next event (`heard_so_far` is only a preview:
-    don't act on it); if he paused, wait for him to resume. Then decide whether what he missed still matters, said differently,
-    or not at all.
-  - `not_delivered`: no device connected. If `reason` says he paused, wait
-    for him to resume; otherwise tell him in chat.
+  - `interrupted`: he talked over you, left audio, or the audio moved to
+    another screen. He heard only `spoken`; `unspoken` never reached him.
+    Don't send the next paragraph. If he talked, his full turn arrives as the
+    next event (`heard_so_far` is only a preview: don't act on it); if he left
+    audio, wait for him to turn it back on. Then decide whether what he missed
+    still matters, said differently, or not at all.
+  - `not_delivered`: nothing in the room holds the audio. If `reason` says he
+    left audio, wait for him to turn it back on; otherwise tell him in chat.
 - **Don't leave him hanging.** If what he asked will take more than a few
   seconds (lookups, edits, a build), acknowledge it in one line first ("Sure,
   checking the logs now"), then do the work. On a call, silence sounds like
@@ -359,10 +363,12 @@ exact text in chat, saying out loud that it's there.
 | `streaming` | fine; `, page off screen for Ns but its mic hears` too: the page checks its own mic | nothing |
 | `mic SILENT for Ns` | the mic delivers pure zeros: Android silenced it (below) | tell Louie in chat at once: "your mic went silent, I'm not hearing anything" |
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no fresh mic reading: a watch (crown press, its mic stops after ~5s), a frozen phone page (an event says "stopped sending audio"), or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
-| `PAUSED by Louie Ns ago` | he tapped pause: mic and your voice are off on purpose | nothing; keep working, and save what you'd say for when he resumes |
-| `DISCONNECTED for Ns` | no connection (network, or the page closed) | tell him in chat; it reconnects by itself when the page is back |
+| `Louie LEFT AUDIO Ns ago` | he tapped pause (leave audio): mic and your voice are off on purpose, his screen is still in the room | nothing; keep working, and save what you'd say for when he turns it back on |
+| `in the room ... but hasn't turned audio on` | he joined and hasn't tapped This device yet | if it lasts, remind him once |
+| `holding the audio DISCONNECTED Ns ago` | the screen with the mic lost its connection (network, or the page closed) | tell him in chat; it takes the audio back by itself when it reconnects |
+| `NO SCREEN OPEN` | no page is in the room: notes don't reach him | tell him in chat if it matters |
 | `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
-| `has not tapped START` | session armed, nobody started it | remind him of the id |
+| `has not opened the room` | session armed, nobody joined | remind him of the id |
 
 Louie's phone runs Chrome with a flag that keeps the mic on through screen lock
 and app switches (README, "A Chrome feature flag keeps the phone's mic"), so he
@@ -404,8 +410,8 @@ Monitor armed there is nothing to go back to: it keeps running.
 ## Ending
 
 `watch` returns `event: ended` (Monitor gets a "session ended" event, then
-`follow` exits) when Louie taps STOP, the device has been gone 5 minutes (paused
-for an hour), or you
+`follow` exits) when Louie taps STOP, no screen has been open for 5 minutes, the
+room has had no audio for an hour, or you
 ran `intercom stop` (only when he asks). You have no voice after that. Give a
 short wrap-up in chat: what was agreed, numbers, open questions, follow-ups, anything you
 flagged that never got answered. If you kept a whiteboard, make sure everything

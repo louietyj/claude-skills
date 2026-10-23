@@ -1,5 +1,6 @@
-"""Screenshot the device page at watch and phone sizes, live in a talk session
-and with its settings sheet open, against `wrangler dev` and the fakes (as
+"""Screenshot the device page at watch and phone sizes in a talk session:
+joined with no audio, holding it, and with the settings sheet open, against
+`wrangler dev` and the fakes (as
 worker/test_session.py runs them). The watch shot gets its round face drawn
 on, so anything crossing the edge of the circle shows up.
 
@@ -93,7 +94,10 @@ def main():
             tab.call("Page.navigate", url=f"{ts.BASE}/?ui={name.split('-')[0]}#k={ts.DEV}")
             tab.wait("document.querySelector('#list button.big')")
             tab.js("document.querySelector('#list button.big').click()")
-            tab.wait("!document.getElementById('live').classList.contains('hide')")
+            tab.wait("!document.getElementById('choices').classList.contains('hide')")
+            tab.shot(OUT / f"{name}-joined.png", round_face)
+            tab.js("document.getElementById('usehere').click()")
+            tab.wait("!document.getElementById('pause').classList.contains('hide')")
             tab.js("showNote('Ask whether the trustee fee is capped')")
             tab.shot(OUT / f"{name}-live.png", round_face)
             tab.js("document.getElementById('menu').click()")

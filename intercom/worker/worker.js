@@ -13,7 +13,8 @@
 //   GET  /            the page
 //   POST /pair/claim  {code} -> the device token; the code is the only gate
 //   GET  /armed       sessions waiting to start, and live ones to rejoin
-//   GET  /device?id   websocket: audio in; notes, restarts and the end out
+//   GET  /device?id   websocket, one per screen in the room: controls, and audio from
+//                     the one holding it, in; room state, notes and the end out
 // Claude (CLI_TOKEN as ?token=):
 //   POST /pair        a one-time 6-digit code for pairing a device
 //   POST /session     create and arm a session, {mode: listen|talk} -> {id, event_key}
@@ -46,7 +47,9 @@ const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
 const ARMED_TTL_MS = 15 * 60_000;
 const DEVICE_GONE_MS = 5 * 60_000;
 const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
-const PAUSE_MAX_MS = 60 * 60_000;
+const NO_AUDIO_MAX_MS = 60 * 60_000;
+// Why speech stopped, as `speak` reports it, when the audio left its holder.
+const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding the audio disconnected" };
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
 const MIC_STALE_MS = 12_000;      // the page repeats its mic reading every ~5s
@@ -242,9 +245,10 @@ export class Session {
     this.ctx = ctx;
     this.env = env;
     this.meta = null;
-    // Device facts Claude reads (ui, hidden_since, disconnected_at) live in meta:
-    // an object restart must not turn "gone 3 minutes" into "fine".
-    this.device = null;          // current device websocket
+    // Room facts Claude reads (hidden_since, no_audio_since, absent_since) live in
+    // meta: an object restart must not turn "gone 3 minutes" into "fine".
+    this.screens = new Map();    // every page in the room: websocket -> {ui}
+    this.holder = null;          // the screen whose mic is the room's audio, if any
     this.stt = null;             // current transcriber websocket
     this.sttOpening = false;
     this.quickFails = 0;
@@ -274,12 +278,14 @@ export class Session {
     if (this.meta) return this.meta;
     this.meta = (await this.ctx.storage.get("meta")) ?? null;
     // A fresh instance with a live session means the object restarted (a
-    // deploy, or Cloudflare moving it): the device socket died with the old
+    // deploy, or Cloudflare moving it): the screens' sockets died with the old
     // one and no close handler ran to say so.
-    if (this.meta?.state === "live" && !this.meta.disconnected_at) {
-      this.meta.disconnected_at = Date.now();
-      await this.addEntry("event", { text: "relay restarted; the device must reconnect (no audio until it does)" });
-      await this.ctx.storage.setAlarm(Date.now() + DEVICE_GONE_MS);
+    if (this.meta?.state === "live" && !this.meta.absent_since) {
+      const now = Date.now();
+      this.meta.absent_since = now;
+      if (!this.meta.no_audio_since) Object.assign(this.meta, { no_audio_since: now, no_audio_why: "dropped" });
+      await this.addEntry("event", { text: "relay restarted; screens must reconnect (no audio until they do)" });
+      await this.armTimer();
     }
     return this.meta;
   }
@@ -297,8 +303,24 @@ export class Session {
     return stub.fetch(`https://registry${path}`, { method: "POST", body: JSON.stringify(body) });
   }
 
-  toDevice(msg) {
-    try { this.device?.send(JSON.stringify(msg)); } catch {}
+  ui(ws) { return this.screens.get(ws)?.ui ?? "device"; }
+
+  // Audio plumbing (transcriber restarts, Claude's voice) concerns only the holder.
+  toHolder(msg) {
+    try { this.holder?.send(JSON.stringify(msg)); } catch {}
+  }
+
+  toScreens(msg) {
+    const frame = JSON.stringify(msg);
+    for (const ws of this.screens.keys()) { try { ws.send(frame); } catch {} }
+  }
+
+  // Each screen learns where the audio is, and whether it is itself.
+  sendRoom() {
+    const audio = this.holder ? this.ui(this.holder) : null;
+    for (const ws of this.screens.keys()) {
+      try { ws.send(JSON.stringify({ type: "room", audio, mine: ws === this.holder })); } catch {}
+    }
   }
 
   async addEntry(kind, fields) {
@@ -416,7 +438,7 @@ export class Session {
     const when = s ? `after ${s}s of silence` : "as soon as the transcriber hears him finish";
     if (byLouie) await this.addEntry("event", { text: `Louie set the turn wait to ${s}s: his turns reach you ${when}` });
     else await this.saveMeta();
-    this.toDevice({ type: "settings", hold_ms: this.meta.hold_ms });
+    this.toScreens({ type: "settings", hold_ms: this.meta.hold_ms });
     return { ok: true, hold_s: s };
   }
 
@@ -503,7 +525,7 @@ export class Session {
     this.stt = null;
     clearInterval(this.keepalive);
     await this.flushTurn();
-    if (!this.live() || !this.device) return;
+    if (!this.live() || !this.holder) return;
     const why = conn.error ?? `ws ${code}`;
     // An immediate failure (bad key) would recur on every restart; stop looping.
     if (Date.now() - conn.opened < 5000 && ++this.quickFails >= 3) {
@@ -511,7 +533,7 @@ export class Session {
       return;
     }
     await this.addEntry("event", { text: `transcriber dropped (${why}); restarting the recorder` });
-    this.toDevice({ type: "restart" });       // the page answers with a fresh segment
+    this.toHolder({ type: "restart" });       // the page answers with a fresh segment
   }
 
   // --- audio and archive -----------------------------------------------------
@@ -519,10 +541,10 @@ export class Session {
   // A connected page that stops sending is otherwise silent news: Chrome froze a
   // hidden page with its socket still open and its mic still held.
   checkAudioStall() {
-    if (this.audioStalledAt || !this.device || !this.live() || !this.lastAudioAt) return;
+    if (this.audioStalledAt || !this.holder || !this.live() || !this.lastAudioAt) return;
     if (Date.now() - this.lastAudioAt < AUDIO_STALL_MS) return;
     this.audioStalledAt = this.lastAudioAt;
-    const who = this.meta.ui ?? "device";
+    const who = this.ui(this.holder);
     this.addEntry("event", { text: `${who} stopped sending audio, with its socket still open: nothing is heard until it resumes` }).catch(() => {});
   }
 
@@ -537,7 +559,7 @@ export class Session {
     if (this.audioStalledAt) {
       const s = Math.round((this.lastAudioAt - this.audioStalledAt) / 1000);
       this.audioStalledAt = null;
-      const who = this.meta.ui ?? "device";
+      const who = this.ui(this.holder);
       this.addEntry("event", { text: `${who} audio is back after ${s}s; nothing was heard in between` }).catch(() => {});
     }
     if (this.meta.archive) await this.archive(chunk);
@@ -573,7 +595,7 @@ export class Session {
     this.meta.ended_at = Date.now();
     this.meta.end_reason = reason;
     await this.addEntry("event", { text: `session ended: ${reason}` });
-    this.toDevice({ type: "ended", reason });
+    this.toScreens({ type: "ended", reason });
     for (const ws of this.events) { try { ws.close(1000, "session ended"); } catch {} }
     this.events.clear();
     await this.registry("/put", { id: this.meta.id, state: "ended" });
@@ -588,99 +610,143 @@ export class Session {
       await this.saveMeta();
       await this.registry("/put", { id: this.meta.id, state: "expired" });
       await this.ctx.storage.setAlarm(now + KEEP_MS);
-    } else if (this.live() && !this.device && this.meta.disconnected_at && now >= this.goneDeadline()) {
-      await this.end(this.meta.paused_at ? `paused for ${Math.round(PAUSE_MAX_MS / 60000)} minutes`
-                                         : `the device was gone for ${Math.round(DEVICE_GONE_MS / 60000)} minutes`);
+    } else if (this.live() && this.meta.absent_since && now - this.meta.absent_since >= DEVICE_GONE_MS) {
+      await this.end(`no screen was open for ${Math.round(DEVICE_GONE_MS / 60000)} minutes`);
+    } else if (this.live() && this.meta.no_audio_since && now - this.meta.no_audio_since >= NO_AUDIO_MAX_MS) {
+      await this.end(`no audio for ${Math.round(NO_AUDIO_MAX_MS / 60000)} minutes`);
     } else if ((this.meta.state === "ended" || this.meta.state === "expired") &&
                now - (this.meta.ended_at ?? this.meta.created_at) >= KEEP_MS) {
       await this.ctx.storage.deleteAll();
       this.meta = null;
+    } else if (this.live()) {
+      await this.armTimer();
     }
   }
 
-  // A paused device is away on purpose, so it gets longer than a dropped one.
-  goneDeadline() {
-    return this.meta.paused_at ? this.meta.paused_at + PAUSE_MAX_MS : this.meta.disconnected_at + DEVICE_GONE_MS;
+  // A room with no screen open ends after minutes; one Louie is in without audio
+  // (he left it, or the screen holding it dropped) gets an hour.
+  async armTimer() {
+    const due = [this.meta.absent_since && this.meta.absent_since + DEVICE_GONE_MS,
+                 this.meta.no_audio_since && this.meta.no_audio_since + NO_AUDIO_MAX_MS].filter(Boolean);
+    if (due.length) await this.ctx.storage.setAlarm(Math.min(...due));
   }
 
-  // --- device socket -----------------------------------------------------------
+  // --- screens and the audio holder ----------------------------------------------
+  //
+  // Any number of pages can be in the room: each sees it and controls it. At
+  // most one holds the audio; its mic is what the transcriber hears and
+  // Claude's voice plays on it. Moving the audio ends the old holder's stream.
 
-  async acceptDevice() {
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    server.accept();
-
-    const old = this.device;
-    this.device = server;
-    if (old) { try { old.close(4000, "replaced by a newer connection"); } catch {} }
-
-    if (this.meta.state === "armed") {
-      this.meta.state = "live";
-      this.meta.started_at = Date.now();
-      await this.saveMeta();
-      await this.registry("/put", { id: this.meta.id, state: "live" });
-      await this.addEntry("event", { text: "recording started" });
-    } else if (this.meta.paused_at) {
-      const gone = Math.round((Date.now() - this.meta.paused_at) / 1000);
-      await this.addEntry("event", { text: `Louie resumed after ${gone}s paused; nothing was heard in between` });
-    } else if (this.meta.disconnected_at) {
-      const gone = Math.round((Date.now() - this.meta.disconnected_at) / 1000);
-      await this.addEntry("event", { text: `device reconnected after ${gone}s; nothing was heard in between` });
+  async setHolder(ws, why) {
+    const old = this.holder;
+    if (old === ws) return;
+    if (old) {
+      this.holder = null;            // nothing more of its audio is taken
+      this.voiceReady = false;
+      if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY[why] ?? why);
+      this.closeTranscriber();
+      await this.flushTurn();
+      try { old.send(JSON.stringify({ type: "release" })); } catch {}
     }
-    this.meta.paused_at = null;
-    this.meta.disconnected_at = null;
-    this.meta.hidden_since = null;
-    this.meta.mic_silent_since = null;
+    this.holder = ws;
     this.mic = null;
     this.audioStalledAt = null;
+    this.lastAudioAt = 0;
+    Object.assign(this.meta, { hidden_since: null, mic_silent_since: null,
+                               no_audio_since: ws ? null : Date.now(), no_audio_why: ws ? null : why,
+                               no_audio_from: old && !ws ? this.ui(old) : null });
     await this.saveMeta();
+    await this.armTimer();
+    this.sendRoom();
+  }
+
+  // A screen asks for the audio, by tapping "This device" or by reconnecting
+  // with the mic it held. Claude is told how long nothing was heard.
+  async takeAudio(ws) {
+    const old = this.holder;
+    const gap = this.meta.no_audio_since ? Math.round((Date.now() - this.meta.no_audio_since) / 1000) : 0;
+    const { no_audio_why: why, no_audio_from: from } = this.meta;
+    const who = this.ui(ws);
+    await this.setHolder(ws, `the audio moved to the ${who}`);
+    let text;
+    if (old) text = `audio moved from the ${this.ui(old)} to the ${who}`;
+    else if (why === "unpicked") text = `recording started on the ${who}`;
+    else if (why === "left") text = `Louie turned audio back on, on the ${who}, after ${gap}s; nothing was heard in between`;
+    else if (from === who) text = `${who} reconnected after ${gap}s; nothing was heard in between`;
+    else text = `audio back on the ${who} after ${gap}s; nothing was heard in between`;
+    await this.addEntry("event", { text });
+  }
+
+  async leaveAudio() {
+    if (!this.holder) return;
+    await this.setHolder(null, "left");
+    await this.addEntry("event", { text: `Louie left audio: nothing is heard${this.talk() ? ", and you can't speak," : ""} until he turns it back on` });
+  }
+
+  async acceptDevice() {
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+    this.screens.set(server, { ui: null });
+    if (this.meta.state === "armed") {
+      Object.assign(this.meta, { state: "live", started_at: Date.now(), no_audio_since: Date.now(),
+                                 no_audio_why: "unpicked" });
+      await this.registry("/put", { id: this.meta.id, state: "live" });
+    }
+    this.meta.absent_since = null;
+    await this.saveMeta();
+    await this.armTimer();
 
     server.addEventListener("message", (m) => {
-      if (this.device !== server) return;
-      if (typeof m.data !== "string") return this.onAudio(m.data);
+      if (!this.screens.has(server)) return;
+      if (typeof m.data !== "string") return server === this.holder ? this.onAudio(m.data) : undefined;
       let msg;
       try { msg = JSON.parse(m.data); } catch { return; }
-      return this.onDeviceMessage(msg);
+      return this.onDeviceMessage(server, msg);
     });
     const gone = async () => {
       try { server.close(1000); } catch {}
-      if (this.device !== server) return;
-      this.device = null;
-      this.voiceReady = false;
-      if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", "the device disconnected");
-      this.closeTranscriber();
-      await this.flushTurn();
+      if (!this.screens.has(server)) return;
+      const who = this.ui(server);
       // The page closes soon after a stop, often before ending is done: not a drop.
-      if (!this.live() || this.stopping) return;
-      this.meta.disconnected_at = Date.now();
-      if (this.meta.paused_at) await this.saveMeta();
-      else await this.addEntry("event", { text: "device disconnected; no audio until it reconnects" });
-      await this.ctx.storage.setAlarm(this.goneDeadline());
+      if (this.live() && !this.stopping && server === this.holder) {
+        await this.setHolder(null, "dropped");        // while it still has a name
+        await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
+      }
+      this.screens.delete(server);
+      if (this.live() && !this.stopping && !this.screens.size) {
+        this.meta.absent_since = Date.now();
+        await this.saveMeta();
+        await this.armTimer();
+      }
     };
     server.addEventListener("close", gone);
     server.addEventListener("error", gone);
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async onDeviceMessage(msg) {
+  // Room controls come from any screen; audio plumbing only from the holder.
+  async onDeviceMessage(ws, msg) {
     if (msg.type === "hello") {
-      this.meta.ui = msg.ui ?? null;
-      if (!this.talk()) return this.saveMeta();
-      // The device's remembered wait seeds a session nobody has set yet, so a
-      // rejoin never undoes what Claude or Louie chose since.
-      const pref = msg.hold_ms == null ? NaN : Number(msg.hold_ms);
-      if (this.meta.hold_ms == null && Number.isFinite(pref) && pref !== this.holdMs()) {
-        const out = await this.setHold(pref, true);
-        if (out.ok) return;
+      this.screens.get(ws).ui = msg.ui ?? null;
+      if (this.talk()) {
+        // The device's remembered wait seeds a session nobody has set yet, so a
+        // rejoin never undoes what Claude or Louie chose since.
+        const pref = msg.hold_ms == null ? NaN : Number(msg.hold_ms);
+        const seeded = this.meta.hold_ms == null && Number.isFinite(pref) && pref !== this.holdMs() &&
+                       (await this.setHold(pref, true)).ok;
+        if (!seeded) { try { ws.send(JSON.stringify({ type: "settings", hold_ms: this.holdMs() })); } catch {} }
       }
-      await this.saveMeta();
-      this.toDevice({ type: "settings", hold_ms: this.holdMs() });
-      return;
+      // A screen that held the mic before a drop takes it back, unless another has it now.
+      if (msg.holding && !this.holder) return this.takeAudio(ws);
+      if (msg.holding) { try { ws.send(JSON.stringify({ type: "release" })); } catch {} }
+      return this.sendRoom();
     }
+    if (msg.type === "take") return this.takeAudio(ws);
+    if (msg.type === "leave") return this.leaveAudio();
     if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
-    if (msg.type === "seg") return this.startSegment();
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
-    if (msg.type === "pause") return this.pause();
+    if (ws !== this.holder) return;
+    if (msg.type === "seg") return this.startSegment();
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
     if (msg.type === "voice_ready") { this.voiceReady = true; return; }
@@ -689,7 +755,7 @@ export class Session {
     // Off screen with the mic still hearing (a locked phone, an app switch) is
     // not news: Claude hears of it only if the mic goes silent (onMic).
     if (msg.type === "vis") {
-      const who = this.meta.ui ?? "device";
+      const who = this.ui(ws);
       if (msg.state === "hidden" && this.meta.hidden_since == null) {
         this.meta.hidden_since = Date.now();
         this.meta.hidden_heard = this.micHears();
@@ -707,7 +773,7 @@ export class Session {
   // The page's own reading of its input: off screen no longer settles it (README: the Chrome flag).
   async onMic(state) {
     this.mic = { state, at: Date.now() };
-    const who = this.meta.ui ?? "device";
+    const who = this.ui(this.holder);
     if (state === "silent" && this.meta.mic_silent_since == null) {
       this.meta.mic_silent_since = Date.now();
       const where = this.meta.hidden_since != null ? " with its page off screen" : "";
@@ -721,14 +787,6 @@ export class Session {
 
   micHears() {
     return this.mic?.state === "live" && Date.now() - this.mic.at < MIC_STALE_MS;
-  }
-
-  // The page closes its socket right after this; the close then counts as a pause, not a drop.
-  async pause() {
-    this.bargeIn("Louie paused the device");
-    await this.flushTurn();
-    this.meta.paused_at = Date.now();
-    await this.addEntry("event", { text: `Louie paused the device: nothing is heard${this.talk() ? ", and you can't speak," : ""} until he resumes` });
   }
 
   // --- echo gate (talk mode) ---------------------------------------------------------
@@ -759,13 +817,14 @@ export class Session {
     const now = Date.now();
     const s = (t) => (t ? Math.round((now - t) / 1000) : null);
     return {
-      connected: !!this.device,
-      ui: this.meta.ui ?? null,
-      paused_s: s(this.meta.paused_at),
+      screens: [...this.screens.values()].map((v) => v.ui ?? "device"),
+      audio: this.holder ? this.ui(this.holder) : null,
+      no_audio_s: s(this.meta.no_audio_since),
+      no_audio_why: this.meta.no_audio_why ?? null,
+      absent_s: s(this.meta.absent_since),
       hidden_s: s(this.meta.hidden_since),
       mic: this.micHears() ? "live" : this.meta.mic_silent_since ? "silent" : "unknown",
       mic_silent_s: s(this.meta.mic_silent_since),
-      disconnected_s: s(this.meta.disconnected_at),
       last_audio_s: s(this.lastAudioAt),
       transcriber: this.stt ? "open" : this.sttOpening ? "opening" : "closed",
     };
@@ -837,8 +896,8 @@ export class Session {
       return json({ ok: false, error: `note is ${text.length} chars; ${NOTE_MAX} at most` }, 400);
     }
     if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
-    const delivered = !!this.device;
-    this.toDevice({ type: "note", text });
+    const delivered = this.screens.size > 0;
+    this.toScreens({ type: "note", text });
     const e = await this.addEntry("note", { text, delivered });
     return json({ ok: true, delivered, n: e.n });
   }
@@ -875,7 +934,7 @@ export class Session {
       this.meta.voice = { adapterId: t.adapterId, sessionId: t.sessionId };
       await this.saveMeta();
       // A page subscribed to the previous publication would hear nothing.
-      if (!forPage) { this.voiceReady = false; this.toDevice({ type: "voice_restart" }); }
+      if (!forPage) { this.voiceReady = false; this.toHolder({ type: "voice_restart" }); }
       return this.meta.voice;
     })();
     try { return await this.voicePending; } finally { this.voicePending = null; }
@@ -910,10 +969,10 @@ export class Session {
         { tracks: [{ location: "remote", sessionId: pub.sessionId, trackName: VOICE_TRACK }] });
       if (out.tracks?.[0]?.errorCode) throw new Error(`subscribe: ${out.tracks[0].errorCode}`);
       this.voiceSub = sessionId;
-      this.toDevice({ type: "voice_offer", sdp: out.sessionDescription });
+      this.toHolder({ type: "voice_offer", sdp: out.sessionDescription });
     } catch (e) {
       await this.addEntry("event", { text: `Claude's voice could not be connected (${e.message}); speak will fail` });
-      this.toDevice({ type: "voice_failed", error: String(e.message).slice(0, 200) });
+      this.toHolder({ type: "voice_failed", error: String(e.message).slice(0, 200) });
     }
   }
 
@@ -941,8 +1000,8 @@ export class Session {
     }
     if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
     if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
-    if (!this.device) {
-      return json({ status: "not_delivered", ...(this.meta.paused_at ? { reason: "Louie paused the device" } : {}),
+    if (!this.holder) {
+      return json({ status: "not_delivered", reason: SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio",
                     spoken: "", unspoken: text });
     }
     if (!this.voiceOut) {
@@ -950,7 +1009,7 @@ export class Session {
       if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
     }
     const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
-    while (!this.voiceReady && this.device && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
+    while (!this.voiceReady && this.holder && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
     if (!this.voiceReady) {
       return json({ status: "not_delivered", reason: "Claude's voice is not connected on the device", spoken: "",
                     unspoken: text });
@@ -990,7 +1049,7 @@ export class Session {
     ws.addEventListener("close", () => { if (this.speaking === sp && !sp.genEnded) this.finishSpeak(sp, "error", "TTS closed early"); });
     ws.send(JSON.stringify({ ...TTS_CONFIG, stream_id: sid }));
     ws.send(JSON.stringify({ stream_id: sid, text, text_end: true }));
-    this.toDevice({ type: "tts_start", sid });
+    this.toHolder({ type: "tts_start", sid });
     sp.span = [this.elapsed(), null];
     this.speechSpans.push(sp.span);
     if (this.speechSpans.length > SPANS_MAX) this.speechSpans.shift();
@@ -1055,7 +1114,7 @@ export class Session {
     const sp = this.speaking;
     if (!sp || sp.stopping) return;
     sp.stopping = reason;
-    this.toDevice({ type: "tts_stop", sid: sp.sid });
+    this.toHolder({ type: "tts_stop", sid: sp.sid });
     this.finishSpeak(sp, "interrupted", reason);
   }
 
@@ -1089,8 +1148,8 @@ export class Session {
     clearInterval(sp.pump);
     if (!sp.genDone) { try { sp.ws.send(JSON.stringify({ stream_id: sp.sid, cancel: true })); } catch {} }
     try { sp.ws.close(1000); } catch {}
-    if (status === "error") this.toDevice({ type: "tts_stop", sid: sp.sid });
-    else if (status === "done") this.toDevice({ type: "tts_done", sid: sp.sid });
+    if (status === "error") this.toHolder({ type: "tts_stop", sid: sp.sid });
+    else if (status === "done") this.toHolder({ type: "tts_done", sid: sp.sid });
     const { spoken, unspoken } = status === "done" ? { spoken: sp.text, unspoken: "" }
       : status === "error" ? { spoken: "", unspoken: sp.text } : this.splitSpoken(sp, played);
     if (spoken) await this.addEntry("said", { text: spoken, interrupted: status !== "done" });

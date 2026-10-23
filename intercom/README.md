@@ -5,7 +5,8 @@ when the session starts. **Listen**: Claude follows a live conversation and
 steers him in chat. **Talk**: Louie and Claude talk hands-free while Claude
 keeps working; Claude speaks through the device with Soniox TTS (`tts-rt-v2`,
 voice Hazel). The relay refuses speech in a listen session, and the device
-shows the mode on its START button, so Louie's tap is the consent.
+shows the mode on the room's button, so Louie's tap on This device is the
+consent.
 
 The device's browser streams mic audio to a Cloudflare Durable Object, which
 relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms) and
@@ -129,7 +130,7 @@ whose socket dies anyway, and pages cached from before the probe.
 **Picture-in-picture keeps the phone's mic across app switches.** Chrome on
 Android silences a background page's mic after ~5s (crbug 445356777) unless
 the page has a picture-in-picture window, here a square canvas tile opened by
-a button: Chrome needs a tap for it, and opening it on START collapsed the
+a button: Chrome needs a tap for it, and opening it as the mic started collapsed the
 page at once. The page reports itself visible while the tile is open, and
 hidden if it is closed while away, which silences the mic again
 (crbug 491996749). Screen lock still stops it. With Wake Lock
@@ -208,7 +209,7 @@ mic word for word. The relay creates a WebSocket adapter that dials `/tts-in`,
 paces Soniox's 48 kHz PCM into it at real time (as stereo, in protobuf
 packets), and the page subscribes to the published track over WebRTC and plays
 it through `<audio>` with a ~500 ms jitter buffer. That connection takes a few
-seconds after START, and audio sent before it is up is simply lost, so `speak`
+seconds after the page takes the audio, and audio sent before it is up is simply lost, so `speak`
 waits (up to 10s) for the page to say it is connected and playing.
 
 **The page's `AudioContext` must open after the mic.** On a Pixel, Chrome
@@ -269,10 +270,17 @@ pre-echo detection: ~120 ms per audio second, same output. Live that is ~20% of
 a core and ~9 mA (~7% of a session's draw), so the worklet runs AEC3 only
 while Claude has been audible in the last 2 s.
 
-**Pause is a deliberate disconnect.** The page tells the relay, then turns
-off the mic, the recorder, Claude's voice and the socket; resuming reconnects
-like a rejoin. The relay logs it as a pause rather than a drop, and gives it an
-hour rather than five minutes before ending the session.
+**A room has screens, and at most one audio holder.** Any number of pages
+can be in a session (a "room"), each with its own socket: they all get notes
+and room state, and any can take the audio, leave it, or stop the room. One
+screen at most holds the audio: only its chunks reach the transcriber, and
+only it gets Claude's voice and the transcriber's restarts. Taking the audio
+tells the old holder to let go; a holder that drops takes the audio back when
+it reconnects, unless another screen has it by then. Joining brings no audio:
+the page offers This device when nothing holds it, and keeps the move behind
+the ⋯ sheet otherwise, so a second screen never grabs the mic by accident.
+Pause is leaving audio: the screen stays, everything audio stops, and the room
+ends after an hour without audio, or five minutes with no screen at all.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

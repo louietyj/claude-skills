@@ -75,7 +75,7 @@ class Base(unittest.TestCase):
 def watch_body(**kw):
     body = {"event": "transcript", "id": "K7QM", "state": "live", "elapsed_s": 75,
             "entries": [], "last": 0, "more": False, "tail": None,
-            "device": {"connected": True, "ui": "watch", "hidden_s": None, "disconnected_s": None,
+            "device": {"screens": ["watch"], "audio": "watch", "hidden_s": None,
                        "last_audio_s": 0, "transcriber": "open"}}
     body.update(kw)
     return body
@@ -154,15 +154,14 @@ class Watch(Base):
         self.assertLess(intercom.WATCH_BUDGET + 20, 120)
 
     def test_phone_off_screen_is_not_mistaken_for_a_quiet_room(self):
-        dev = {"connected": True, "ui": "phone", "hidden_s": 16, "disconnected_s": None,
-               "last_audio_s": 0, "transcriber": "open"}
+        dev = {"screens": ["phone"], "audio": "phone", "hidden_s": 16, "last_audio_s": 0, "transcriber": "open"}
         _, out, _ = self.watch_json(body=watch_body(event="idle", device=dev))
         self.assertIn("OFF SCREEN for 16s", out["device"])
         self.assertIn("mic is off", out["device"])
 
     def test_the_pages_mic_reading_overrides_off_screen(self):
-        dev = {"connected": True, "ui": "phone", "hidden_s": 16, "mic": "live", "mic_silent_s": None,
-               "disconnected_s": None, "last_audio_s": 0, "transcriber": "open"}
+        dev = {"screens": ["phone"], "audio": "phone", "hidden_s": 16, "mic": "live", "mic_silent_s": None,
+               "last_audio_s": 0, "transcriber": "open"}
         self.assertEqual(intercom.describe_device(dev, "live"),
                          "phone streaming, page off screen for 16s but its mic hears")
         silent = dict(dev, mic="silent", mic_silent_s=9)
@@ -170,16 +169,17 @@ class Watch(Base):
                          "phone mic SILENT for 9s with its page off screen: nothing is being heard")
         self.assertIn("mic SILENT for 9s: nothing", intercom.describe_device(dict(silent, hidden_s=None), "live"))
 
-    def test_dead_device_and_silent_stream_are_named(self):
-        gone = {"connected": False, "ui": "watch", "hidden_s": None, "disconnected_s": 40,
-                "last_audio_s": 41, "transcriber": "closed"}
-        self.assertEqual(intercom.describe_device(gone, "live"), "watch DISCONNECTED for 40s: no audio")
-        quiet = {"connected": True, "ui": "watch", "hidden_s": None, "disconnected_s": None,
-                 "last_audio_s": 12, "transcriber": "open"}
+    def test_every_way_of_having_no_audio_is_named(self):
+        none = {"screens": ["watch"], "audio": None, "no_audio_s": 40, "transcriber": "closed"}
+        self.assertIn("holding the audio DISCONNECTED 40s ago",
+                      intercom.describe_device(dict(none, no_audio_why="dropped"), "live"))
+        self.assertIn("LEFT AUDIO 40s ago (in the room on the watch)",
+                      intercom.describe_device(dict(none, no_audio_why="left"), "live"))
+        self.assertIn("hasn't turned audio on", intercom.describe_device(dict(none, no_audio_why="unpicked"), "live"))
+        self.assertIn("NO SCREEN OPEN", intercom.describe_device(dict(none, screens=[]), "live"))
+        self.assertIn("has not opened the room", intercom.describe_device({"screens": []}, "armed"))
+        quiet = {"screens": ["watch"], "audio": "watch", "hidden_s": None, "last_audio_s": 12, "transcriber": "open"}
         self.assertIn("no audio for 12s", intercom.describe_device(quiet, "live"))
-        self.assertIn("has not tapped START", intercom.describe_device({"connected": False}, "armed"))
-        paused = dict(gone, paused_s=30)
-        self.assertIn("PAUSED by Louie 30s ago", intercom.describe_device(paused, "live"))
 
     def test_events_and_notes_render_distinctly_from_speech(self):
         _, out, _ = self.watch_json(body=watch_body(last=3, entries=[
@@ -188,7 +188,7 @@ class Watch(Base):
             {"n": 3, "kind": "turn", "t": 3700, "spk": 0, "text": "Hi."}]))
         self.assertEqual(out["new"], [
             "[00:00 --] recording started",
-            "[00:30 >>] note to device: ask about fees  (NOT delivered: no device connected)",
+            "[00:30 >>] note to device: ask about fees  (NOT delivered: no screen open)",
             "[1:01:40 S0] Hi."])
 
     def test_ended_session_says_to_wrap_up(self):
@@ -245,7 +245,7 @@ class Start(Base):
         self.assertEqual(json.loads(out)["id"], "ACDE")
         self.assertEqual(intercom.read_state("current.json")["id"], "ACDE")
         self.assertEqual(intercom.read_state("cursor-ACDE.json"), {"since": 0})
-        self.assertIn("START ACDE", json.loads(out)["next"])
+        self.assertIn("join ACDE", json.loads(out)["next"])
 
     def test_keyterms_merge_dedupe_and_split_on_commas(self):
         terms = Path(self.tmp.name) / "terms.txt"

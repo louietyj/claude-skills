@@ -126,7 +126,7 @@ def render(e):
     if e["kind"] == "turn":
         return f"[{at} S{e.get('spk', 0)}] {e['text']}"
     if e["kind"] == "note":
-        tail = "" if e.get("delivered", True) else "  (NOT delivered: no device connected)"
+        tail = "" if e.get("delivered", True) else "  (NOT delivered: no screen open)"
         return f"[{at} >>] note to device: {e['text']}{tail}"
     if e["kind"] == "said":
         return f"[{at} <<] said: {e['text']}" + ("  (interrupted)" if e.get("interrupted") else "")
@@ -137,16 +137,23 @@ def describe_device(d, state):
     """Whether audio really reaches the transcriber: a quiet room vs a dead mic."""
     if not d:
         return "unknown"
-    who = d.get("ui") or "device"
     if state in ("ended", "expired"):
         return f"session {state}"
     if state == "armed":
-        return "no device yet: Louie has not tapped START"
-    if not d.get("connected") and d.get("paused_s") is not None:
-        return f"{who} PAUSED by Louie {d['paused_s']}s ago: no audio, no speech, until he resumes"
-    if not d.get("connected"):
-        gone = d.get("disconnected_s")
-        return f"{who} DISCONNECTED" + (f" for {gone}s" if gone is not None else "") + ": no audio"
+        return "no screen yet: Louie has not opened the room"
+    screens = d.get("screens") or []
+    who = d.get("audio")
+    if not who:
+        since = d.get("no_audio_s")
+        ago = f" {since}s ago" if since is not None else ""
+        if not screens:
+            return f"NO SCREEN OPEN and no audio{ago}: nothing is heard, notes don't reach him"
+        why = d.get("no_audio_why")
+        if why == "left":
+            return f"Louie LEFT AUDIO{ago} (in the room on the {', '.join(screens)}): nothing is heard, no speech"
+        if why == "dropped":
+            return f"the screen holding the audio DISCONNECTED{ago}: no audio until it is back"
+        return f"Louie is in the room on the {', '.join(screens)} but hasn't turned audio on"
     if d.get("mic_silent_s") is not None:
         where = " with its page off screen" if d.get("hidden_s") is not None else ""
         return f"{who} mic SILENT for {d['mic_silent_s']}s{where}: nothing is being heard"
@@ -213,8 +220,8 @@ def cmd_start(cfg, args):
     sid = body["id"]
     write_state("current.json", {"id": sid, "label": args.label or "", "mode": args.mode, "at": time.time()})
     write_state(f"cursor-{sid}.json", {"since": 0})
-    tap = (f"Tell Louie: open the intercom bookmark and tap START {sid} (check the id matches; "
-           f"it should say {args.mode.upper()}).")
+    tap = (f"Tell Louie: open the intercom bookmark, join {sid} (check the id matches; it should say "
+           f"{args.mode.upper()}), and tap This device.")
     then = (" Then, if you have a Monitor tool (in any environment), arm it on the command `intercom follow`;"
             " only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
@@ -283,7 +290,7 @@ def cmd_note(cfg, args):
         die(f"note not sent: {status} {error_text(body)}")
     emit({"ok": True, "delivered": body.get("delivered"),
           **({} if body.get("delivered") else
-             {"warning": "no device connected, so nothing vibrated; say it in chat"})})
+             {"warning": "no screen open, so nothing vibrated; say it in chat"})})
 
 
 def speak_timeout(text):
@@ -306,18 +313,16 @@ def cmd_speak(cfg, args):
     if status != 200 or not isinstance(body, dict):
         die(f"not spoken: {status} {error_text(body)}")
     out = dict(body)
-    if body.get("status") == "interrupted" and "paused" in (body.get("reason") or ""):
-        out["hint"] = ("Louie paused mid-sentence and heard only `spoken`. When he resumes, pick up "
-                       "from there if it still matters.")
+    if body.get("status") == "interrupted" and "left audio" in (body.get("reason") or ""):
+        out["hint"] = ("Louie left audio mid-sentence and heard only `spoken`. When he turns it back on, "
+                       "pick up from there if it still matters.")
     elif body.get("status") == "interrupted":
         out["hint"] = ("Louie heard only `spoken`; don't repeat it. What he said arrives as the next "
                        "event (heard_so_far is a preview: don't act on it).")
-    elif body.get("status") == "not_delivered" and "paused" in (body.get("reason") or ""):
-        out["hint"] = "nothing was heard: Louie paused. Say it when he resumes, or in chat if it can't wait"
-    elif body.get("status") == "not_delivered" and body.get("reason"):
-        out["hint"] = "nothing was heard: the device can't play your voice. Tell him in chat"
+    elif body.get("status") == "not_delivered" and "left audio" in (body.get("reason") or ""):
+        out["hint"] = "nothing was heard: Louie left audio. Say it when he's back, or in chat if it can't wait"
     elif body.get("status") == "not_delivered":
-        out["hint"] = "no device connected, so nothing was heard; say it in chat"
+        out["hint"] = "nothing was heard: nothing in the room can play your voice right now. Tell him in chat"
     elif body.get("status") == "not_spoken":
         out["hint"] = ("nothing was played: Louie said something you hadn't read, or is still talking. "
                        "Read his turn, then decide what to say now.")

@@ -421,7 +421,7 @@ function stopRecorder() {
 
 function onMessage(m) {
   if (m.type === "restart") segment();
-  else if (m.type === "note") showNote(m.text);
+  else if (m.type === "note") showNote(m.text, m.age_ms);
   else if (m.type === "ended") finish("Session ended");
   else if (m.type === "tts_start") { claudeTalking = true; if (voiceEl) voiceEl.muted = false; syncReference(); }
   // Muting drops what is still in flight, so the interruption is heard at once.
@@ -797,14 +797,21 @@ function fitNote(n) {
 
 // A steer stays until the next replaces it, dimmed once stale.
 const NOTE_FRESH_MS = 30000;
-function showNote(text) {
-  try { navigator.vibrate && navigator.vibrate([80, 60, 80]); } catch {}
+// `ageMs` marks a note sent before this screen joined: shown quietly, with
+// whatever freshness it has left.
+function showNote(text, ageMs) {
   const n = $("note");
   n.textContent = text;
   fitNote(n);
-  n.classList.remove("flash", "old"); void n.offsetWidth; n.classList.add("flash");
+  n.classList.remove("flash", "old");
   clearTimeout(noteTimer);
-  noteTimer = setTimeout(() => { n.classList.remove("flash"); n.classList.add("old"); }, NOTE_FRESH_MS);
+  const fresh = NOTE_FRESH_MS - (ageMs ?? 0);
+  if (fresh <= 0) return n.classList.add("old");
+  if (ageMs == null) {
+    try { navigator.vibrate && navigator.vibrate([80, 60, 80]); } catch {}
+    void n.offsetWidth; n.classList.add("flash");
+  }
+  noteTimer = setTimeout(() => { n.classList.remove("flash"); n.classList.add("old"); }, fresh);
 }
 
 // Mic, recorder and Claude's voice off: nothing of the room's audio stays on

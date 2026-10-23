@@ -352,6 +352,17 @@ class Room(unittest.TestCase):
         self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone")
         a.close(), b.close()
 
+    def test_a_screen_that_joins_late_gets_the_latest_note_quietly(self):
+        sid = create()
+        a = screen(sid, "phone")
+        http("/note", "POST", {"text": "ask about the fee"}, id=sid)
+        recv_until(a, lambda m: m.get("type") == "note")
+        b = screen(sid, "watch")
+        m = recv_until(b, lambda m: m.get("type") == "note")
+        self.assertEqual(m["text"], "ask about the fee")
+        self.assertGreaterEqual(m["age_ms"], 0)
+        a.close(), b.close()
+
     def test_a_devices_newest_page_replaces_its_old_socket(self):
         sid = create()
         old = screen(sid, "watch", dev="w1", holding=True)
@@ -1076,8 +1087,8 @@ class PhoneLine(unittest.TestCase):
         self.assertEqual(json.loads(base64.b64decode(b["client_state"])), {"id": sid})
         self.assertTrue(b["webhook_url"].endswith("/telnyx"), b["webhook_url"])
         self.assertRegex(b["stream_url"], rf"^ws://.*/phone\?id={sid}&k=\w+$")
-        self.assertEqual((b["stream_track"], b["stream_bidirectional_mode"], b["stream_bidirectional_codec"]),
-                         ("inbound_track", "rtp", "L16"))
+        self.assertEqual((b["stream_track"], b["stream_bidirectional_mode"], b["stream_bidirectional_codec"],
+                          b["stream_bidirectional_sampling_rate"]), ("inbound_track", "rtp", "L16", 16000))
         self.room_call(ws, "ringing")
         self.assertIn("calling his phone (…0123)", call_events(sid))
         # Only the last digits are kept.
@@ -1177,7 +1188,7 @@ class PhoneAudio(unittest.TestCase):
         ccid, s = self.answered(sid)
         recv_until(ws, lambda m: m.get("type") == "release")
         self.assertEqual((s["config"]["audio_format"], s["config"]["sample_rate"], s["config"]["num_channels"]),
-                         ("mulaw", 8000, 1))
+                         ("pcm_s16le", 16000, 1))
         self.assertIn("audio moved from the watch to the line", texts(entries(sid), "event"))
         TELNYX.send_audio(ccid, b"\x7f" * 160)
         ws.send(b"from-the-watch")             # no longer the holder: dropped
@@ -1203,12 +1214,13 @@ class PhoneAudio(unittest.TestCase):
         t0 = time.time()
         status, out = http("/speak", "POST", {"text": "one two three"}, id=sid, timeout=60)
         self.assertEqual((status, out["status"], out["spoken"]), (200, "done", "one two three"), out)
-        self.assertEqual(FAKE.speeches[before]["config"]["sample_rate"], 8000)
+        # Rendered at the rate the stream named in its start, not a fixed one.
+        self.assertEqual(FAKE.speeches[before]["config"]["sample_rate"], 16000)
         sent = TELNYX.calls[ccid]["received"]
         media = [m for m in sent if m["event"] == "media"]
         marks = [m for m in sent if m["event"] == "mark"]
         self.assertTrue(media and len(marks) == len(media), [m["event"] for m in sent][:10])
-        audio_s = sum(len(base64.b64decode(m["media"]["payload"])) for m in media) / 16000
+        audio_s = sum(len(base64.b64decode(m["media"]["payload"])) for m in media) / 32000
         self.assertAlmostEqual(out["audio_s"], audio_s, places=1)
         # Done only once the call has played it all, not when the relay finished sending.
         self.assertGreaterEqual(time.time() - t0, audio_s - 0.3)
@@ -1268,13 +1280,14 @@ class PhoneAudio(unittest.TestCase):
         TELNYX.send_audio(ccid, bytes(range(0x10, 0x10 + 160)))
         time.sleep(0.5)
         seg = http("/status", id=sid)[1]["segs"][-1]
-        self.assertEqual(seg["raw"]["audio_format"], "mulaw")
+        self.assertEqual(seg["raw"]["audio_format"], "pcm_s16le")
         url = f"{BASE}/audio?{urllib.parse.urlencode({'token': CLI, 'id': sid, 'seg': seg['n']})}"
         with urllib.request.urlopen(url, timeout=20) as r:
             self.assertEqual(r.headers["content-type"], "audio/wav")
             data = r.read()
         self.assertEqual((data[:4], data[8:12], int.from_bytes(data[20:22], "little"),
-                          int.from_bytes(data[24:28], "little")), (b"RIFF", b"WAVE", 7, 8000))
+                          int.from_bytes(data[24:28], "little"), int.from_bytes(data[34:36], "little")),
+                         (b"RIFF", b"WAVE", 1, 16000, 16))
         self.assertEqual(data[44:], bytes(range(0x10, 0x10 + 160)))
         before = len(FAKE.batches)
         self.assertEqual(http("/transcript", id=sid, batch=1)[0], 200)

@@ -45,29 +45,39 @@ function mulaw(sample) {
   return ~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0f)) & 0xff;
 }
 
-// The mic, at 8 kHz, in 20 ms frames: what Telnyx would stream from the call.
+// L16 as Telnyx carries it: little-endian.
+function l16(sample) {
+  const s = Math.round(Math.max(-1, Math.min(1, sample)) * 32767);
+  return [s & 0xff, (s >> 8) & 0xff];
+}
+
+// The mic in 20 ms frames, in the stream's format (the fake sends it first):
+// what Telnyx would stream from the call.
 async function openLine(id) {
   const ws = new WebSocket(`${location.origin.replace(/^http/, "ws")}/fake/handset/${encodeURIComponent(id)}`);
   ws.binaryType = "arraybuffer";
+  const fmt = await new Promise((res) => { ws.onmessage = (e) => res(JSON.parse(e.data).media_format); });
+  const rate = fmt.sample_rate, encode = fmt.encoding === "L16" ? l16 : (v) => [mulaw(v)];
+  const frame = (rate / 50) * (fmt.encoding === "L16" ? 2 : 1);
   const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
-  const ctx = new AudioContext({ sampleRate: 8000 });
+  const ctx = new AudioContext({ sampleRate: rate });
   const node = ctx.createScriptProcessor(256, 1, 1);
   let pending = [];
   node.onaudioprocess = (e) => {
-    for (const v of e.inputBuffer.getChannelData(0)) pending.push(mulaw(v));
-    while (pending.length >= 160 && ws.readyState === 1) {
-      ws.send(new Uint8Array(pending.slice(0, 160)));
-      pending = pending.slice(160);
+    for (const v of e.inputBuffer.getChannelData(0)) pending.push(...encode(v));
+    while (pending.length >= frame && ws.readyState === 1) {
+      ws.send(new Uint8Array(pending.slice(0, frame)));
+      pending = pending.slice(frame);
     }
   };
   ctx.createMediaStreamSource(mic).connect(node);
   node.connect(ctx.destination);
-  line = { ws, mic, ctx, out: new AudioContext({ sampleRate: 8000 }), at: 0, playing: [] };
+  line = { ws, mic, ctx, rate, out: new AudioContext({ sampleRate: rate }), at: 0, playing: [] };
   ws.onmessage = (e) => { try { hear(JSON.parse(e.data)); } catch {} };
 }
 
-// What the relay sends the call: L16 (little-endian, as Telnyx takes it) at 8 kHz,
-// back to back; `clear` cuts it off.
+// What the relay sends the call: L16 (little-endian, as Telnyx takes it) at the
+// stream's rate, back to back; `clear` cuts it off.
 function hear(m) {
   const { out } = line;
   if (m.event === "clear") {
@@ -80,7 +90,7 @@ function hear(m) {
   const bytes = Uint8Array.from(atob(m.media.payload), (c) => c.charCodeAt(0));
   const pcm = new Float32Array(bytes.length >> 1);
   for (let i = 0; i < pcm.length; i++) pcm[i] = ((bytes[2 * i + 1] << 24 >> 16) | bytes[2 * i]) / 32768;
-  const buf = out.createBuffer(1, pcm.length, 8000);
+  const buf = out.createBuffer(1, pcm.length, line.rate);
   buf.copyToChannel(pcm, 0);
   const src = out.createBufferSource();
   src.buffer = buf;

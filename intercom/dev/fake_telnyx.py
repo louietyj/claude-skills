@@ -124,18 +124,22 @@ class Fake:
         except aiohttp.ClientError as e:
             call["stream_error"] = str(e)
             return
+        # As the real one did: with bidirectional L16, the stream is L16 too, at the rate asked for.
+        body = call["body"]
+        bidi = body.get("stream_bidirectional_codec")
+        fmt = {"encoding": "L16" if bidi == "L16" else "PCMU",
+               "sample_rate": int(body.get("stream_bidirectional_sampling_rate") or 8000), "channels": 1}
         call.update(stream=ws, stream_id=str(uuid.uuid4()), seq=itertools.count(1), chunk=itertools.count(1),
-                    received=[])
+                    received=[], media_format=fmt)
         await ws.send_str(json.dumps({"event": "connected", "version": "1.0.0"}))
         await ws.send_str(json.dumps({"event": "start", "sequence_number": str(next(call["seq"])),
                                       "start": {"call_control_id": ccid, "call_session_id": call["session"],
                                                 "from": call["body"].get("from"), "to": call["body"].get("to"),
                                                 "client_state": call["body"].get("client_state"),
-                                                "media_format": {"encoding": "PCMU", "sample_rate": 8000,
-                                                                 "channels": 1}},
+                                                "media_format": fmt},
                                       "stream_id": call["stream_id"]}))
 
-        # What the relay sends the call plays at real time (L16, 8 kHz): a mark
+        # What the relay sends the call plays at real time (L16, at the stream's rate): a mark
         # comes back once the audio before it has played, and `clear` drops the
         # queue and returns the marks still waiting at once.
         play = {"until": 0.0, "marks": []}
@@ -154,7 +158,7 @@ class Fake:
                 m = json.loads(msg.data)
                 call["received"].append(m)
                 if m.get("event") == "media":
-                    secs = len(base64.b64decode(m["media"]["payload"])) / 16000
+                    secs = len(base64.b64decode(m["media"]["payload"])) / (fmt["sample_rate"] * 2)
                     play["until"] = max(play["until"], time.time()) + secs
                 elif m.get("event") == "mark":
                     entry = {"mark": m["mark"]}
@@ -214,14 +218,16 @@ class Fake:
                                   for k, v in self.calls.items() if v["state"] != "ended"])
 
     async def handset(self, request):
-        """The page's mic (8 kHz mu-law) in, as the call's audio; what the relay sends the call, out."""
+        """The page's mic in, as the call's audio, in the stream's format (sent first); what the
+        relay sends the call, out."""
         ccid = request.match_info["ccid"]
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         call = self.calls.get(ccid)
-        if call is None:
+        if call is None or "media_format" not in call:
             await ws.close()
             return ws
+        await ws.send_str(json.dumps({"event": "format", "media_format": call["media_format"]}))
         call.setdefault("handsets", []).append(ws)
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.BINARY:

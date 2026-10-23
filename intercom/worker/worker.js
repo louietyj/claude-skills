@@ -93,10 +93,12 @@ const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
-// On a call: Telnyx plays L16 at 8 kHz (16 kHz audio came out at half speed),
-// so Soniox renders at that rate. If no mark comes back, the line is taken to
-// have played its audio this much later.
-const PHONE_TTS_RATE = 8000;
+// On a call, Soniox renders at the rate the stream's `start` names: Telnyx plays
+// L16 at that rate (8 kHz unless asked; 16 kHz audio sent to an 8 kHz stream
+// came out at half speed). The relay asks for 16 kHz, for HD voice where the
+// route to Louie's phone carries it. If no mark comes back, the line is taken
+// to have played its audio this much later.
+const PHONE_RATE = 16000;
 const MARK_GRACE_MS = 2000;
 const VOICE_TRACK = "claude";
 const PUMP_MS = 50;
@@ -780,6 +782,7 @@ export class Session {
         webhook_url: `${origin}/telnyx`, client_state: btoa(JSON.stringify({ id: this.meta.id })),
         stream_url: `${origin.replace(/^http/, "ws")}/phone?id=${this.meta.id}&k=${key}`,
         stream_track: "inbound_track", stream_bidirectional_mode: "rtp", stream_bidirectional_codec: "L16",
+        stream_bidirectional_sampling_rate: PHONE_RATE,
       });
     } catch (e) {
       await this.addEntry("event", { text: `could not call Louie's phone: ${e.message}` });
@@ -919,6 +922,9 @@ export class Session {
                        (await this.setHold(pref, true)).ok;
         if (!seeded) { try { ws.send(JSON.stringify({ type: "settings", hold_ms: this.holdMs() })); } catch {} }
       }
+      // The latest note, without the buzz: it was news when it was sent.
+      const last = this.meta.last_note;
+      if (last) { try { ws.send(JSON.stringify({ type: "note", text: last.text, age_ms: Date.now() - last.at })); } catch {} }
       // A screen that held the mic before a drop takes it back, unless another has it now.
       if (msg.holding && !this.holder) return this.takeAudio(ws);
       if (msg.holding) { try { ws.send(JSON.stringify({ type: "release" })); } catch {} }
@@ -1090,6 +1096,7 @@ export class Session {
     if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
     const delivered = this.screens.size > 0;
     this.toScreens({ type: "note", text });
+    this.meta.last_note = { text, at: Date.now() };     // for screens that join later
     const e = await this.addEntry("note", { text, delivered });
     return json({ ok: true, delivered, n: e.n });
   }
@@ -1235,7 +1242,7 @@ export class Session {
     }
     ws.accept();
     const sid = crypto.randomUUID().slice(0, 8);
-    const rate = onPhone ? PHONE_TTS_RATE : TTS_CONFIG.sample_rate;
+    const rate = onPhone ? this.phoneFormat?.sample_rate ?? 8000 : TTS_CONFIG.sample_rate;
     const sp = this.speaking = {
       sid, ws, text, chars: [], ends: [], queue: [], sentBytes: 0, firstAt: null,
       genEnded: false, genDone: false, stopping: null, guard: null, pump: null, resolve: null,

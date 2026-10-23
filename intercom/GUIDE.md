@@ -415,7 +415,7 @@ wait. The device line says when the phone line holds the audio.
 - `intercom hangup` ends the call (only when he asks).
 - Listen mode works over the call too: one line with everyone on it (a
   speakerphone, or you conferenced into his call). Expect rougher speaker
-  labels: phone audio is 8 kHz.
+  labels: phone audio is narrower than a page's.
 
 ## Watch notes
 

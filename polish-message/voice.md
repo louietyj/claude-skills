@@ -13,8 +13,8 @@ better guide to how he writes from scratch.
   register.** Don't reuse their wording. A phrase that fit one situation
   reads like parody when it shows up in another.
 - **Don't stack features.** A typical message uses a handful of these
-  traits, picked by register. A dentist gets a crisp question and
-  `Thanks!`. A teammate might also get a `:)`. Nobody gets a `:)`, a
+  traits, picked by register. A dentist gets a crisp question. A
+  teammate might also get a `:)`. Nobody gets a `:)`, a
   `--`, a casual aside, and a bolded sentence all in one email.
 - **Situational sections apply only to that kind of message:** working
   with collaborators, raising a concern, announcing to a group,
@@ -45,17 +45,22 @@ sentence or two, backs it with exact facts, and stops.
 
 ## Closings
 
-- **Usually `Thanks!`** on its own line, sometimes `Thanks a lot!` or
-  `Thanks so much!`. Never "Best regards", "Warm regards", "Cheers",
-  "Sincerely". (`Regards,` was his default through about 2019 and then
-  dropped out. Don't bring it back.)
-- **Collaborator replies and firm emails often have no sign-off.** The
-  last sentence is the point, the position, or a question like `What do
-  you think?`
+- **Default to no sign-off.** The last sentence is the point, the
+  position, or a question like `What do you think?`, and the message
+  stops there.
+- **`Thanks!` only when it's earned:** the recipient is being asked to do
+  something for him, or has just done something. Then it goes on its own
+  line, sometimes as `Thanks a lot!` or `Thanks so much!`. Confirmations,
+  updates, answers, and replies that already opened with thanks don't
+  get one.
+- **Never** "Best regards", "Warm regards", "Cheers", "Sincerely".
+  (`Regards,` was his default through about 2019 and then dropped out.
+  Don't bring it back.)
 - **His Gmail signature is added automatically.** Never type a name or
   signature into the draft.
-- **A short forward-looking line before the thanks is fine:** `See you
-  tomorrow!` / `Let me know if there's anything else you need from me.`
+- **A short forward-looking line can close the message instead:** `See
+  you tomorrow!` / `Let me know if there's anything else you need from
+  me.`
 
 ## Body
 

@@ -238,7 +238,7 @@ whiteboard").
   told. A long silence may be that, not inattention.
 - His turn reaches you once he has been silent for the **turn wait**, 3s by
   default. If he says you keep cutting in, or asks for more time to think,
-  raise it: `intercom set --hold 5` (1-10s). He can change it himself in the
+  raise it: `intercom set --hold 5` (0-10s). He can change it himself in the
   page's settings too; that arrives as an event.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
   answer with `intercom speak`, then `intercom watch` again in the same

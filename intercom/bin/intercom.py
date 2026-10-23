@@ -27,7 +27,7 @@ WATCH_INTERVAL = 10
 NOTE_MAX = 120
 SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a technical limit
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
-HOLD_RANGE = "1-10"       # the relay's bounds on the turn wait
+HOLD_RANGE = "0-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
 NOT_NEWS = {"note", "said"}   # as the relay's: Claude's own doings, which wake nobody
 

@@ -69,7 +69,7 @@ const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
 // open until this much silence follows: Claude takes seconds to answer anyway.
 // Louie (the page's settings) or Claude (`intercom set`) can change it per session.
 const TALK_HOLD_MS = 3000;
-const HOLD_MIN_MS = 1000;
+const HOLD_MIN_MS = 0;         // Soniox's end of utterance alone
 const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
@@ -378,7 +378,7 @@ export class Session {
         continue;
       }
       if (tok.text === "<end>") {
-        if (this.talk() && this.cur) { this.cur.gap = true; this.holdTurn(); }
+        if (this.talk() && this.cur && this.holdMs() > 0) { this.cur.gap = true; this.holdTurn(); }
         else await this.flushTurn();
         continue;
       }
@@ -413,7 +413,8 @@ export class Session {
     }
     this.meta.hold_ms = Math.round(ms);
     const s = this.meta.hold_ms / 1000;
-    if (byLouie) await this.addEntry("event", { text: `Louie set the turn wait to ${s}s: his turns reach you after ${s}s of silence` });
+    const when = s ? `after ${s}s of silence` : "as soon as the transcriber hears him finish";
+    if (byLouie) await this.addEntry("event", { text: `Louie set the turn wait to ${s}s: his turns reach you ${when}` });
     else await this.saveMeta();
     this.toDevice({ type: "settings", hold_ms: this.meta.hold_ms });
     return { ok: true, hold_s: s };
@@ -667,8 +668,8 @@ export class Session {
       if (!this.talk()) return this.saveMeta();
       // The device's remembered wait seeds a session nobody has set yet, so a
       // rejoin never undoes what Claude or Louie chose since.
-      const pref = Number(msg.hold_ms);
-      if (this.meta.hold_ms == null && pref && pref !== this.holdMs()) {
+      const pref = msg.hold_ms == null ? NaN : Number(msg.hold_ms);
+      if (this.meta.hold_ms == null && Number.isFinite(pref) && pref !== this.holdMs()) {
         const out = await this.setHold(pref, true);
         if (out.ok) return;
       }

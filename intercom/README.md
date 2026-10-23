@@ -193,7 +193,8 @@ with no new words. An earlier merge window keyed off Soniox's punctuation, a
 guess stacked on a guess; this one keys off silence alone. Claude answers in
 seconds anyway, and whole thoughts matter more than quick turn-taking.
 
-The wait is per session, 1-10 s: Louie sets it in the page's settings (⋯),
+The wait is per session, 0-10 s (0: Soniox's end of utterance alone): Louie
+sets it in half seconds in the page's settings (⋯),
 Claude with `intercom set --hold` or `start --hold`. Soniox's endpointing
 stays fixed: it is set when its stream opens. The page remembers Louie's last
 pick and offers it when a session starts, but never over a value set since,

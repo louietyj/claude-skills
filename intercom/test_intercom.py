@@ -285,10 +285,10 @@ class Talk(Base):
         self.assertEqual((code, relay.calls[-1]["body"], json.loads(out)["hold_s"]), (0, {"hold_s": 5}, 5))
 
     def test_refused_turn_wait_shows_the_relays_reason(self):
-        relay = Relay({"/set": (400, {"ok": False, "error": "the turn wait must be 1-10s"})})
+        relay = Relay({"/set": (400, {"ok": False, "error": "the turn wait must be 0-10s"})})
         code, _, err = self.run_cli(["set", "--hold", "30"], relay)
         self.assertEqual(code, 1)
-        self.assertIn("1-10s", err)
+        self.assertIn("0-10s", err)
 
     def test_long_speech_is_refused_with_how_to_split_it(self):
         relay = Relay({})

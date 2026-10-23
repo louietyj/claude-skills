@@ -862,7 +862,7 @@ class TalkTurns(unittest.TestCase):
 class TurnWait(unittest.TestCase):
     def talk_device(self, sid, hold_ms=None):
         ws = connect(f"{BASE.replace('http', 'ws')}/device?k={DEV}&id={sid}", open_timeout=10)
-        ws.send(json.dumps({"type": "hello", "ui": "phone", **({"hold_ms": hold_ms} if hold_ms else {})}))
+        ws.send(json.dumps({"type": "hello", "ui": "phone", **({"hold_ms": hold_ms} if hold_ms is not None else {})}))
         return ws
 
     def settings(self, ws):
@@ -905,9 +905,23 @@ class TurnWait(unittest.TestCase):
         self.assertEqual(http("/status", id=out["id"])[1]["hold_s"], 2)
         self.assertEqual(http("/session", "POST", {"mode": "listen", "hold_s": 2})[0], 400)
         self.assertEqual(http("/session", "POST", {"mode": "talk", "hold_s": 30})[0], 400)
-        self.assertEqual(http("/set", "POST", {"hold_s": 0.2}, id=out["id"])[0], 400)
+        self.assertEqual(http("/set", "POST", {"hold_s": -1}, id=out["id"])[0], 400)
         sid = create()
         self.assertEqual(http("/set", "POST", {"hold_s": 4}, id=sid)[0], 400)
+
+    def test_no_wait_delivers_on_the_end_marker_and_a_zero_preference_counts(self):
+        sid, _ = create_talk()
+        ws = self.talk_device(sid, hold_ms=0)
+        self.assertEqual(self.settings(ws), 0)
+        n = stream_count()
+        global SEG_T0
+        SEG_T0 = time.time()
+        ws.send(json.dumps({"type": "seg"}))
+        wait_streams(n + 1)
+        script(ws, emit=[tokens_now(["Quick", "one."], end=True)])
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=0.8)
+        self.assertEqual(texts(es, "turn"), ["Quick one."])
+        ws.close()
 
     def test_a_longer_wait_holds_the_turn_longer(self):
         sid, _, ws = live_talk(with_transcriber=True)

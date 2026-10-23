@@ -293,7 +293,7 @@ function connect() {
   sock.onopen = () => {
     backoff = 1000; failures = 0;
     status("");
-    send({ type: "hello", ui: UI, ...(talk && holdPref ? { hold_ms: holdPref } : {}) });
+    send({ type: "hello", ui: UI, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
     reportVis();
     segment();
     if (talk) startVoice();
@@ -364,9 +364,12 @@ function onMessage(m) {
 // device remembers only what Louie last picked, to seed sessions that start here.
 
 const HOLD_KEY = "intercom-hold";
-const HOLD_STEPS = [1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000];
+const HOLD_STEPS = Array.from({ length: 21 }, (_, i) => i * 500);   // 0-10 s
 let holdMs = null, holdPref = null;
-try { holdPref = Number(localStorage.getItem(HOLD_KEY)) || null; } catch {}
+try {
+  const v = localStorage.getItem(HOLD_KEY);
+  if (v !== null && HOLD_STEPS.includes(Number(v))) holdPref = Number(v);
+} catch {}
 
 function renderSheet() {
   $("holdrow").classList.toggle("hide", !talk);

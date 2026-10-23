@@ -1178,8 +1178,37 @@ class PhoneAudio(unittest.TestCase):
                                                                 end=True)]}).encode())
         es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=6)
         self.assertEqual(texts(es, "turn"), ["Call me back."])
-        out = http("/speak", "POST", {"text": "Sure."}, id=sid)[1]
-        self.assertEqual(out["status"], "not_delivered")
+
+    def test_claude_speaks_on_the_call_and_knows_from_marks_when_it_has_played(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        before = len(FAKE.speeches)
+        t0 = time.time()
+        status, out = http("/speak", "POST", {"text": "one two three"}, id=sid, timeout=60)
+        self.assertEqual((status, out["status"], out["spoken"]), (200, "done", "one two three"), out)
+        self.assertEqual(FAKE.speeches[before]["config"]["sample_rate"], 16000)
+        sent = TELNYX.calls[ccid]["received"]
+        media = [m for m in sent if m["event"] == "media"]
+        marks = [m for m in sent if m["event"] == "mark"]
+        self.assertTrue(media and len(marks) == len(media), [m["event"] for m in sent][:10])
+        audio_s = sum(len(base64.b64decode(m["media"]["payload"])) for m in media) / 32000
+        self.assertAlmostEqual(out["audio_s"], audio_s, places=1)
+        # Done only once the call has played it all, not when the relay finished sending.
+        self.assertGreaterEqual(time.time() - t0, audio_s - 0.3)
+
+    def test_talking_over_claude_on_the_call_clears_what_was_queued(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        th, got = speak_in_background(sid, "one two three four five six")
+        end = time.time() + 10
+        while time.time() < end and not any(m["event"] == "media" for m in TELNYX.calls[ccid]["received"]):
+            time.sleep(0.05)
+        time.sleep(0.8)
+        TELNYX.send_audio(ccid, json.dumps({"emit": [FAKE.tokens([("wait", 0), ("stop", 0)], final=False)]}).encode())
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "interrupted", got)
+        self.assertIn("clear", [m["event"] for m in TELNYX.calls[ccid]["received"]])
+        self.assertTrue(got["out"]["unspoken"], got["out"])
 
     def test_a_screen_taking_the_audio_hangs_up_the_call(self):
         sid = create()

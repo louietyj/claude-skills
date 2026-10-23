@@ -92,11 +92,13 @@ const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
-const TTS_BYTES_PER_S = 96000;
+// On a call: Telnyx takes L16 at 16 kHz, so Soniox renders at that rate. If no
+// mark comes back, the line is taken to have played its audio this much later.
+const PHONE_TTS_RATE = 16000;
+const MARK_GRACE_MS = 2000;
 const VOICE_TRACK = "claude";
 const PUMP_MS = 50;
 const VOICE_LEAD_S = 0.2;
-const VOICE_CHUNK_BYTES = 9600;          // 100 ms mono; doubled to stereo it stays under the 32 KB packet cap
 // SFU forwarding plus the page's ~500 ms jitter buffer: how far the ear trails the relay.
 const VOICE_PLAYOUT_MS = 700;
 // The page's WebRTC connection takes a few seconds after START; audio fed before it is up is lost.
@@ -830,6 +832,8 @@ export class Session {
       await this.startSegment(this.phoneFormat);
     } else if (m.event === "media" && ws === this.holder && (m.media?.track ?? "inbound") === "inbound") {
       await this.onAudio(Uint8Array.from(atob(m.media.payload ?? ""), (c) => c.charCodeAt(0)));
+    } else if (m.event === "mark") {
+      this.onMark(m.mark?.name);
     } else if (m.event === "stop") {
       if (ws === this.holder) await this.setHolder(null, "call ended");
       try { ws.close(1000); } catch {}
@@ -1162,19 +1166,19 @@ export class Session {
       return json({ status: "not_delivered", reason: SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio",
                     spoken: "", unspoken: text });
     }
-    if (this.holder === this.phone) {
-      return json({ status: "not_delivered", reason: "Claude's voice does not reach the phone line yet",
-                    spoken: "", unspoken: text });
-    }
-    if (!this.voiceOut) {
-      try { await this.ensureVoice(); } catch (e) { return json({ status: "error", error: e.message }, 502); }
-      if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
-    }
-    const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
-    while (!this.voiceReady && this.holder && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
-    if (!this.voiceReady) {
-      return json({ status: "not_delivered", reason: "Claude's voice is not connected on the device", spoken: "",
-                    unspoken: text });
+    // A call plays whatever reaches it; a page needs its voice track up first.
+    const onPhone = this.holder === this.phone;
+    if (!onPhone) {
+      if (!this.voiceOut) {
+        try { await this.ensureVoice(); } catch (e) { return json({ status: "error", error: e.message }, 502); }
+        if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
+      }
+      const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
+      while (!this.voiceReady && this.holder && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
+      if (!this.voiceReady) {
+        return json({ status: "not_delivered", reason: "Claude's voice is not connected on the device", spoken: "",
+                      unspoken: text });
+      }
     }
 
     // Claude says which entry it last read; a turn after that means it would be
@@ -1201,15 +1205,19 @@ export class Session {
     }
     ws.accept();
     const sid = crypto.randomUUID().slice(0, 8);
+    const rate = onPhone ? PHONE_TTS_RATE : TTS_CONFIG.sample_rate;
     const sp = this.speaking = {
       sid, ws, text, chars: [], ends: [], queue: [], sentBytes: 0, firstAt: null,
       genEnded: false, genDone: false, stopping: null, guard: null, pump: null, resolve: null,
       bargeIn: body?.barge_in !== false,
+      // A call reports, by marks, how much of the audio has played. Chunks are
+      // 100 ms: at 48 kHz, doubled to stereo, under the SFU's 32 KB packet cap.
+      phone: onPhone ? this.phone : null, markedBytes: 0, bps: rate * 2, chunk: rate * 2 / 10,
     };
     const done = new Promise((r) => { sp.resolve = r; });
     ws.addEventListener("message", (m) => this.onTts(sp, m.data));
     ws.addEventListener("close", () => { if (this.speaking === sp && !sp.genEnded) this.finishSpeak(sp, "error", "TTS closed early"); });
-    ws.send(JSON.stringify({ ...TTS_CONFIG, stream_id: sid }));
+    ws.send(JSON.stringify({ ...TTS_CONFIG, sample_rate: rate, stream_id: sid }));
     ws.send(JSON.stringify({ stream_id: sid, text, text_end: true }));
     this.toHolder({ type: "tts_start", sid });
     sp.span = [this.elapsed(), null];
@@ -1238,46 +1246,75 @@ export class Session {
     }
   }
 
-  // Keeps the voice track VOICE_LEAD_S ahead of real time and no further, so a
-  // barge-in has little queued in the SFU to talk over.
+  // Keeps the voice VOICE_LEAD_S ahead of real time and no further, so a
+  // barge-in has little queued in the SFU (or the call) to talk over.
   pumpVoice(sp) {
     if (this.speaking !== sp || sp.stopping) return;
     const now = Date.now();
-    const sentS = () => sp.sentBytes / TTS_BYTES_PER_S;
+    const sentS = () => sp.sentBytes / sp.bps;
     while (sp.queue.length && (sp.firstAt == null || sentS() < (now - sp.firstAt) / 1000 + VOICE_LEAD_S)) {
       let chunk = sp.queue[0];
-      if (chunk.length > VOICE_CHUNK_BYTES) {
-        sp.queue[0] = chunk.subarray(VOICE_CHUNK_BYTES);
-        chunk = chunk.subarray(0, VOICE_CHUNK_BYTES);
+      if (chunk.length > sp.chunk) {
+        sp.queue[0] = chunk.subarray(sp.chunk);
+        chunk = chunk.subarray(0, sp.chunk);
       } else {
         sp.queue.shift();
       }
       if (chunk.length % 2) chunk = chunk.subarray(0, chunk.length - 1);   // a split sample: not worth carrying
-      try { this.voiceOut?.send(voicePacket(chunk)); } catch {}
       sp.firstAt ??= now;
       sp.sentBytes += chunk.length;
+      if (sp.phone) this.toCall(sp, chunk);
+      else { try { this.voiceOut?.send(voicePacket(chunk)); } catch {} }
     }
     if (sp.genEnded && !sp.queue.length && sp.firstAt != null) {
-      const endsAt = sp.firstAt + sentS() * 1000 + this.playoutDelayMs();
-      if (now >= endsAt) this.finishSpeak(sp, "done");
+      const endsAt = sp.firstAt + sentS() * 1000 + this.playoutDelayMs() + (sp.phone ? MARK_GRACE_MS : 0);
+      if ((sp.phone && sp.markedBytes >= sp.sentBytes) || now >= endsAt) this.finishSpeak(sp, "done");
     }
+  }
+
+  // Each chunk, as L16 (network order), is followed by a mark naming how far
+  // the audio reaches; Telnyx returns the mark once that much has played.
+  toCall(sp, chunk) {
+    const be = new Uint8Array(chunk.length);
+    for (let i = 0; i < chunk.length; i += 2) { be[i] = chunk[i + 1]; be[i + 1] = chunk[i]; }
+    let bin = "";
+    for (let i = 0; i < be.length; i += 0x8000) bin += String.fromCharCode(...be.subarray(i, i + 0x8000));
+    try {
+      sp.phone.send(JSON.stringify({ event: "media", media: { payload: btoa(bin) } }));
+      sp.phone.send(JSON.stringify({ event: "mark", mark: { name: `${sp.sid}:${sp.sentBytes}` } }));
+    } catch {}
+  }
+
+  // Marks returned after a `clear` were never played, so they count only until then.
+  onMark(name) {
+    const sp = this.speaking;
+    const [sid, bytes] = String(name ?? "").split(":");
+    if (!sp?.phone || sp.stopping || sid !== sp.sid) return;
+    sp.markedBytes = Math.max(sp.markedBytes, Number(bytes) || 0);
   }
 
   playoutDelayMs() { return Number(this.env.VOICE_PLAYOUT_MS ?? VOICE_PLAYOUT_MS); }
 
   played(sp) {
+    if (sp.phone) return sp.markedBytes / sp.bps;
     if (sp.firstAt == null) return 0;
     const s = (Date.now() - sp.firstAt - this.playoutDelayMs()) / 1000;
-    return Math.max(0, Math.min(s, sp.sentBytes / TTS_BYTES_PER_S));
+    return Math.max(0, Math.min(s, sp.sentBytes / sp.bps));
   }
 
-  // The page mutes at once; what is still in the SFU and the jitter buffer goes unheard.
+  // The page mutes at once, and a call drops its queue; what was still in
+  // flight goes unheard.
   bargeIn(reason) {
     const sp = this.speaking;
     if (!sp || sp.stopping) return;
     sp.stopping = reason;
-    this.toHolder({ type: "tts_stop", sid: sp.sid });
+    this.stopVoice(sp);
     this.finishSpeak(sp, "interrupted", reason);
+  }
+
+  stopVoice(sp) {
+    if (sp.phone) { try { sp.phone.send(JSON.stringify({ event: "clear" })); } catch {} }
+    else this.toHolder({ type: "tts_stop", sid: sp.sid });
   }
 
   // Timestamps cover the original text, so the k-th timed word is the k-th
@@ -1310,7 +1347,7 @@ export class Session {
     clearInterval(sp.pump);
     if (!sp.genDone) { try { sp.ws.send(JSON.stringify({ stream_id: sp.sid, cancel: true })); } catch {} }
     try { sp.ws.close(1000); } catch {}
-    if (status === "error") this.toHolder({ type: "tts_stop", sid: sp.sid });
+    if (status === "error") this.stopVoice(sp);
     else if (status === "done") this.toHolder({ type: "tts_done", sid: sp.sid });
     const { spoken, unspoken } = status === "done" ? { spoken: sp.text, unspoken: "" }
       : status === "error" ? { spoken: "", unspoken: sp.text } : this.splitSpoken(sp, played);
@@ -1319,7 +1356,7 @@ export class Session {
       status, spoken, unspoken,
       ...(reason ? { reason } : {}),
       ...(status === "interrupted" ? { heard_so_far: this.tail()?.text ?? "" } : {}),
-      audio_s: Math.round((sp.sentBytes / TTS_BYTES_PER_S) * 10) / 10,
+      audio_s: Math.round((sp.sentBytes / sp.bps) * 10) / 10,
     });
   }
 

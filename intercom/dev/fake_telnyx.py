@@ -135,12 +135,37 @@ class Fake:
                                                                  "channels": 1}},
                                       "stream_id": call["stream_id"]}))
 
+        # What the relay sends the call plays at real time (L16, 16 kHz): a mark
+        # comes back once the audio before it has played, and `clear` drops the
+        # queue and returns the marks still waiting at once.
+        play = {"until": 0.0, "marks": []}
+
+        async def give_back(m, at):
+            await asyncio.sleep(max(0.0, at - time.time()))
+            if m in play["marks"]:
+                play["marks"].remove(m)
+                await ws.send_str(json.dumps({"event": "mark", "stream_id": call["stream_id"],
+                                              "sequence_number": str(next(call["seq"])), "mark": m["mark"]}))
+
         async def drain():
             async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    call["received"].append(json.loads(msg.data))
-                    for h in list(call.get("handsets", [])):
-                        await h.send_str(msg.data)
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                m = json.loads(msg.data)
+                call["received"].append(m)
+                if m.get("event") == "media":
+                    secs = len(base64.b64decode(m["media"]["payload"])) / 32000
+                    play["until"] = max(play["until"], time.time()) + secs
+                elif m.get("event") == "mark":
+                    entry = {"mark": m["mark"]}
+                    play["marks"].append(entry)
+                    asyncio.ensure_future(give_back(entry, play["until"]))
+                elif m.get("event") == "clear":
+                    play["until"] = 0.0
+                    for entry in list(play["marks"]):
+                        await give_back(entry, 0)
+                for h in list(call.get("handsets", [])):
+                    await h.send_str(msg.data)
         asyncio.ensure_future(drain())
 
     async def _send_media(self, ccid, data):

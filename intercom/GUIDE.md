@@ -372,6 +372,9 @@ exact text in chat, saying out loud that it's there.
 | `NO SCREEN OPEN` | no page is in the room: notes don't reach him | tell him in chat if it matters |
 | `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
 | `has not opened the room` | session armed, nobody joined | remind him of the id |
+| `calling Louie's phone ... ringing` | the call is ringing | nothing; an event says if it connects or goes unanswered |
+| `on the phone line` | the call holds the audio | nothing |
+| `PHONE LINE ENDED` | the call hung up or dropped; the room has no audio | nothing, unless he asks you to call back |
 
 Louie's phone runs Chrome with a flag that keeps the mic on through screen lock
 and app switches (README, "A Chrome feature flag keeps the phone's mic"), so he
@@ -385,6 +388,31 @@ picture-in-picture button (in the settings behind the ⋯ beside the session
 id): it keeps the mic across app switches, not screen lock. Before you
 operate his phone in talk mode without the flag, tap it yourself (⋯, then
 "Picture in picture"; a tap from the phone tools counts), or ask him to.
+
+## The phone line
+
+When mobile data is bad (some of Louie's routes, parts of his apartment, even
+at full bars), a room's audio can come from an ordinary phone call instead:
+the relay has Telnyx ring his cell, and the call carries his voice to you and
+yours to him. Nothing else changes for you: the same turns, `speak` and turn
+wait. The device line says when the phone line holds the audio.
+
+- **He can start it** from a screen (Call me, with the number that device
+  keeps).
+- **You start it** when he asks, or when the screen holding the audio keeps
+  dropping and he wants the line:
+  `intercom call --to <his number>`. His number is in memory, never in the
+  skill. It works even before any screen has opened the room, which is the
+  point when data is dead: tell him the room id only if he wants a screen too.
+- It rings for 20 s, so voicemail never picks up. An unanswered call is an
+  event; don't redial on your own, ask first.
+- **Hang-ups are final.** When the call ends (he hung up, it dropped, or a
+  screen took the audio back), the room stays, with no audio. Nothing redials:
+  call again only if he asks, or say in chat that you can.
+- `intercom hangup` ends the call (only when he asks).
+- Listen mode works over the call too: one line with everyone on it (a
+  speakerphone, or you conferenced into his call). Expect rougher speaker
+  labels: phone audio is 8 kHz.
 
 ## Watch notes
 

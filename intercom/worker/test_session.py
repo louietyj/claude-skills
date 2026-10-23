@@ -1245,6 +1245,24 @@ class PhoneAudio(unittest.TestCase):
         self.assertEqual((dev["audio"], dev["no_audio_why"]), (None, "call ended"))
         ws.close()
 
+    def test_an_archived_call_is_kept_as_wav_and_batched_as_wav(self):
+        sid = create(archive=True)
+        ccid, _ = self.answered(sid)
+        TELNYX.send_audio(ccid, bytes(range(0x10, 0x10 + 160)))
+        time.sleep(0.5)
+        seg = http("/status", id=sid)[1]["segs"][-1]
+        self.assertEqual(seg["raw"]["audio_format"], "mulaw")
+        url = f"{BASE}/audio?{urllib.parse.urlencode({'token': CLI, 'id': sid, 'seg': seg['n']})}"
+        with urllib.request.urlopen(url, timeout=20) as r:
+            self.assertEqual(r.headers["content-type"], "audio/wav")
+            data = r.read()
+        self.assertEqual((data[:4], data[8:12], int.from_bytes(data[20:22], "little"),
+                          int.from_bytes(data[24:28], "little")), (b"RIFF", b"WAVE", 7, 8000))
+        self.assertEqual(data[44:], bytes(range(0x10, 0x10 + 160)))
+        before = len(FAKE.batches)
+        self.assertEqual(http("/transcript", id=sid, batch=1)[0], 200)
+        self.assertTrue(FAKE.batches[before]["body"].startswith(b"RIFF"))
+
     def test_the_stream_needs_the_calls_key_and_telnyxs_signature(self):
         sid = create()
         http("/call", "POST", {"to": LOUIE}, id=sid)

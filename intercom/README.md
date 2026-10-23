@@ -57,6 +57,21 @@ npx wrangler secret put SONIOX_API_KEY
 npx wrangler secret put DEEPGRAM_API_KEY   # only for `transcript --batch`
 ```
 
+The phone line (optional) needs a Telnyx account: a Call Control application
+whose webhook is `<worker>/telnyx`, a number assigned to it, and an outbound
+voice profile with tight limits. Then:
+
+```bash
+npx wrangler secret put TELNYX_API_KEY
+npx wrangler secret put TELNYX_PUBLIC_KEY       # the account's webhook-signing key
+npx wrangler secret put TELNYX_CONNECTION_ID    # the Call Control application's id
+npx wrangler secret put TELNYX_FROM             # the Telnyx number, E.164
+```
+
+No number to call is configured anywhere: `intercom call --to` and the page
+pass one each time (the repo is public). `intercom health` says whether the
+phone line is set up.
+
 `config.json` (gitignored; see `config.example.json`) holds `worker_url`,
 `cli_token` and `device_token`. Then `python bin/intercom.py health`.
 
@@ -282,6 +297,22 @@ the page offers This device when nothing holds it, and keeps the move behind
 the ⋯ sheet otherwise, so a second screen never grabs the mic by accident.
 Pause is leaving audio: the screen stays, everything audio stops, and the room
 ends after an hour without audio, or five minutes with no screen at all.
+
+**The phone line is just another audio holder.** Mobile data drops on some
+of Louie's routes even at full bars, where a voice call (VoLTE has a reserved
+bearer, then falls back to the old voice network) holds up. So the relay can
+have Telnyx call him: `/v2/calls` with a 20 s ring (shorter than voicemail
+takes to answer), a webhook back to `/telnyx`, and a media stream back to
+`/phone`. Both are checked against Telnyx's Ed25519 signature; the stream also
+carries a per-call key. Once the stream starts, the call holds the audio like
+a screen would: its 8 kHz mu-law goes to Soniox raw, and Claude's voice goes
+back as L16 at 16 kHz, paced at real time, each chunk followed by a mark. Telnyx
+returns marks as the audio plays, so the relay knows exactly what Louie heard,
+and barge-in is `clear` (marks it flushes back don't count). The handset
+cancels echo itself, so the page's echo gate doesn't apply. A screen taking
+the audio, or leaving it, hangs up; nothing redials, since a drop and a hang-up
+can't reliably be told apart. A call counts as presence, so it can open a room
+no screen has, and keep it. Only the number's last four digits are stored.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

@@ -168,6 +168,25 @@ function concat(parts) {
   return out;
 }
 
+// A phone segment's raw audio as a WAV file, which wants little-endian PCM.
+const WAV_FORMATS = { mulaw: [7, 8], alaw: [6, 8], pcm_s16be: [1, 16] };
+function wav(raw, data) {
+  const [tag, bits] = WAV_FORMATS[raw.audio_format];
+  if (bits === 16) {
+    data = data.slice();
+    for (let i = 0; i + 1 < data.length; i += 2) [data[i], data[i + 1]] = [data[i + 1], data[i]];
+  }
+  const head = new DataView(new ArrayBuffer(44));
+  const ascii = (at, s) => [...s].forEach((c, i) => head.setUint8(at + i, c.charCodeAt(0)));
+  const ch = raw.num_channels ?? 1, rate = raw.sample_rate;
+  ascii(0, "RIFF"); head.setUint32(4, 36 + data.length, true); ascii(8, "WAVE");
+  ascii(12, "fmt "); head.setUint32(16, 16, true); head.setUint16(20, tag, true); head.setUint16(22, ch, true);
+  head.setUint32(24, rate, true); head.setUint32(28, rate * ch * bits / 8, true);
+  head.setUint16(32, ch * bits / 8, true); head.setUint16(34, bits, true);
+  ascii(36, "data"); head.setUint32(40, data.length, true);
+  return concat([new Uint8Array(head.buffer), data]);
+}
+
 function mmss(sec) {
   const s = Math.max(0, Math.floor(sec));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
@@ -1374,8 +1393,8 @@ export class Session {
       if (!parts.length) continue;
       const resp = await fetch(deepgramUrl(this.env.DEEPGRAM_URL, BATCH_PARAMS, this.meta.keyterms), {
         method: "POST",
-        headers: { Authorization: `Token ${this.env.DEEPGRAM_API_KEY}`, "content-type": "audio/webm" },
-        body: concat(parts),
+        headers: { Authorization: `Token ${this.env.DEEPGRAM_API_KEY}`, "content-type": seg.raw ? "audio/wav" : "audio/webm" },
+        body: seg.raw ? wav(seg.raw, concat(parts)) : concat(parts),
       });
       if (!resp.ok) {
         return json({ error: `Deepgram batch returned ${resp.status}: ${(await resp.text()).slice(0, 300)}`, segment: seg.n }, 502);
@@ -1493,7 +1512,9 @@ export class Session {
         const deleted = !!(await this.ctx.storage.get("batch"));
         return json({ error: deleted ? "audio already deleted by the batch pass" : `no audio for segment ${seg}` }, 404);
       }
-      return new Response(concat(parts), { headers: { "content-type": "audio/webm" } });
+      const raw = this.meta.segs.find((s) => s.n === seg)?.raw;
+      return raw ? new Response(wav(raw, concat(parts)), { headers: { "content-type": "audio/wav" } })
+                 : new Response(concat(parts), { headers: { "content-type": "audio/webm" } });
     }
     if (path === "/status") {
       return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()),

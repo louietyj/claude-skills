@@ -451,7 +451,8 @@ def cmd_status(cfg, args):
 
 
 def cmd_audio(cfg, args):
-    """One webm per segment (every reconnect starts one); --batch deletes them."""
+    """One file per segment (every reconnect starts one): webm from a page, WAV from the phone line;
+    --batch deletes them."""
     sid = current_id(args)
     status, body = relay(cfg, "/status", id=sid, timeout=15)
     if status != 200:
@@ -469,7 +470,8 @@ def cmd_audio(cfg, args):
                 data = resp.read()
         except urllib.error.HTTPError as e:
             die(f"segment {seg['n']}: {e.code} {e.read().decode(errors='replace')[:200]}")
-        path = os.path.join(args.out, f"{sid}-seg{seg['n']}.webm")
+        ext = "wav" if seg.get("raw") else "webm"           # a phone-line segment is WAV
+        path = os.path.join(args.out, f"{sid}-seg{seg['n']}.{ext}")
         with open(path, "wb") as fh:
             fh.write(data)
         saved.append({"file": path, "starts_at": mmss(seg.get("start_s")), "bytes": len(data)})

@@ -29,7 +29,7 @@ SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a techni
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 HOLD_RANGE = "0-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
-NOT_NEWS = {"note", "said"}   # as the relay's: Claude's own doings, which wake nobody
+NOT_NEWS = {"note", "said", "setting"}   # as the relay's: logged, but wake nobody
 
 
 def die(msg, code=1):
@@ -329,7 +329,10 @@ def cmd_speak(cfg, args):
     if status != 200 or not isinstance(body, dict):
         die(f"not spoken: {status} {error_text(body)}")
     out = dict(body)
-    if body.get("status") == "interrupted" and "left audio" in (body.get("reason") or ""):
+    if body.get("status") == "interrupted" and "audio moved" in (body.get("reason") or ""):
+        out["hint"] = ("the audio moved to another device mid-sentence: Louie heard only `spoken`. Say "
+                       "`unspoken` again now; speak waits for the new device's voice to connect.")
+    elif body.get("status") == "interrupted" and "left audio" in (body.get("reason") or ""):
         out["hint"] = ("Louie left audio mid-sentence and heard only `spoken`. When he turns it back on, "
                        "pick up from there if it still matters.")
     elif body.get("status") == "interrupted":

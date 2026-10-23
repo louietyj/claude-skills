@@ -313,6 +313,12 @@ class Talk(Base):
         self.assertEqual(code, 0)
         self.assertIn("missing TELNYX_FROM", json.loads(out)["phone_line"])
 
+    def test_speech_cut_by_the_audio_moving_says_to_say_the_rest_again(self):
+        relay = Relay({"/speak": (200, {"status": "interrupted", "spoken": "Yes, I can",
+                                        "unspoken": "see that.", "reason": "the audio moved to the phone"})})
+        _, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("Yes, I can see that."))
+        self.assertIn("Say `unspoken` again now", json.loads(out)["hint"])
+
     def test_refused_turn_wait_shows_the_relays_reason(self):
         relay = Relay({"/set": (400, {"ok": False, "error": "the turn wait must be 0-10s"})})
         code, _, err = self.run_cli(["set", "--hold", "30"], relay)

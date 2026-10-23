@@ -320,6 +320,22 @@ class Room(unittest.TestCase):
         self.assertEqual(s["audio"], [b"from-the-watch"])
         a.close(), b.close()
 
+    def test_words_still_being_recognised_when_the_audio_moves_are_kept(self):
+        n = stream_count()
+        sid = create()
+        a = device(sid)
+        a.send(json.dumps({"type": "seg"}))
+        wait_streams(n + 1)
+        # Soniox sends these finals only once the stream is closed, as it does.
+        script(a, emit=[FAKE.tokens([("And", 1), ("the", 1)], final=False)],
+               on_close=[FAKE.tokens([("And", 1), ("the", 1), ("fee.", 1)], end=True)])
+        b = screen(sid, "phone")
+        time.sleep(0.3)
+        b.send(json.dumps({"type": "take"}))
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=6)
+        self.assertEqual(texts(es, "turn"), ["And the fee."])
+        a.close(), b.close()
+
     def test_a_dropped_holder_takes_the_audio_back_unless_another_has_it(self):
         sid = create()
         a = device(sid)
@@ -955,14 +971,18 @@ class TurnWait(unittest.TestCase):
         self.assertFalse(any("turn wait" in t for t in texts(entries(sid), "event")))
         ws.close()
 
-    def test_louies_change_is_news(self):
+    def test_louies_change_is_logged_but_does_not_wake_claude(self):
         sid, _ = create_talk()
         ws = self.talk_device(sid)
         self.settings(ws)
+        last = wait_entries(sid, lambda es: True)
+        last = last[-1]["n"] if last else 0
         ws.send(json.dumps({"type": "set", "hold_ms": 5000}))
         self.assertEqual(self.settings(ws), 5000)
-        es = wait_entries(sid, lambda es: any("turn wait" in t for t in texts(es, "event")))
-        self.assertIn("Louie set the turn wait to 5s", " ".join(texts(es, "event")))
+        es = wait_entries(sid, lambda es: texts(es, "setting"))
+        self.assertIn("Louie set the turn wait to 5s", texts(es, "setting")[0])
+        out = http("/watch", id=sid, since=last, interval=0, wait=2)[1]
+        self.assertEqual(out["event"], "idle", "a setting woke Claude's watch")
         ws.close()
 
     def test_the_devices_remembered_wait_seeds_only_an_unset_session(self):

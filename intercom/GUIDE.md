@@ -242,7 +242,8 @@ whiteboard").
 - His turn reaches you once he has been silent for the **turn wait**, 3s by
   default. If he says you keep cutting in, or asks for more time to think,
   raise it: `intercom set --hold 5` (0-10s). He can change it himself in the
-  page's settings too; that arrives as an event.
+  page's settings too; that is logged quietly, not sent as an event, and
+  `intercom status` shows the current value.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
   answer with `intercom speak`, then `intercom watch` again in the same
   message. Keep `watch` in a call on its own, as above.
@@ -306,7 +307,9 @@ EOF
     Don't send the next paragraph. If he talked, his full turn arrives as the
     next event (`heard_so_far` is only a preview: don't act on it); if he left
     audio, wait for him to turn it back on. Then decide whether what he missed
-    still matters, said differently, or not at all.
+    still matters, said differently, or not at all. If the audio moved to
+    another device, say `unspoken` again right away: `speak` waits for the new
+    device.
   - `not_delivered`: nothing in the room holds the audio. If `reason` says he
     left audio, wait for him to turn it back on; otherwise tell him in chat.
 - **Don't leave him hanging.** If what he asked will take more than a few

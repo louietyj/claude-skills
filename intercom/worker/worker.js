@@ -53,7 +53,8 @@ const DEVICE_GONE_MS = 5 * 60_000;
 const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const NO_AUDIO_MAX_MS = 60 * 60_000;
 // Why speech stopped, as `speak` reports it, when the audio left its holder.
-const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding the audio disconnected" };
+const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding the audio disconnected",
+                       "call ended": "the phone line ended" };
 const TELNYX_API_URL = "https://api.telnyx.com";
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 const RING_S = 20;                       // rings out before a voicemail would answer
@@ -114,8 +115,8 @@ const GATE_MARGIN_S = 0.3;
 // Echo of the last words still in flight after the relay stops feeding.
 const ECHO_TAIL_S = 1.5;
 const SPANS_MAX = 50;
-// Claude's own notes and speech are logged but are not news.
-const NOT_NEWS = new Set(["note", "said"]);
+// Claude's own notes and speech, and Louie's settings, are logged but are not news.
+const NOT_NEWS = new Set(["note", "said", "setting"]);
 const BATCH_PARAMS = {
   model: "nova-3", diarize: "true", smart_format: "true", punctuate: "true",
   mip_opt_out: "true",
@@ -445,7 +446,7 @@ export class Session {
 
   holdMs() { return this.meta.hold_ms ?? Number(this.env.TALK_HOLD_MS ?? TALK_HOLD_MS); }
 
-  // Louie's change is news, so Claude knows why his turns now arrive later or sooner.
+  // Louie's change is logged, not news: each tap of the stepper would wake Claude.
   async setHold(ms, byLouie) {
     if (!this.talk()) return { ok: false, error: "a listen session has no turn wait" };
     if (!Number.isFinite(ms) || ms < HOLD_MIN_MS || ms > HOLD_MAX_MS) {
@@ -454,7 +455,7 @@ export class Session {
     this.meta.hold_ms = Math.round(ms);
     const s = this.meta.hold_ms / 1000;
     const when = s ? `after ${s}s of silence` : "as soon as the transcriber hears him finish";
-    if (byLouie) await this.addEntry("event", { text: `Louie set the turn wait to ${s}s: his turns reach you ${when}` });
+    if (byLouie) await this.addEntry("setting", { text: `Louie set the turn wait to ${s}s: his turns reach you ${when}` });
     else await this.saveMeta();
     this.toScreens({ type: "settings", hold_ms: this.meta.hold_ms });
     return { ok: true, hold_s: s };
@@ -662,12 +663,14 @@ export class Session {
   async setHolder(ws, why) {
     const old = this.holder;
     if (old === ws) return;
+    let closing = null;
     if (old) {
       this.holder = null;            // nothing more of its audio is taken
       this.voiceReady = false;
       if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY[why] ?? why);
-      this.closeTranscriber();
-      await this.flushTurn();
+      // The old stream's last words are still being recognised: they land on the
+      // open turn, which closes once they have (at the end), not before.
+      closing = this.closeTranscriber();
       if (old !== this.phone) { try { old.send(JSON.stringify({ type: "release" })); } catch {} }
     }
     this.holder = ws;
@@ -680,6 +683,8 @@ export class Session {
     await this.saveMeta();
     await this.armTimer();
     this.sendRoom();
+    // Not awaited: the new holder's audio must not wait on the old stream.
+    if (closing) closing.then(() => this.flushTurn()).catch(() => {});
   }
 
   // A screen asks for the audio, by tapping "This device" or by reconnecting
@@ -1382,7 +1387,7 @@ export class Session {
         id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive,
         mode: b.mode, event_key: randomKey(), origin: b.origin, hold_ms: b.hold_ms ?? null,
         state: "armed", created_at: Date.now(), started_at: null, ended_at: null,
-        end_reason: null, seq: 0, segs: [],
+        end_reason: null, seq: 0, news_seq: 0, segs: [],
       };
       await this.saveMeta();
       await this.ctx.storage.setAlarm(Date.now() + ARMED_TTL_MS);

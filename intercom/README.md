@@ -307,7 +307,10 @@ takes to answer), a webhook back to `/telnyx`, and a media stream back to
 `/phone`. Both are checked against Telnyx's Ed25519 signature; the stream also
 carries a per-call key. Once the stream starts, the call holds the audio like
 a screen would: its 8 kHz mu-law goes to Soniox raw, and Claude's voice goes
-back as L16 at 16 kHz, paced at real time, each chunk followed by a mark. Telnyx
+back as L16 at 8 kHz, paced at real time, each chunk followed by a mark.
+Telnyx's L16 is little-endian and plays at 8 kHz on a phone call, whatever its
+docs say of 16 kHz: on the first real calls, network order played as static
+and 16 kHz audio at half speed. Telnyx
 returns marks as the audio plays, so the relay knows exactly what Louie heard,
 and barge-in is `clear` (marks it flushes back don't count). The handset
 cancels echo itself, so the page's echo gate doesn't apply. A screen taking

@@ -62,11 +62,12 @@ async function openLine(id) {
   };
   ctx.createMediaStreamSource(mic).connect(node);
   node.connect(ctx.destination);
-  line = { ws, mic, ctx, out: new AudioContext({ sampleRate: 16000 }), at: 0, playing: [] };
+  line = { ws, mic, ctx, out: new AudioContext({ sampleRate: 8000 }), at: 0, playing: [] };
   ws.onmessage = (e) => { try { hear(JSON.parse(e.data)); } catch {} };
 }
 
-// What the relay sends the call: L16 (big-endian) at 16 kHz, back to back; `clear` cuts it off.
+// What the relay sends the call: L16 (little-endian, as Telnyx takes it) at 8 kHz,
+// back to back; `clear` cuts it off.
 function hear(m) {
   const { out } = line;
   if (m.event === "clear") {
@@ -78,8 +79,8 @@ function hear(m) {
   if (m.event !== "media" || !m.media?.payload) return;
   const bytes = Uint8Array.from(atob(m.media.payload), (c) => c.charCodeAt(0));
   const pcm = new Float32Array(bytes.length >> 1);
-  for (let i = 0; i < pcm.length; i++) pcm[i] = ((bytes[2 * i] << 24 >> 16) | bytes[2 * i + 1]) / 32768;
-  const buf = out.createBuffer(1, pcm.length, 16000);
+  for (let i = 0; i < pcm.length; i++) pcm[i] = ((bytes[2 * i + 1] << 24 >> 16) | bytes[2 * i]) / 32768;
+  const buf = out.createBuffer(1, pcm.length, 8000);
   buf.copyToChannel(pcm, 0);
   const src = out.createBufferSource();
   src.buffer = buf;

@@ -135,7 +135,7 @@ class Fake:
                                                                  "channels": 1}},
                                       "stream_id": call["stream_id"]}))
 
-        # What the relay sends the call plays at real time (L16, 16 kHz): a mark
+        # What the relay sends the call plays at real time (L16, 8 kHz): a mark
         # comes back once the audio before it has played, and `clear` drops the
         # queue and returns the marks still waiting at once.
         play = {"until": 0.0, "marks": []}
@@ -154,7 +154,7 @@ class Fake:
                 m = json.loads(msg.data)
                 call["received"].append(m)
                 if m.get("event") == "media":
-                    secs = len(base64.b64decode(m["media"]["payload"])) / 32000
+                    secs = len(base64.b64decode(m["media"]["payload"])) / 16000
                     play["until"] = max(play["until"], time.time()) + secs
                 elif m.get("event") == "mark":
                     entry = {"mark": m["mark"]}

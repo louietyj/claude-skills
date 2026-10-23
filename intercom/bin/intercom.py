@@ -332,6 +332,9 @@ def cmd_speak(cfg, args):
     if body.get("status") == "interrupted" and "audio moved" in (body.get("reason") or ""):
         out["hint"] = ("the audio moved to another device mid-sentence: Louie heard only `spoken`. Say "
                        "`unspoken` again now; speak waits for the new device's voice to connect.")
+    elif body.get("status") == "interrupted" and "phone line ended" in (body.get("reason") or ""):
+        out["hint"] = ("the call ended mid-sentence: Louie heard only `spoken`. Nothing redials; call again "
+                       "only if he asks.")
     elif body.get("status") == "interrupted" and "left audio" in (body.get("reason") or ""):
         out["hint"] = ("Louie left audio mid-sentence and heard only `spoken`. When he turns it back on, "
                        "pick up from there if it still matters.")

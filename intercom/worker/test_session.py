@@ -1186,12 +1186,12 @@ class PhoneAudio(unittest.TestCase):
         t0 = time.time()
         status, out = http("/speak", "POST", {"text": "one two three"}, id=sid, timeout=60)
         self.assertEqual((status, out["status"], out["spoken"]), (200, "done", "one two three"), out)
-        self.assertEqual(FAKE.speeches[before]["config"]["sample_rate"], 16000)
+        self.assertEqual(FAKE.speeches[before]["config"]["sample_rate"], 8000)
         sent = TELNYX.calls[ccid]["received"]
         media = [m for m in sent if m["event"] == "media"]
         marks = [m for m in sent if m["event"] == "mark"]
         self.assertTrue(media and len(marks) == len(media), [m["event"] for m in sent][:10])
-        audio_s = sum(len(base64.b64decode(m["media"]["payload"])) for m in media) / 32000
+        audio_s = sum(len(base64.b64decode(m["media"]["payload"])) for m in media) / 16000
         self.assertAlmostEqual(out["audio_s"], audio_s, places=1)
         # Done only once the call has played it all, not when the relay finished sending.
         self.assertGreaterEqual(time.time() - t0, audio_s - 0.3)

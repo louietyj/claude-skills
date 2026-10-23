@@ -58,11 +58,12 @@ const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding th
 const TELNYX_API_URL = "https://api.telnyx.com";
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 const RING_S = 20;                       // rings out before a voicemail would answer
-// Telnyx's media_format encodings, as Soniox's raw-audio settings. L16 is network order.
+// Telnyx's media_format encodings, as Soniox's raw-audio settings. Its L16 is
+// little-endian (see toCall).
 const PHONE_FORMATS = {
   PCMU: { audio_format: "mulaw", sample_rate: 8000, num_channels: 1 },
   PCMA: { audio_format: "alaw", sample_rate: 8000, num_channels: 1 },
-  L16: { audio_format: "pcm_s16be", sample_rate: 16000, num_channels: 1 },
+  L16: { audio_format: "pcm_s16le", sample_rate: 16000, num_channels: 1 },
 };
 const WEBHOOK_SKEW_S = 300;              // older signed webhooks are refused as replays
 const KEEP_MS = 24 * 3600_000;
@@ -92,9 +93,10 @@ const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
-// On a call: Telnyx takes L16 at 16 kHz, so Soniox renders at that rate. If no
-// mark comes back, the line is taken to have played its audio this much later.
-const PHONE_TTS_RATE = 16000;
+// On a call: Telnyx plays L16 at 8 kHz (16 kHz audio came out at half speed),
+// so Soniox renders at that rate. If no mark comes back, the line is taken to
+// have played its audio this much later.
+const PHONE_TTS_RATE = 8000;
 const MARK_GRACE_MS = 2000;
 const VOICE_TRACK = "claude";
 const PUMP_MS = 50;
@@ -168,14 +170,10 @@ function concat(parts) {
   return out;
 }
 
-// A phone segment's raw audio as a WAV file, which wants little-endian PCM.
-const WAV_FORMATS = { mulaw: [7, 8], alaw: [6, 8], pcm_s16be: [1, 16] };
+// A phone segment's raw audio as a WAV file.
+const WAV_FORMATS = { mulaw: [7, 8], alaw: [6, 8], pcm_s16le: [1, 16] };
 function wav(raw, data) {
   const [tag, bits] = WAV_FORMATS[raw.audio_format];
-  if (bits === 16) {
-    data = data.slice();
-    for (let i = 0; i + 1 < data.length; i += 2) [data[i], data[i + 1]] = [data[i + 1], data[i]];
-  }
   const head = new DataView(new ArrayBuffer(44));
   const ascii = (at, s) => [...s].forEach((c, i) => head.setUint8(at + i, c.charCodeAt(0)));
   const ch = raw.num_channels ?? 1, rate = raw.sample_rate;
@@ -1291,13 +1289,12 @@ export class Session {
     }
   }
 
-  // Each chunk, as L16 (network order), is followed by a mark naming how far
-  // the audio reaches; Telnyx returns the mark once that much has played.
+  // Each chunk, as L16, is followed by a mark naming how far the audio reaches;
+  // Telnyx returns the mark once that much has played. Telnyx's L16 is
+  // little-endian, as Soniox renders it: network order played as static.
   toCall(sp, chunk) {
-    const be = new Uint8Array(chunk.length);
-    for (let i = 0; i < chunk.length; i += 2) { be[i] = chunk[i + 1]; be[i + 1] = chunk[i]; }
     let bin = "";
-    for (let i = 0; i < be.length; i += 0x8000) bin += String.fromCharCode(...be.subarray(i, i + 0x8000));
+    for (let i = 0; i < chunk.length; i += 0x8000) bin += String.fromCharCode(...chunk.subarray(i, i + 0x8000));
     try {
       sp.phone.send(JSON.stringify({ event: "media", media: { payload: btoa(bin) } }));
       sp.phone.send(JSON.stringify({ event: "mark", mark: { name: `${sp.sid}:${sp.sentBytes}` } }));

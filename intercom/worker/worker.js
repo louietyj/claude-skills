@@ -20,6 +20,7 @@
 //   GET  /watch?id    long-poll for entries past ?since
 //   POST /note?id     a short note for the device (vibrates the watch)
 //   POST /speak?id    talk mode: say {text} through the device; blocks until played or interrupted
+//   POST /set?id      talk mode: {hold_s}, the silence that closes Louie's turn
 // Monitor (the session's event_key as ?k=):
 //   GET  /events?id   websocket: news entries past ?since, then each new one
 //   POST /stop?id     end the session
@@ -66,7 +67,10 @@ const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
                         endpoint_latency_adjustment_level: 0 };
 // Even so it ends a turn while Louie gathers his thoughts, so the turn stays
 // open until this much silence follows: Claude takes seconds to answer anyway.
+// Louie (the page's settings) or Claude (`intercom set`) can change it per session.
 const TALK_HOLD_MS = 3000;
+const HOLD_MIN_MS = 1000;
+const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
 const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_format: "pcm_s16le",
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
@@ -396,8 +400,23 @@ export class Session {
 
   holdTurn() {
     clearTimeout(this.holdTimer);
-    this.holdTimer = setTimeout(() => this.flushTurn().catch(() => {}),
-                                Number(this.env.TALK_HOLD_MS ?? TALK_HOLD_MS));
+    this.holdTimer = setTimeout(() => this.flushTurn().catch(() => {}), this.holdMs());
+  }
+
+  holdMs() { return this.meta.hold_ms ?? Number(this.env.TALK_HOLD_MS ?? TALK_HOLD_MS); }
+
+  // Louie's change is news, so Claude knows why his turns now arrive later or sooner.
+  async setHold(ms, byLouie) {
+    if (!this.talk()) return { ok: false, error: "a listen session has no turn wait" };
+    if (!Number.isFinite(ms) || ms < HOLD_MIN_MS || ms > HOLD_MAX_MS) {
+      return { ok: false, error: `the turn wait must be ${HOLD_MIN_MS / 1000}-${HOLD_MAX_MS / 1000}s` };
+    }
+    this.meta.hold_ms = Math.round(ms);
+    const s = this.meta.hold_ms / 1000;
+    if (byLouie) await this.addEntry("event", { text: `Louie set the turn wait to ${s}s: his turns reach you after ${s}s of silence` });
+    else await this.saveMeta();
+    this.toDevice({ type: "settings", hold_ms: this.meta.hold_ms });
+    return { ok: true, hold_s: s };
   }
 
   // The open turn's finished words plus those still being recognised.
@@ -643,7 +662,21 @@ export class Session {
   }
 
   async onDeviceMessage(msg) {
-    if (msg.type === "hello") { this.meta.ui = msg.ui ?? null; return this.saveMeta(); }
+    if (msg.type === "hello") {
+      this.meta.ui = msg.ui ?? null;
+      if (!this.talk()) return this.saveMeta();
+      // The device's remembered wait seeds a session nobody has set yet, so a
+      // rejoin never undoes what Claude or Louie chose since.
+      const pref = Number(msg.hold_ms);
+      if (this.meta.hold_ms == null && pref && pref !== this.holdMs()) {
+        const out = await this.setHold(pref, true);
+        if (out.ok) return;
+      }
+      await this.saveMeta();
+      this.toDevice({ type: "settings", hold_ms: this.holdMs() });
+      return;
+    }
+    if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
     if (msg.type === "seg") return this.startSegment();
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (msg.type === "pause") return this.pause();
@@ -1130,7 +1163,7 @@ export class Session {
       // The mode is set here and nowhere else: a listen session can never speak.
       this.meta = {
         id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive,
-        mode: b.mode, event_key: randomKey(), origin: b.origin,
+        mode: b.mode, event_key: randomKey(), origin: b.origin, hold_ms: b.hold_ms ?? null,
         state: "armed", created_at: Date.now(), started_at: null, ended_at: null,
         end_reason: null, seq: 0, segs: [],
       };
@@ -1159,6 +1192,11 @@ export class Session {
       return this.acceptVoiceIn();
     }
     if (path === "/speak") return this.speak(await req.json().catch(() => null));
+    if (path === "/set") {
+      const b = await req.json().catch(() => ({}));
+      const out = await this.setHold(Number(b?.hold_s) * 1000, false);
+      return json(out, out.ok ? 200 : 400);
+    }
     if (path === "/watch") return this.watch(q, req.signal);
     if (path === "/note") return this.note(await req.json().catch(() => null));
     if (path === "/stop") {
@@ -1182,7 +1220,8 @@ export class Session {
       return new Response(concat(parts), { headers: { "content-type": "audio/webm" } });
     }
     if (path === "/status") {
-      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()) });
+      return json({ ...this.meta, device: this.deviceStatus(), elapsed_s: Math.round(this.elapsed()),
+                    ...(this.talk() ? { hold_s: this.holdMs() / 1000 } : {}) });
     }
     return json({ error: "not found" }, 404);
   }
@@ -1191,7 +1230,7 @@ export class Session {
 // ---------------------------------------------------------------------------
 
 const DEVICE_ROUTES = new Set(["/armed", "/device"]);
-const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/stop", "/transcript", "/status",
+const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/set", "/stop", "/transcript", "/status",
                             "/audio", "/pair"]);
 // Gated inside the session by its own keys: a Monitor URL never carries the CLI
 // token, and the SFU adapter never sees it.
@@ -1249,6 +1288,14 @@ export default {
       const b = await req.json().catch(() => ({}));
       const mode = b.mode ?? "listen";
       if (!MODES.has(mode)) return json({ error: `mode must be listen or talk, not ${mode}` }, 400);
+      let hold_ms = null;
+      if (b.hold_s != null) {
+        hold_ms = Math.round(Number(b.hold_s) * 1000);
+        if (mode !== "talk") return json({ error: "a listen session has no turn wait" }, 400);
+        if (!(hold_ms >= HOLD_MIN_MS && hold_ms <= HOLD_MAX_MS)) {
+          return json({ error: `the turn wait must be ${HOLD_MIN_MS / 1000}-${HOLD_MAX_MS / 1000}s` }, 400);
+        }
+      }
       const keyterms = (b.keyterms ?? []).map((t) => String(t).trim()).filter(Boolean).slice(0, 100);
       const claim = await (await registry.fetch("https://registry/claim", {
         method: "POST", body: JSON.stringify({ label: b.label ?? "", mode }) })).json();
@@ -1256,7 +1303,7 @@ export default {
       const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
       return stub.fetch("https://session/create", { method: "POST",
         body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive, mode,
-                               origin: url.origin }) });
+                               hold_ms, origin: url.origin }) });
     }
 
     const id = (q.get("id") ?? "").toUpperCase();

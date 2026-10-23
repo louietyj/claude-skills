@@ -859,6 +859,67 @@ class TalkTurns(unittest.TestCase):
         ws.close()
 
 
+class TurnWait(unittest.TestCase):
+    def talk_device(self, sid, hold_ms=None):
+        ws = connect(f"{BASE.replace('http', 'ws')}/device?k={DEV}&id={sid}", open_timeout=10)
+        ws.send(json.dumps({"type": "hello", "ui": "phone", **({"hold_ms": hold_ms} if hold_ms else {})}))
+        return ws
+
+    def settings(self, ws):
+        return recv_until(ws, lambda m: m.get("type") == "settings")["hold_ms"]
+
+    def test_the_device_learns_the_wait_and_claude_can_change_it(self):
+        sid, _ = create_talk()
+        ws = self.talk_device(sid)
+        self.assertEqual(self.settings(ws), 1000)          # the relay's default (TALK_HOLD_MS here)
+        self.assertEqual(http("/set", "POST", {"hold_s": 4}, id=sid), (200, {"ok": True, "hold_s": 4}))
+        self.assertEqual(self.settings(ws), 4000)
+        self.assertEqual(http("/status", id=sid)[1]["hold_s"], 4)
+        # Claude's own change is not news to Claude.
+        self.assertFalse(any("turn wait" in t for t in texts(entries(sid), "event")))
+        ws.close()
+
+    def test_louies_change_is_news(self):
+        sid, _ = create_talk()
+        ws = self.talk_device(sid)
+        self.settings(ws)
+        ws.send(json.dumps({"type": "set", "hold_ms": 5000}))
+        self.assertEqual(self.settings(ws), 5000)
+        es = wait_entries(sid, lambda es: any("turn wait" in t for t in texts(es, "event")))
+        self.assertIn("Louie set the turn wait to 5s", " ".join(texts(es, "event")))
+        ws.close()
+
+    def test_the_devices_remembered_wait_seeds_only_an_unset_session(self):
+        sid, _ = create_talk()
+        ws = self.talk_device(sid, hold_ms=2500)
+        self.assertEqual(self.settings(ws), 2500)
+        http("/set", "POST", {"hold_s": 6}, id=sid)
+        ws.close()
+        # A rejoin with the old preference must not undo what was set since.
+        ws = self.talk_device(sid, hold_ms=2500)
+        self.assertEqual(self.settings(ws), 6000)
+        ws.close()
+
+    def test_start_can_set_it_and_bad_values_are_refused(self):
+        status, out = http("/session", "POST", {"label": "test", "mode": "talk", "hold_s": 2})
+        self.assertEqual(http("/status", id=out["id"])[1]["hold_s"], 2)
+        self.assertEqual(http("/session", "POST", {"mode": "listen", "hold_s": 2})[0], 400)
+        self.assertEqual(http("/session", "POST", {"mode": "talk", "hold_s": 30})[0], 400)
+        self.assertEqual(http("/set", "POST", {"hold_s": 0.2}, id=out["id"])[0], 400)
+        sid = create()
+        self.assertEqual(http("/set", "POST", {"hold_s": 4}, id=sid)[0], 400)
+
+    def test_a_longer_wait_holds_the_turn_longer(self):
+        sid, _, ws = live_talk(with_transcriber=True)
+        http("/set", "POST", {"hold_s": 3}, id=sid)
+        script(ws, emit=[tokens_now(["One", "thought."], end=True)])
+        time.sleep(2)
+        self.assertEqual(texts(entries(sid), "turn"), [], "delivered before the longer wait ran out")
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=4)
+        self.assertEqual(texts(es, "turn"), ["One thought."])
+        ws.close()
+
+
 class Archive(unittest.TestCase):
     def test_batch_gets_each_segment_whole_then_deletes_audio(self):
         before = len(FAKE.batches)

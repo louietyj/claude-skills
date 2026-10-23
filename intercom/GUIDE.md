@@ -92,7 +92,8 @@ intercom watch
   change; read it to stay current, but never steer on how it ends. A
   monologue is cut into turns at sentence ends every ~12s, so a long answer
   doesn't stay invisible until it stops. In talk mode a turn stays in `tail`
-  until Louie has been silent ~3s, so a pause to think doesn't end it.
+  until Louie has been silent for the turn wait (3s unless changed), so a
+  pause to think doesn't end it.
 
 Leave `--interval` at the default 10s. Raising it saves tool calls but puts
 you that much further behind the conversation.
@@ -235,6 +236,10 @@ whiteboard").
   for a second or two. So a turn that arrives mid-speech is deliberate.
 - He can mute: his mic sends silence, he still hears you, and you are not
   told. A long silence may be that, not inattention.
+- His turn reaches you once he has been silent for the **turn wait**, 3s by
+  default. If he says you keep cutting in, or asks for more time to think,
+  raise it: `intercom set --hold 5` (1-10s). He can change it himself in the
+  page's settings too; that arrives as an event.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
   answer with `intercom speak`, then `intercom watch` again in the same
   message. Keep `watch` in a call on its own, as above.
@@ -367,10 +372,10 @@ line is all that tells a quiet room from a dead one.
 If the phone's mic goes SILENT with its page off screen, another app has taken
 the mic (a call, a recorder, the assistant), or the flag has been lost. Tell
 him. If it stays silent once nothing else is recording, fall back to the
-picture-in-picture button (beside the session id): it keeps the mic across app
-switches, not screen lock. Before you
-operate his phone in talk mode without the flag, tap it yourself (it is
-labelled "picture in picture"; a tap from the phone tools counts), or ask him to.
+picture-in-picture button (in the settings behind the ⋯ beside the session
+id): it keeps the mic across app switches, not screen lock. Before you
+operate his phone in talk mode without the flag, tap it yourself (⋯, then
+"Picture in picture"; a tap from the phone tools counts), or ask him to.
 
 ## Watch notes
 

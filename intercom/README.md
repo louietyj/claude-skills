@@ -29,7 +29,7 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, set, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
@@ -39,6 +39,7 @@ video call to join.
 | `dev/soniox_compare.py` | streams a file straight to Soniox, for comparing providers on identical bytes |
 | `dev/make_sample.ps1` | two Windows voices act out a consultation -> `dev/sample.webm` |
 | `dev/watch_shot.py` | adb screenshot of the watch with its round face drawn on, or of the phone |
+| `dev/page_shot.py` | headless-Chrome screenshots of the page at watch and phone sizes, live and with settings open |
 
 ## Setup
 
@@ -191,6 +192,13 @@ Louie paused to think, so the relay holds a turn until `TALK_HOLD_MS` passes
 with no new words. An earlier merge window keyed off Soniox's punctuation, a
 guess stacked on a guess; this one keys off silence alone. Claude answers in
 seconds anyway, and whole thoughts matter more than quick turn-taking.
+
+The wait is per session, 1-10 s: Louie sets it in the page's settings (⋯),
+Claude with `intercom set --hold` or `start --hold`. Soniox's endpointing
+stays fixed: it is set when its stream opens. The page remembers Louie's last
+pick and offers it when a session starts, but never over a value set since,
+so a rejoin keeps what was chosen. His change is logged as news, so Claude
+knows why his turns arrive later.
 
 **Claude's voice goes through Cloudflare's Realtime SFU.** Chrome on Android
 only cancels echo of audio that arrives from a real peer connection: Web Audio

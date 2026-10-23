@@ -27,6 +27,7 @@ WATCH_INTERVAL = 10
 NOTE_MAX = 120
 SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a technical limit
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
+HOLD_RANGE = "1-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
 NOT_NEWS = {"note", "said"}   # as the relay's: Claude's own doings, which wake nobody
 
@@ -206,7 +207,7 @@ def cmd_start(cfg, args):
     terms = read_terms(args)
     status, body = relay(cfg, "/session", method="POST", timeout=20,
                          body={"label": args.label or "", "keyterms": terms, "archive": args.archive,
-                               "mode": args.mode})
+                               "mode": args.mode, **({"hold_s": args.hold} if args.hold is not None else {})})
     if status != 200 or not isinstance(body, dict) or not body.get("id"):
         die(f"could not create a session: {status} {error_text(body)}")
     sid = body["id"]
@@ -323,6 +324,14 @@ def cmd_speak(cfg, args):
     emit(out)
 
 
+def cmd_set(cfg, args):
+    sid = current_id(args)
+    status, body = relay(cfg, "/set", method="POST", id=sid, body={"hold_s": args.hold}, timeout=15)
+    if status != 200 or not isinstance(body, dict):
+        die(f"not set: {status} {error_text(body)}")
+    emit({"id": sid, "hold_s": body.get("hold_s")})
+
+
 def cmd_monitor_url(cfg, args):
     sid = current_id(args)
     status, body = relay(cfg, "/status", id=sid, timeout=15)
@@ -394,6 +403,7 @@ def cmd_status(cfg, args):
     if status != 200:
         die(f"status failed: {status} {error_text(body)}")
     emit({"id": sid, "mode": body.get("mode") or "listen", "state": body.get("state"),
+          **({"hold_s": body["hold_s"]} if "hold_s" in body else {}),
           "label": body.get("label"), "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
           "archive": body.get("archive"), "keyterms": body.get("keyterms"),
           "device": describe_device(body.get("device"), body.get("state"))})
@@ -457,6 +467,9 @@ def main():
     s.add_argument("--terms-file", help="keyterms, one per line or comma-separated")
     s.add_argument("--archive", action="store_true",
                    help="keep the audio for `transcript --batch`; deleted once that runs")
+    s.add_argument("--hold", type=float,
+                   help=f"talk mode: seconds of silence that close Louie's turn ({HOLD_RANGE}; default: "
+                        "his device's setting, else 3)")
     s.add_argument("--force", action="store_true", help="start even though one is still live")
     s.set_defaults(fn=cmd_start)
 
@@ -485,6 +498,12 @@ def main():
                     help="testing: Louie's voice doesn't stop this one (pausing still does)")
     sp.add_argument("--id")
     sp.set_defaults(fn=cmd_speak)
+
+    se = sub.add_parser("set", help="talk mode: change a live session's settings")
+    se.add_argument("--hold", type=float, required=True,
+                    help=f"seconds of silence that close Louie's turn ({HOLD_RANGE})")
+    se.add_argument("--id")
+    se.set_defaults(fn=cmd_set)
 
     mu = sub.add_parser("monitor-url", help="the websocket URL of the event stream (not for Monitor({ws}), "
                                             "which goes deaf on a quiet socket: use follow)")

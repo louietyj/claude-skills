@@ -8,6 +8,8 @@ config.json
 
 # Soniox key ("dev") for local probes; the Worker has its own, as a secret.
 dev/soniox.key
+# Telnyx API key, for provisioning from a checkout; the Worker gets its own copy as a secret.
+dev/telnyx.key
 
 __pycache__/
 .wrangler/

@@ -95,9 +95,9 @@ const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_f
                      sample_rate: 48000, speed: 1.3, reduce_silence: true, return_timestamps: true };
 // On a call, Soniox renders at the rate the stream's `start` names: Telnyx plays
 // L16 at that rate (8 kHz unless asked; 16 kHz audio sent to an 8 kHz stream
-// came out at half speed). The relay asks for 16 kHz, for HD voice where the
-// route to Louie's phone carries it. If no mark comes back, the line is taken
-// to have played its audio this much later.
+// came out at half speed). The relay asks for 16 kHz, and the dial prefers
+// wideband codecs, for HD voice where the carrier takes it. If no mark comes
+// back, the line is taken to have played its audio this much later.
 const PHONE_RATE = 16000;
 const MARK_GRACE_MS = 2000;
 const VOICE_TRACK = "claude";
@@ -778,7 +778,7 @@ export class Session {
     try {
       data = await this.telnyx("/v2/calls", {
         connection_id: this.env.TELNYX_CONNECTION_ID, from: this.env.TELNYX_FROM, to,
-        timeout_secs: RING_S,
+        timeout_secs: RING_S, preferred_codecs: "AMR-WB,G722,PCMU",
         webhook_url: `${origin}/telnyx`, client_state: btoa(JSON.stringify({ id: this.meta.id })),
         stream_url: `${origin.replace(/^http/, "ws")}/phone?id=${this.meta.id}&k=${key}`,
         stream_track: "inbound_track", stream_bidirectional_mode: "rtp", stream_bidirectional_codec: "L16",

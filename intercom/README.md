@@ -311,8 +311,11 @@ L16 too and goes to Soniox raw, and Claude's voice goes back as L16 at the
 rate the stream's `start` names, paced at real time, each chunk followed by a
 mark. Telnyx's L16 is little-endian: network order played as static on the
 first real call. Its rate is 8 kHz unless the dial asks otherwise (16 kHz audio
-on an 8 kHz stream played at half speed), so the dial asks for 16 kHz, for HD
-voice wherever the route to Louie's phone carries it. Telnyx
+on an 8 kHz stream played at half speed), so the dial asks for 16 kHz. That
+alone isn't HD: without `preferred_codecs`, Telnyx offers the carrier only
+G.711 (speech cut at 3.8 kHz); with AMR-WB first, a call to a mobile negotiates
+AMR-WB (speech to 7 kHz). Telnyx's HD reaches only AT&T, T-Mobile and Verizon
+phones directly; a number that forwards through another carrier stays G.711. Telnyx
 returns marks as the audio plays, so the relay knows exactly what Louie heard,
 and barge-in is `clear` (marks it flushes back don't count). The handset
 cancels echo itself, so the page's echo gate doesn't apply. A screen taking

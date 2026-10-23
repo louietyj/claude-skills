@@ -146,8 +146,13 @@ def describe_device(d, state):
     call = d.get("call")
     if call and call.get("state") != "up":
         return f"calling Louie's phone ({call.get('to')}), {call.get('state')} for {call.get('s')}s"
+    if call and who == "phone line":
+        audio = d.get("last_audio_s")
+        if audio is not None and audio > 5:
+            return f"on the phone line, but no call audio for {audio}s"
+        return f"on the phone line for {call.get('s')}s ({call.get('to')})"
     if call:
-        return f"phone line up for {call.get('s')}s ({call.get('to')})"
+        return f"phone line up for {call.get('s')}s ({call.get('to')}), its audio not started"
     if not who:
         since = d.get("no_audio_s")
         ago = f" {since}s ago" if since is not None else ""
@@ -158,6 +163,8 @@ def describe_device(d, state):
             return f"Louie LEFT AUDIO{ago} (in the room on the {', '.join(screens)}): nothing is heard, no speech"
         if why == "dropped":
             return f"the screen holding the audio DISCONNECTED{ago}: no audio until it is back"
+        if why == "call ended":
+            return f"the PHONE LINE ENDED{ago}: no audio until a screen takes it or he is called again"
         return f"Louie is in the room on the {', '.join(screens)} but hasn't turned audio on"
     if d.get("mic_silent_s") is not None:
         where = " with its page off screen" if d.get("hidden_s") is not None else ""

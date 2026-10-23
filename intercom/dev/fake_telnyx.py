@@ -52,6 +52,10 @@ class Fake:
     def hang_up(self, ccid, cause="normal_clearing", source="callee"):
         self.run(self._hang_up(ccid, cause, source))
 
+    def send_audio(self, ccid, data):
+        """Call audio from Louie's end, as one media frame on the call's stream."""
+        self.run(self._send_media(ccid, data))
+
     def last(self):
         return list(self.calls)[-1]
 
@@ -89,13 +93,66 @@ class Fake:
             return
         call["state"] = "up"
         await self._webhook(ccid, "call.answered", state="answered")
+        await self._open_stream(ccid)
 
     async def _hang_up(self, ccid, cause, source):
         call = self.calls[ccid]
         if call["state"] == "ended":
             return
         call["state"] = "ended"
+        ws = call.get("stream")
+        if ws is not None and not ws.closed:
+            await ws.send_str(json.dumps({"event": "stop", "sequence_number": str(next(call["seq"])),
+                                          "stop": {"call_control_id": ccid}, "stream_id": call["stream_id"]}))
+            asyncio.ensure_future(ws.close())        # the hangup webhook doesn't wait on the close handshake
         await self._webhook(ccid, "call.hangup", state="hangup", hangup_cause=cause, hangup_source=source)
+
+    # --- the media stream ----------------------------------------------------------------
+    # Telnyx dials the stream_url it was given once the call is answered, signing
+    # `{timestamp}|{stream_url}`, then sends connected, start, and media frames.
+
+    async def _open_stream(self, ccid):
+        call = self.calls[ccid]
+        url = call["body"].get("stream_url")
+        if not url:
+            return
+        ts = str(int(time.time()))
+        sig = base64.b64encode(KEY.sign(f"{ts}|{url}".encode())).decode()
+        self._client = self._client or aiohttp.ClientSession()
+        try:
+            ws = await self._client.ws_connect(url, headers={"telnyx-timestamp": ts, "telnyx-signature-ed25519": sig})
+        except aiohttp.ClientError as e:
+            call["stream_error"] = str(e)
+            return
+        call.update(stream=ws, stream_id=str(uuid.uuid4()), seq=itertools.count(1), chunk=itertools.count(1),
+                    received=[])
+        await ws.send_str(json.dumps({"event": "connected", "version": "1.0.0"}))
+        await ws.send_str(json.dumps({"event": "start", "sequence_number": str(next(call["seq"])),
+                                      "start": {"call_control_id": ccid, "call_session_id": call["session"],
+                                                "from": call["body"].get("from"), "to": call["body"].get("to"),
+                                                "client_state": call["body"].get("client_state"),
+                                                "media_format": {"encoding": "PCMU", "sample_rate": 8000,
+                                                                 "channels": 1}},
+                                      "stream_id": call["stream_id"]}))
+
+        async def drain():
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    call["received"].append(json.loads(msg.data))
+                    for h in list(call.get("handsets", [])):
+                        await h.send_str(msg.data)
+        asyncio.ensure_future(drain())
+
+    async def _send_media(self, ccid, data):
+        call = self.calls[ccid]
+        ws = call.get("stream")
+        if ws is None or ws.closed:
+            return
+        await ws.send_str(json.dumps({"event": "media", "sequence_number": str(next(call["seq"])),
+                                      "media": {"track": "inbound", "chunk": str(next(call["chunk"])),
+                                                "timestamp": str(int((time.time() - call["at"]) * 1000)),
+                                                "payload": base64.b64encode(data).decode()},
+                                      "stream_id": call["stream_id"]}))
 
     # --- REST ------------------------------------------------------------------------
 
@@ -131,6 +188,22 @@ class Fake:
         return web.json_response([{"id": k, "to": v["body"].get("to"), "state": v["state"]}
                                   for k, v in self.calls.items() if v["state"] != "ended"])
 
+    async def handset(self, request):
+        """The page's mic (8 kHz mu-law) in, as the call's audio; what the relay sends the call, out."""
+        ccid = request.match_info["ccid"]
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        call = self.calls.get(ccid)
+        if call is None:
+            await ws.close()
+            return ws
+        call.setdefault("handsets", []).append(ws)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                await self._send_media(ccid, msg.data)
+        call["handsets"].remove(ws)
+        return ws
+
     async def control(self, request):
         ccid, action = request.match_info["ccid"], request.match_info["action"]
         if ccid not in self.calls:
@@ -151,6 +224,7 @@ def start(port=8797):
     app.router.add_route("POST", "/v2/calls/{ccid}/actions/hangup", fake.hangup_action)
     app.router.add_route("GET", "/phone", fake.phone_page)
     app.router.add_route("GET", "/fake/calls", fake.list_calls)
+    app.router.add_route("GET", "/fake/handset/{ccid}", fake.handset)
     app.router.add_route("POST", "/fake/{action}/{ccid}", fake.control)
     ready = threading.Event()
 

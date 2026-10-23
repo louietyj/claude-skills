@@ -297,7 +297,12 @@ class Talk(Base):
         ringing = {"screens": [], "audio": None, "call": {"state": "ringing", "to": "…0123", "s": 4}}
         self.assertEqual(intercom.describe_device(ringing, "live"), "calling Louie's phone (…0123), ringing for 4s")
         up = dict(ringing, call={"state": "up", "to": "…0123", "s": 30})
-        self.assertEqual(intercom.describe_device(up, "live"), "phone line up for 30s (…0123)")
+        self.assertIn("its audio not started", intercom.describe_device(up, "live"))
+        on_line = dict(up, audio="phone line", last_audio_s=0)
+        self.assertEqual(intercom.describe_device(on_line, "live"), "on the phone line for 30s (…0123)")
+        self.assertIn("no call audio for 9s", intercom.describe_device(dict(on_line, last_audio_s=9), "live"))
+        ended = {"screens": ["watch"], "audio": None, "no_audio_why": "call ended", "no_audio_s": 3}
+        self.assertIn("PHONE LINE ENDED 3s ago", intercom.describe_device(ended, "live"))
 
     def test_health_says_whether_the_phone_line_is_set_up(self):
         secrets = {"CLI_TOKEN": True}

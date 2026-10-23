@@ -57,6 +57,12 @@ const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding th
 const TELNYX_API_URL = "https://api.telnyx.com";
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 const RING_S = 20;                       // rings out before a voicemail would answer
+// Telnyx's media_format encodings, as Soniox's raw-audio settings. L16 is network order.
+const PHONE_FORMATS = {
+  PCMU: { audio_format: "mulaw", sample_rate: 8000, num_channels: 1 },
+  PCMA: { audio_format: "alaw", sample_rate: 8000, num_channels: 1 },
+  L16: { audio_format: "pcm_s16be", sample_rate: 16000, num_channels: 1 },
+};
 const WEBHOOK_SKEW_S = 300;              // older signed webhooks are refused as replays
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
@@ -256,7 +262,9 @@ export class Session {
     // Room facts Claude reads (hidden_since, no_audio_since, absent_since) live in
     // meta: an object restart must not turn "gone 3 minutes" into "fine".
     this.screens = new Map();    // every page in the room: websocket -> {ui}
-    this.holder = null;          // the screen whose mic is the room's audio, if any
+    this.holder = null;          // the screen whose mic is the room's audio, or the phone line
+    this.phone = null;           // Telnyx's media socket for the room's call
+    this.phoneFormat = null;     // Soniox's raw-audio settings for it
     this.stt = null;             // current transcriber websocket
     this.sttOpening = false;
     this.quickFails = 0;
@@ -311,10 +319,11 @@ export class Session {
     return stub.fetch(`https://registry${path}`, { method: "POST", body: JSON.stringify(body) });
   }
 
-  ui(ws) { return this.screens.get(ws)?.ui ?? "device"; }
+  ui(ws) { return ws && ws === this.phone ? "phone line" : this.screens.get(ws)?.ui ?? "device"; }
 
-  // Audio plumbing (transcriber restarts, Claude's voice) concerns only the holder.
+  // Audio plumbing (transcriber restarts, Claude's voice) concerns only a holding page.
   toHolder(msg) {
+    if (this.holder === this.phone) return;
     try { this.holder?.send(JSON.stringify(msg)); } catch {}
   }
 
@@ -466,13 +475,15 @@ export class Session {
   // A segment is one MediaRecorder run: one webm header, one transcriber
   // stream. A stream resumed mid-container is not reliably decodable, so every
   // reconnect on either side starts a new segment.
-  async startSegment() {
+  // `format` is Soniox's for raw audio (the phone line); a page sends webm, which Soniox detects.
+  async startSegment(format = { audio_format: "auto" }) {
     // Synchronous up to the first await: the header chunk arrives right behind
     // the `seg` message and must land in pendingAudio.
     this.closeTranscriber();
     this.pendingAudio = [];
     this.sttOpening = true;
-    const seg = { n: this.meta.segs.length, start_s: this.elapsed() };
+    const seg = { n: this.meta.segs.length, start_s: this.elapsed(),
+                  ...(format.audio_format !== "auto" ? { raw: format } : {}) };
     this.meta.segs.push(seg);
     await this.saveMeta();
 
@@ -493,7 +504,7 @@ export class Session {
     ws.accept();
     const conn = { ws, opened: Date.now(), error: null };
     ws.send(JSON.stringify({
-      model: SONIOX_MODEL, audio_format: "auto", language_hints: ["en"],
+      model: SONIOX_MODEL, ...format, language_hints: ["en"],
       enable_speaker_diarization: !this.talk(), enable_endpoint_detection: true,
       ...(this.talk() ? TALK_ENDPOINT : {}),
       ...(this.meta.keyterms.length ? { context: { terms: this.meta.keyterms } } : {}),
@@ -542,7 +553,9 @@ export class Session {
       return;
     }
     await this.addEntry("event", { text: `transcriber dropped (${why}); restarting the recorder` });
-    this.toHolder({ type: "restart" });       // the page answers with a fresh segment
+    // Raw call audio can resume anywhere; a page answers with a fresh webm segment.
+    if (this.holder === this.phone) await this.startSegment(this.phoneFormat);
+    else this.toHolder({ type: "restart" });
   }
 
   // --- audio and archive -----------------------------------------------------
@@ -655,7 +668,7 @@ export class Session {
       if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY[why] ?? why);
       this.closeTranscriber();
       await this.flushTurn();
-      try { old.send(JSON.stringify({ type: "release" })); } catch {}
+      if (old !== this.phone) { try { old.send(JSON.stringify({ type: "release" })); } catch {} }
     }
     this.holder = ws;
     this.mic = null;
@@ -684,12 +697,16 @@ export class Session {
     else if (from === who) text = `${who} reconnected after ${gap}s; nothing was heard in between`;
     else text = `audio back on the ${who} after ${gap}s; nothing was heard in between`;
     await this.addEntry("event", { text });
+    // The call's audio has moved to a screen: the call itself has no further use.
+    if (old && old === this.phone) await this.hangUp();
   }
 
   async leaveAudio() {
     if (!this.holder) return;
+    const wasPhone = this.holder === this.phone;
     await this.setHolder(null, "left");
     await this.addEntry("event", { text: `Louie left audio: nothing is heard${this.talk() ? ", and you can't speak," : ""} until he turns it back on` });
+    if (wasPhone) await this.hangUp();
   }
 
   // --- the phone line ----------------------------------------------------------------
@@ -778,6 +795,40 @@ export class Session {
       return;
     }
     this.sendRoom();
+  }
+
+  // Telnyx's media stream for the call. Once it starts, the line holds the
+  // room's audio, and whatever held it lets go.
+  acceptPhone() {
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+    server.addEventListener("message", (m) => this.onPhoneFrame(server, m.data).catch(() => {}));
+    const gone = async () => {
+      if (this.phone !== server) return;
+      if (this.holder === server) await this.setHolder(null, "call ended");
+      this.phone = null;
+    };
+    server.addEventListener("close", gone);
+    server.addEventListener("error", gone);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async onPhoneFrame(ws, raw) {
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
+    if (m.event === "start") {
+      const f = m.start?.media_format ?? {};
+      this.phone = ws;
+      this.phoneFormat = { ...(PHONE_FORMATS[f.encoding] ?? PHONE_FORMATS.PCMU),
+                           ...(f.sample_rate ? { sample_rate: Number(f.sample_rate) } : {}) };
+      await this.takeAudio(ws);
+      await this.startSegment(this.phoneFormat);
+    } else if (m.event === "media" && ws === this.holder && (m.media?.track ?? "inbound") === "inbound") {
+      await this.onAudio(Uint8Array.from(atob(m.media.payload ?? ""), (c) => c.charCodeAt(0)));
+    } else if (m.event === "stop") {
+      if (ws === this.holder) await this.setHolder(null, "call ended");
+      try { ws.close(1000); } catch {}
+    }
   }
 
   async acceptDevice() {
@@ -902,7 +953,8 @@ export class Session {
 
   // A word said while Claude's voice was playing, without sustained energy behind it, is echo.
   isEcho(at) {
-    if (!this.talk()) return false;
+    // On a call the handset cancels Claude's echo; the gate reads a page's mic.
+    if (!this.talk() || this.holder === this.phone) return false;
     const speaking = this.speechSpans.some(([a, b]) => at >= a && (b == null || at <= b));
     if (!speaking) return false;
     const m = GATE_MARGIN_S;
@@ -1103,6 +1155,10 @@ export class Session {
     if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
     if (!this.holder) {
       return json({ status: "not_delivered", reason: SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio",
+                    spoken: "", unspoken: text });
+    }
+    if (this.holder === this.phone) {
+      return json({ status: "not_delivered", reason: "Claude's voice does not reach the phone line yet",
                     spoken: "", unspoken: text });
     }
     if (!this.voiceOut) {
@@ -1347,6 +1403,11 @@ export class Session {
       if (!this.meta.event_key || q.get("k") !== this.meta.event_key) return json({ error: "unauthorized" }, 401);
       return this.acceptEvents(Math.max(0, Number(q.get("since")) || 0));
     }
+    if (path === "/phone") {
+      if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected a websocket" }, 426);
+      if (!this.meta.call?.key || q.get("k") !== this.meta.call.key) return json({ error: "unauthorized" }, 401);
+      return this.acceptPhone();
+    }
     if (path === "/tts-in") {
       if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected a websocket" }, 426);
       if (!this.meta.voice_key || q.get("k") !== this.meta.voice_key) return json({ error: "unauthorized" }, 401);
@@ -1406,23 +1467,24 @@ const DEVICE_ROUTES = new Set(["/armed", "/device"]);
 const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/set", "/call", "/hangup", "/stop",
                             "/transcript", "/status", "/audio", "/pair"]);
 
-// Telnyx signs `{timestamp}|{raw body}` with the account's Ed25519 key. An unset
-// public key refuses everything, like the relay's other gates.
-async function telnyxSigned(env, req, body) {
+// Telnyx signs `{timestamp}|{raw body}` (a webhook) or `{timestamp}|{stream_url}`
+// (its media socket) with the account's Ed25519 key. An unset public key refuses
+// everything, like the relay's other gates.
+async function telnyxSigned(env, req, signed) {
   const sig = req.headers.get("telnyx-signature-ed25519"), ts = req.headers.get("telnyx-timestamp");
   if (!env.TELNYX_PUBLIC_KEY || !sig || !/^\d+$/.test(ts ?? "")) return false;
   if (Math.abs(Date.now() / 1000 - Number(ts)) > WEBHOOK_SKEW_S) return false;
   const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   try {
     const key = await crypto.subtle.importKey("raw", bytes(env.TELNYX_PUBLIC_KEY), { name: "Ed25519" }, false, ["verify"]);
-    return await crypto.subtle.verify({ name: "Ed25519" }, key, bytes(sig), new TextEncoder().encode(`${ts}|${body}`));
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, bytes(sig), new TextEncoder().encode(`${ts}|${signed}`));
   } catch {
     return false;
   }
 }
 // Gated inside the session by its own keys: a Monitor URL never carries the CLI
 // token, and the SFU adapter never sees it.
-const EVENT_ROUTES = new Set(["/events", "/tts-in"]);
+const EVENT_ROUTES = new Set(["/events", "/tts-in", "/phone"]);
 
 export default {
   async fetch(req, env) {
@@ -1512,6 +1574,11 @@ export default {
       return stub.fetch("https://session/create", { method: "POST",
         body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive, mode,
                                hold_ms, origin: url.origin }) });
+    }
+
+    // The stream URL as Telnyx was given it, which a Worker sees with an http scheme.
+    if (path === "/phone" && !(await telnyxSigned(env, req, req.url.replace(/^http/, "ws")))) {
+      return json({ error: "bad signature" }, 401);
     }
 
     const id = (q.get("id") ?? "").toUpperCase();

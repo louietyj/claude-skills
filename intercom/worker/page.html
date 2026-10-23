@@ -26,7 +26,7 @@ button:active{background:#2a2a2a}
 #sid{color:var(--dim);font-size:6vmin;letter-spacing:.15em}
 /* Centred between the clock and stop, not on the face, so a tall block
    never rides up into the clock. */
-#mid{position:absolute;top:54%;left:10%;right:10%;transform:translateY(-50%)}
+#mid{position:absolute;top:56%;left:10%;right:10%;transform:translateY(-50%)}
 #pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
 /* Three buttons clear a round face's edge only this close together. */
 #bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:4vmin}
@@ -37,6 +37,9 @@ button:active{background:#2a2a2a}
 #where{color:var(--dim);font-size:6vmin}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
 #note{color:#fff;font-weight:700;font-size:6.5vmin;line-height:1.2}
+/* Between the session id and the bottom row; what doesn't fit scrolls (the crown on the watch). */
+#live{max-height:36vh;max-height:36dvh;overflow-y:auto;width:100%;scrollbar-width:none}
+#live::-webkit-scrollbar{display:none}
 #note.flash{animation:flash .5s ease-in-out 6 alternate}
 #note.old{color:var(--dim);font-weight:600}
 @keyframes flash{from{opacity:1}to{opacity:.35}}
@@ -186,6 +189,7 @@ function renderRoom() {
   $("where").textContent = roomCall
     ? (roomCall.state === "up" ? `On the phone · ${elapsed(roomCall.up_at)}` : "Calling your phone…")
     : roomAudio ? `Audio on the ${roomAudio}` : "";
+  if ($("note").textContent) fitNote($("note"));
 }
 
 function elapsed(since) {
@@ -735,9 +739,15 @@ async function answerVoice(sdp) {
   }
 }
 
-// A long steer shrinks until it fits between the session id and stop.
+// A long steer shrinks until it fits between the session id and stop, beside
+// whatever else the middle shows (the audio choices, where the audio is); past
+// the smallest size, the middle scrolls.
 function fitNote(n) {
-  const room = $("stage").clientHeight * 0.36;
+  let room = $("stage").clientHeight * 0.36;   // #live's max-height
+  for (const id of ["status", "choices", "where"]) {
+    const el = $(id);
+    if (!el.classList.contains("hide")) room -= el.offsetHeight + $("stage").clientHeight * 0.04;
+  }
   let size = 6.5;
   n.style.fontSize = size + "vmin";
   while (n.scrollHeight > room && size > 4) {

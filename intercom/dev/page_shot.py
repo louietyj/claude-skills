@@ -96,6 +96,8 @@ def main():
             tab.wait("document.querySelector('#list button.big')")
             tab.js("document.querySelector('#list button.big').click()")
             tab.wait("!document.getElementById('choices').classList.contains('hide')")
+            tab.js("showNote('Second long note: still capped at 120 characters. For more detail, read the chat, "
+                   "where the full steer is.')")
             tab.shot(OUT / f"{name}-joined.png", round_face)
             tab.js("document.getElementById('usehere').click()")
             tab.wait("!document.getElementById('pause').classList.contains('hide')")

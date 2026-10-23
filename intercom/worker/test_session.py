@@ -11,6 +11,7 @@ A running one must have been started with WRANGLER_VARS below.
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1113,6 +1114,96 @@ class PhoneLine(unittest.TestCase):
         self.assertNotIn("phone line connected", call_events(sid))
         self.assertEqual(TELNYX.post_signed(url, body), 200)
         wait_entries(sid, lambda es: "phone line connected" in texts(es, "event"))
+
+
+class PhoneAudio(unittest.TestCase):
+    def answered(self, sid, ws=None):
+        """Dial, answer, and wait until the call's stream holds the room's audio."""
+        n = stream_count()
+        http("/call", "POST", {"to": LOUIE}, id=sid)
+        ccid = TELNYX.last()
+        TELNYX.answer(ccid)
+        if ws:
+            recv_until(ws, lambda m: m.get("type") == "room" and m.get("audio") == "phone line")
+        wait_entries(sid, lambda es: any("phone line" in t and ("recording started" in t or "moved" in t)
+                                         for t in texts(es, "event")))
+        s = wait_streams(n + 1)
+        end = time.time() + 5
+        while time.time() < end and s["config"] is None:
+            time.sleep(0.05)
+        return ccid, s
+
+    def test_the_call_takes_the_audio_and_its_frames_reach_the_transcriber_raw(self):
+        sid = create()
+        ws = device(sid)                       # the watch holds the audio first
+        wait_entries(sid, lambda es: es)
+        ccid, s = self.answered(sid)
+        recv_until(ws, lambda m: m.get("type") == "release")
+        self.assertEqual((s["config"]["audio_format"], s["config"]["sample_rate"], s["config"]["num_channels"]),
+                         ("mulaw", 8000, 1))
+        self.assertIn("audio moved from the watch to the phone line", texts(entries(sid), "event"))
+        TELNYX.send_audio(ccid, b"\x7f" * 160)
+        ws.send(b"from-the-watch")             # no longer the holder: dropped
+        end = time.time() + 5
+        while time.time() < end and not s["audio"]:
+            time.sleep(0.1)
+        self.assertEqual(s["audio"], [b"\x7f" * 160])
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone line")
+        ws.close()
+
+    def test_turns_come_from_the_call(self):
+        sid = create(mode="talk")
+        ccid, s = self.answered(sid)
+        TELNYX.send_audio(ccid, json.dumps({"emit": [FAKE.tokens([("Call", 0), ("me", 0), ("back.", 0)],
+                                                                end=True)]}).encode())
+        es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=6)
+        self.assertEqual(texts(es, "turn"), ["Call me back."])
+        out = http("/speak", "POST", {"text": "Sure."}, id=sid)[1]
+        self.assertEqual(out["status"], "not_delivered")
+
+    def test_a_screen_taking_the_audio_hangs_up_the_call(self):
+        sid = create()
+        ws = screen(sid, "phone")
+        ccid, _ = self.answered(sid, ws)
+        ws.send(json.dumps({"type": "take"}))
+        wait_entries(sid, lambda es: "audio moved from the phone line to the phone" in texts(es, "event"))
+        end = time.time() + 5
+        while time.time() < end and ccid not in TELNYX.hangups:
+            time.sleep(0.1)
+        self.assertIn(ccid, TELNYX.hangups)
+        wait_entries(sid, lambda es: any("phone line ended" in t for t in texts(es, "event")))
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone")
+        ws.close()
+
+    def test_leaving_audio_on_the_call_hangs_it_up(self):
+        sid = create()
+        ws = screen(sid, "watch")
+        ccid, _ = self.answered(sid, ws)
+        ws.send(json.dumps({"type": "leave"}))
+        wait_entries(sid, lambda es: any("phone line ended" in t for t in texts(es, "event")))
+        self.assertIn(ccid, TELNYX.hangups)
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((dev["audio"], dev["no_audio_why"], dev["call"]), (None, "left", None))
+        ws.close()
+
+    def test_louie_hanging_up_leaves_the_room_without_audio(self):
+        sid = create()
+        ws = screen(sid, "watch")
+        ccid, _ = self.answered(sid, ws)
+        TELNYX.hang_up(ccid)
+        recv_until(ws, lambda m: m.get("type") == "room" and m.get("audio") is None and m.get("call") is None)
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((dev["audio"], dev["no_audio_why"]), (None, "call ended"))
+        ws.close()
+
+    def test_the_stream_needs_the_calls_key_and_telnyxs_signature(self):
+        sid = create()
+        http("/call", "POST", {"to": LOUIE}, id=sid)
+        k = re.search(r"k=(\w+)", TELNYX.calls[TELNYX.last()]["body"]["stream_url"]).group(1)
+        url = f"{BASE.replace('http', 'ws')}/phone?id={sid}&k="
+        for bad in (url + "wrong", url + k):            # a wrong key; the right key, unsigned
+            with self.assertRaises(Exception):
+                connect(bad, open_timeout=10).recv(timeout=2)
 
 
 class Archive(unittest.TestCase):

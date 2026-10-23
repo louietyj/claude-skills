@@ -28,13 +28,52 @@ button{font:inherit;font-size:18px;padding:12px 22px;border-radius:24px;border:1
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let call = null;
+let call = null, line = null;
 
 async function act(action) {
   if (call) await fetch(`/fake/${action}/${encodeURIComponent(call.id)}`, { method: "POST" });
   poll();
 }
-$("answer").onclick = () => act("answer");
+
+// G.711 mu-law, as a phone line carries it.
+function mulaw(sample) {
+  let s = Math.max(-1, Math.min(1, sample)) * 32635;
+  const sign = s < 0 ? 0x80 : 0;
+  s = Math.min(Math.abs(s), 32635) + 132;
+  let exp = 7;
+  for (let mask = 0x4000; (s & mask) === 0 && exp > 0; mask >>= 1) exp--;
+  return ~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0f)) & 0xff;
+}
+
+// The mic, at 8 kHz, in 20 ms frames: what Telnyx would stream from the call.
+async function openLine(id) {
+  const ws = new WebSocket(`${location.origin.replace(/^http/, "ws")}/fake/handset/${encodeURIComponent(id)}`);
+  ws.binaryType = "arraybuffer";
+  const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+  const ctx = new AudioContext({ sampleRate: 8000 });
+  const node = ctx.createScriptProcessor(256, 1, 1);
+  let pending = [];
+  node.onaudioprocess = (e) => {
+    for (const v of e.inputBuffer.getChannelData(0)) pending.push(mulaw(v));
+    while (pending.length >= 160 && ws.readyState === 1) {
+      ws.send(new Uint8Array(pending.slice(0, 160)));
+      pending = pending.slice(160);
+    }
+  };
+  ctx.createMediaStreamSource(mic).connect(node);
+  node.connect(ctx.destination);
+  line = { ws, mic, ctx };
+}
+
+function closeLine() {
+  if (!line) return;
+  try { line.ws.close(); } catch {}
+  line.mic.getTracks().forEach((t) => t.stop());
+  line.ctx.close();
+  line = null;
+}
+
+$("answer").onclick = async () => { const id = call?.id; await act("answer"); if (id) openLine(id); };
 $("decline").onclick = () => act("hangup");
 $("hangup").onclick = () => act("hangup");
 $("drop").onclick = () => act("drop");
@@ -44,6 +83,7 @@ async function poll() {
   $("who").textContent = call ? call.to : "No call";
   $("state").textContent = call ? (call.state === "ringing" ? "Ringing…" : "On the call") : "";
   const ringing = call?.state === "ringing", up = call?.state === "up";
+  if (!up) closeLine();
   $("answer").classList.toggle("hide", !ringing);
   $("decline").classList.toggle("hide", !ringing);
   $("hangup").classList.toggle("hide", !up);

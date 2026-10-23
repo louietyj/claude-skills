@@ -36,6 +36,7 @@ video call to join.
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
 | `dev/fake_stt.py` | Soniox-shaped live STT and TTS and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
+| `dev/telnyx_api.py` | Telnyx's API with the key in `dev/telnyx.key` (gitignored), for setting up the phone line |
 | `dev/fake_telnyx.py` | Telnyx-shaped call API and signed webhooks, driven by tests or by `dev/phone.html`, the fake handset it serves at `/phone` |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
 | `dev/soniox_compare.py` | streams a file straight to Soniox, for comparing providers on identical bytes |

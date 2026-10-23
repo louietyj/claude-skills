@@ -22,6 +22,8 @@
 //   POST /note?id     a short note for the device (vibrates the watch)
 //   POST /speak?id    talk mode: say {text} through the device; blocks until played or interrupted
 //   POST /set?id      talk mode: {hold_s}, the silence that closes Louie's turn
+//   POST /call?id     {to}: Telnyx rings that number for the room's phone line
+//   POST /hangup?id   end the phone line
 // Monitor (the session's event_key as ?k=):
 //   GET  /events?id   websocket: news entries past ?since, then each new one
 //   POST /stop?id     end the session
@@ -30,6 +32,8 @@
 //   GET  /status?id
 // Anyone:
 //   GET  /health      which secrets are set, never their values
+// Telnyx (its Ed25519 signature):
+//   POST /telnyx      call webhooks; client_state names the session
 //   GET  /aec/*       the page's own echo canceller (../aec): wasm, wrapper, worklet
 import PAGE from "./page.html";
 import AEC3_WASM from "../aec/aec3.wasm";
@@ -50,6 +54,10 @@ const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const NO_AUDIO_MAX_MS = 60 * 60_000;
 // Why speech stopped, as `speak` reports it, when the audio left its holder.
 const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding the audio disconnected" };
+const TELNYX_API_URL = "https://api.telnyx.com";
+const E164_RE = /^\+[1-9]\d{6,14}$/;
+const RING_S = 20;                       // rings out before a voicemail would answer
+const WEBHOOK_SKEW_S = 300;              // older signed webhooks are refused as replays
 const KEEP_MS = 24 * 3600_000;
 const KEEPALIVE_MS = 5000;
 const MIC_STALE_MS = 12_000;      // the page repeats its mic reading every ~5s
@@ -318,8 +326,9 @@ export class Session {
   // Each screen learns where the audio is, and whether it is itself.
   sendRoom() {
     const audio = this.holder ? this.ui(this.holder) : null;
+    const call = this.meta.call ? { state: this.meta.call.state, up_at: this.meta.call.up_at ?? null } : null;
     for (const ws of this.screens.keys()) {
-      try { ws.send(JSON.stringify({ type: "room", audio, mine: ws === this.holder })); } catch {}
+      try { ws.send(JSON.stringify({ type: "room", audio, mine: ws === this.holder, call })); } catch {}
     }
   }
 
@@ -610,7 +619,7 @@ export class Session {
       await this.saveMeta();
       await this.registry("/put", { id: this.meta.id, state: "expired" });
       await this.ctx.storage.setAlarm(now + KEEP_MS);
-    } else if (this.live() && this.meta.absent_since && now - this.meta.absent_since >= DEVICE_GONE_MS) {
+    } else if (this.live() && this.meta.absent_since && !this.meta.call && now - this.meta.absent_since >= DEVICE_GONE_MS) {
       await this.end(`no screen was open for ${Math.round(DEVICE_GONE_MS / 60000)} minutes`);
     } else if (this.live() && this.meta.no_audio_since && now - this.meta.no_audio_since >= NO_AUDIO_MAX_MS) {
       await this.end(`no audio for ${Math.round(NO_AUDIO_MAX_MS / 60000)} minutes`);
@@ -683,15 +692,99 @@ export class Session {
     await this.addEntry("event", { text: `Louie left audio: nothing is heard${this.talk() ? ", and you can't speak," : ""} until he turns it back on` });
   }
 
+  // --- the phone line ----------------------------------------------------------------
+  //
+  // Telnyx rings a number (Louie's, passed in each time: none is kept) and its
+  // webhooks report the call's progress. The number's last digits are all that
+  // is stored.
+
+  async telnyx(path, body) {
+    const resp = await fetch(`${this.env.TELNYX_API_URL ?? TELNYX_API_URL}${path}`, {
+      method: "POST", headers: { Authorization: `Bearer ${this.env.TELNYX_API_KEY}`, "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(`Telnyx ${path} returned ${resp.status}: ${JSON.stringify(out.errors ?? out).slice(0, 200)}`);
+    return out.data ?? {};
+  }
+
+  // Data may be dead when the call is wanted, so it can open a room no screen has.
+  async goLive() {
+    if (this.meta.state !== "armed") return;
+    Object.assign(this.meta, { state: "live", started_at: Date.now(), no_audio_since: Date.now(),
+                               no_audio_why: "unpicked" });
+    await this.registry("/put", { id: this.meta.id, state: "live" });
+    await this.armTimer();
+  }
+
+  async dial(to, byLouie) {
+    if (this.meta.state !== "armed" && !this.live()) return { ok: false, error: `session is ${this.meta.state}` };
+    if (!this.env.TELNYX_API_KEY || !this.env.TELNYX_CONNECTION_ID || !this.env.TELNYX_FROM) {
+      return { ok: false, error: "the relay has no phone line set up" };
+    }
+    if (!E164_RE.test(String(to ?? ""))) return { ok: false, error: "the number must be E.164, like +14155550123" };
+    if (this.meta.call) return { ok: false, error: `a call is already ${this.meta.call.state}` };
+    const key = randomKey();
+    const origin = this.meta.origin;
+    let data;
+    try {
+      data = await this.telnyx("/v2/calls", {
+        connection_id: this.env.TELNYX_CONNECTION_ID, from: this.env.TELNYX_FROM, to,
+        timeout_secs: RING_S,
+        webhook_url: `${origin}/telnyx`, client_state: btoa(JSON.stringify({ id: this.meta.id })),
+        stream_url: `${origin.replace(/^http/, "ws")}/phone?id=${this.meta.id}&k=${key}`,
+        stream_track: "inbound_track", stream_bidirectional_mode: "rtp", stream_bidirectional_codec: "L16",
+      });
+    } catch (e) {
+      await this.addEntry("event", { text: `could not call Louie's phone: ${e.message}` });
+      return { ok: false, error: e.message };
+    }
+    await this.goLive();
+    this.meta.call = { state: "dialing", ccid: data.call_control_id, key, to4: to.slice(-4), at: Date.now() };
+    await this.addEntry("event", { text: `${byLouie ? "Louie asked for a call: " : ""}calling his phone (…${to.slice(-4)})` });
+    this.sendRoom();
+    return { ok: true, state: "dialing" };
+  }
+
+  async hangUp() {
+    const call = this.meta.call;
+    if (!call) return { ok: false, error: "no call" };
+    try { await this.telnyx(`/v2/calls/${encodeURIComponent(call.ccid)}/actions/hangup`); }
+    catch (e) { return { ok: false, error: e.message }; }
+    return { ok: true };
+  }
+
+  // Webhooks for any other call (an old one, a retry) are ignored.
+  async onTelnyx(event) {
+    const type = event?.event_type, p = event?.payload ?? {};
+    const call = this.meta.call;
+    if (!call || p.call_control_id !== call.ccid) return;
+    if (type === "call.initiated" && call.state === "dialing") {
+      call.state = "ringing";
+      await this.saveMeta();
+    } else if (type === "call.answered") {
+      call.state = "up";
+      call.up_at = Date.now();
+      await this.addEntry("event", { text: "phone line connected" });
+    } else if (type === "call.hangup") {
+      this.meta.call = null;
+      if (!this.screens.size) this.meta.absent_since = Date.now();
+      const how = [p.hangup_cause, p.hangup_source && `by the ${p.hangup_source}`].filter(Boolean).join(", ");
+      const what = call.state === "up" ? `phone line ended after ${Math.round((Date.now() - call.up_at) / 1000)}s`
+                                       : "the call to Louie's phone was not answered";
+      await this.addEntry("event", { text: `${what}${how ? ` (${how})` : ""}` });
+      await this.armTimer();
+    } else {
+      return;
+    }
+    this.sendRoom();
+  }
+
   async acceptDevice() {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
     this.screens.set(server, { ui: null });
-    if (this.meta.state === "armed") {
-      Object.assign(this.meta, { state: "live", started_at: Date.now(), no_audio_since: Date.now(),
-                                 no_audio_why: "unpicked" });
-      await this.registry("/put", { id: this.meta.id, state: "live" });
-    }
+    await this.goLive();
     this.meta.absent_since = null;
     await this.saveMeta();
     await this.armTimer();
@@ -713,7 +806,7 @@ export class Session {
         await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
       }
       this.screens.delete(server);
-      if (this.live() && !this.stopping && !this.screens.size) {
+      if (this.live() && !this.stopping && !this.screens.size && !this.meta.call) {
         this.meta.absent_since = Date.now();
         await this.saveMeta();
         await this.armTimer();
@@ -743,6 +836,12 @@ export class Session {
     }
     if (msg.type === "take") return this.takeAudio(ws);
     if (msg.type === "leave") return this.leaveAudio();
+    if (msg.type === "call") {
+      const out = await this.dial(msg.to, true);
+      if (!out.ok) { try { ws.send(JSON.stringify({ type: "call_failed", error: out.error })); } catch {} }
+      return;
+    }
+    if (msg.type === "hangup") return this.hangUp();
     if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (ws !== this.holder) return;
@@ -825,6 +924,8 @@ export class Session {
       hidden_s: s(this.meta.hidden_since),
       mic: this.micHears() ? "live" : this.meta.mic_silent_since ? "silent" : "unknown",
       mic_silent_s: s(this.meta.mic_silent_since),
+      call: this.meta.call ? { state: this.meta.call.state, to: `…${this.meta.call.to4}`,
+                               s: s(this.meta.call.up_at ?? this.meta.call.at) } : null,
       last_audio_s: s(this.lastAudioAt),
       transcriber: this.stt ? "open" : this.sttOpening ? "opening" : "closed",
     };
@@ -1257,6 +1358,18 @@ export class Session {
       const out = await this.setHold(Number(b?.hold_s) * 1000, false);
       return json(out, out.ok ? 200 : 400);
     }
+    if (path === "/call") {
+      const out = await this.dial((await req.json().catch(() => ({})))?.to, false);
+      return json(out, out.ok ? 200 : 400);
+    }
+    if (path === "/hangup") {
+      const out = await this.hangUp();
+      return json(out, out.ok ? 200 : 400);
+    }
+    if (path === "/telnyx-event") {
+      await this.onTelnyx(await req.json());
+      return json({ ok: true });
+    }
     if (path === "/watch") return this.watch(q, req.signal);
     if (path === "/note") return this.note(await req.json().catch(() => null));
     if (path === "/stop") {
@@ -1290,8 +1403,23 @@ export class Session {
 // ---------------------------------------------------------------------------
 
 const DEVICE_ROUTES = new Set(["/armed", "/device"]);
-const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/set", "/stop", "/transcript", "/status",
-                            "/audio", "/pair"]);
+const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/set", "/call", "/hangup", "/stop",
+                            "/transcript", "/status", "/audio", "/pair"]);
+
+// Telnyx signs `{timestamp}|{raw body}` with the account's Ed25519 key. An unset
+// public key refuses everything, like the relay's other gates.
+async function telnyxSigned(env, req, body) {
+  const sig = req.headers.get("telnyx-signature-ed25519"), ts = req.headers.get("telnyx-timestamp");
+  if (!env.TELNYX_PUBLIC_KEY || !sig || !/^\d+$/.test(ts ?? "")) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > WEBHOOK_SKEW_S) return false;
+  const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  try {
+    const key = await crypto.subtle.importKey("raw", bytes(env.TELNYX_PUBLIC_KEY), { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, bytes(sig), new TextEncoder().encode(`${ts}|${body}`));
+  } catch {
+    return false;
+  }
+}
 // Gated inside the session by its own keys: a Monitor URL never carries the CLI
 // token, and the SFU adapter never sees it.
 const EVENT_ROUTES = new Set(["/events", "/tts-in"]);
@@ -1314,7 +1442,27 @@ export default {
         CLI_TOKEN: !!env.CLI_TOKEN, DEVICE_TOKEN: !!env.DEVICE_TOKEN,
         SONIOX_API_KEY: !!env.SONIOX_API_KEY, DEEPGRAM_API_KEY: !!env.DEEPGRAM_API_KEY,
         REALTIME_APP_ID: !!env.REALTIME_APP_ID, REALTIME_APP_TOKEN: !!env.REALTIME_APP_TOKEN,
+      }, phone_line: {
+        TELNYX_API_KEY: !!env.TELNYX_API_KEY, TELNYX_PUBLIC_KEY: !!env.TELNYX_PUBLIC_KEY,
+        TELNYX_CONNECTION_ID: !!env.TELNYX_CONNECTION_ID, TELNYX_FROM: !!env.TELNYX_FROM,
       } });
+    }
+
+    // Telnyx's webhooks: the signature is the gate, and client_state names the session.
+    if (path === "/telnyx" && req.method === "POST") {
+      const body = await req.text();
+      if (!(await telnyxSigned(env, req, body))) return json({ error: "bad signature" }, 401);
+      let event, sid;
+      try {
+        event = JSON.parse(body).data;
+        sid = JSON.parse(atob(event.payload.client_state)).id;
+      } catch {
+        return json({ ok: true });                 // not one of ours
+      }
+      if (!ID_RE.test(sid ?? "")) return json({ ok: true });
+      const stub = env.SESSION.get(env.SESSION.idFromName(sid));
+      await stub.fetch("https://session/telnyx-event", { method: "POST", body: JSON.stringify(event) });
+      return json({ ok: true });                   // Telnyx retries anything else
     }
 
     // The code is this route's only gate; the page keeps the token it returns.

@@ -1,5 +1,6 @@
 """Screenshot the device page at watch and phone sizes in a talk session:
-joined with no audio, holding it, and with the settings sheet open, against
+joined with no audio, holding it, the settings sheet, then calling the phone
+and on the call (answered by the fake Telnyx), against
 `wrangler dev` and the fakes (as
 worker/test_session.py runs them). The watch shot gets its round face drawn
 on, so anything crossing the edge of the circle shows up.
@@ -103,6 +104,12 @@ def main():
             tab.js("document.getElementById('menu').click()")
             tab.wait("document.getElementById('holdval').textContent.endsWith('s')")
             tab.shot(OUT / f"{name}-settings.png", round_face)
+            tab.js("myNumber = '+14155550123'; document.getElementById('callme2').click()")
+            tab.wait("document.getElementById('where').textContent.startsWith('Calling')")
+            tab.shot(OUT / f"{name}-calling.png", round_face)
+            ts.TELNYX.answer(ts.TELNYX.last())
+            tab.wait("document.getElementById('where').textContent.startsWith('On the phone')")
+            tab.shot(OUT / f"{name}-oncall.png", round_face)
             tab.js("document.getElementById('stop').click()")
             time.sleep(1)
     finally:

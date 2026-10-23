@@ -8,6 +8,7 @@ Claude lives on.
 
 A running one must have been started with WRANGLER_VARS below.
 """
+import base64
 import json
 import os
 import subprocess
@@ -27,6 +28,7 @@ from websockets.sync.client import connect
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "dev"))
 import fake_stt  # noqa: E402
+import fake_telnyx  # noqa: E402
 
 PORT = 8799
 BASE = sys.argv[1] if len(sys.argv) > 1 else f"http://127.0.0.1:{PORT}"
@@ -39,8 +41,12 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
-                 "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen")
+                 "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
+                 f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
+                 f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
+                 "--var TELNYX_FROM:+15550100")
 FAKE = None
+TELNYX = None
 WRANGLER = None
 
 
@@ -128,8 +134,9 @@ def wait_streams(n, timeout=8):
 
 
 def setUpModule():
-    global FAKE, WRANGLER
+    global FAKE, TELNYX, WRANGLER
     FAKE = fake_stt.start(8798)
+    TELNYX = fake_telnyx.start(8797)
     if len(sys.argv) > 1:
         return
     persist = tempfile.mkdtemp(prefix="intercom-test-")
@@ -163,6 +170,8 @@ class Gates(unittest.TestCase):
         self.assertEqual(out["secrets"], {"CLI_TOKEN": True, "DEVICE_TOKEN": True,
                                           "SONIOX_API_KEY": True, "DEEPGRAM_API_KEY": True,
                                           "REALTIME_APP_ID": True, "REALTIME_APP_TOKEN": True})
+        self.assertTrue(all(out["phone_line"].values()), out["phone_line"])
+        self.assertNotIn("txkey", json.dumps(out))
 
     def test_wrong_tokens_are_refused(self):
         self.assertEqual(http("/watch", token="nope", id="AAAA")[0], 401)
@@ -268,14 +277,14 @@ class Room(unittest.TestCase):
         n = stream_count()
         sid = create()
         ws = screen(sid, "phone")
-        self.assertEqual(self.room(ws), {"type": "room", "audio": None, "mine": False})
+        self.assertEqual(self.room(ws), {"type": "room", "audio": None, "mine": False, "call": None})
         dev = http("/status", id=sid)[1]["device"]
         self.assertEqual((dev["screens"], dev["audio"], dev["no_audio_why"]), (["phone"], None, "unpicked"))
         ws.send(json.dumps({"type": "seg"}))          # not the holder: ignored
         time.sleep(0.5)
         self.assertEqual(stream_count(), n)
         ws.send(json.dumps({"type": "take"}))
-        self.assertEqual(self.room(ws), {"type": "room", "audio": "phone", "mine": True})
+        self.assertEqual(self.room(ws), {"type": "room", "audio": "phone", "mine": True, "call": None})
         wait_entries(sid, lambda es: "recording started on the phone" in texts(es, "event"))
         ws.close()
 
@@ -284,7 +293,7 @@ class Room(unittest.TestCase):
         a = device(sid)
         wait_entries(sid, lambda es: es)
         b = screen(sid, "phone")
-        self.assertEqual(self.room(b), {"type": "room", "audio": "watch", "mine": False})
+        self.assertEqual(self.room(b), {"type": "room", "audio": "watch", "mine": False, "call": None})
         http("/note", "POST", {"text": "both see this"}, id=sid)
         for ws in (a, b):
             recv_until(ws, lambda m: m.get("type") == "note")
@@ -999,6 +1008,111 @@ class TurnWait(unittest.TestCase):
         es = wait_entries(sid, lambda es: texts(es, "turn"), timeout=4)
         self.assertEqual(texts(es, "turn"), ["One thought."])
         ws.close()
+
+
+LOUIE = "+14155550123"
+
+
+def call_events(sid):
+    return [t for t in texts(entries(sid), "event") if "phone" in t or "call" in t]
+
+
+class PhoneLine(unittest.TestCase):
+    def dial(self, sid, to=LOUIE):
+        status, out = http("/call", "POST", {"to": to}, id=sid)
+        self.assertEqual((status, out), (200, {"ok": True, "state": "dialing"}))
+        return TELNYX.last()
+
+    def room_call(self, ws, state):
+        return recv_until(ws, lambda m: m.get("type") == "room" and (m.get("call") or {}).get("state") == state)
+
+    def test_dialing_asks_telnyx_for_a_short_ring_and_a_stream_back_to_this_room(self):
+        sid = create(mode="talk")
+        ws = screen(sid, "phone")
+        ccid = self.dial(sid)
+        call = TELNYX.calls[ccid]
+        b = call["body"]
+        self.assertEqual(call["auth"], "Bearer txkey")
+        self.assertEqual((b["to"], b["from"], b["connection_id"], b["timeout_secs"]),
+                         (LOUIE, "+15550100", "conn1", 20))
+        self.assertEqual(json.loads(base64.b64decode(b["client_state"])), {"id": sid})
+        self.assertTrue(b["webhook_url"].endswith("/telnyx"), b["webhook_url"])
+        self.assertRegex(b["stream_url"], rf"^ws://.*/phone\?id={sid}&k=\w+$")
+        self.assertEqual((b["stream_track"], b["stream_bidirectional_mode"], b["stream_bidirectional_codec"]),
+                         ("inbound_track", "rtp", "L16"))
+        self.room_call(ws, "ringing")
+        self.assertIn("calling his phone (…0123)", call_events(sid))
+        # Only the last digits are kept.
+        self.assertNotIn("4155550123", json.dumps(http("/status", id=sid)[1]))
+        ws.close()
+
+    def test_answer_then_hang_up_is_news_and_reaches_every_screen(self):
+        sid = create()
+        ws = screen(sid, "phone")
+        ccid = self.dial(sid)
+        TELNYX.answer(ccid)
+        self.room_call(ws, "up")
+        self.assertEqual(http("/status", id=sid)[1]["device"]["call"]["state"], "up")
+        TELNYX.hang_up(ccid)
+        recv_until(ws, lambda m: m.get("type") == "room" and m.get("call") is None)
+        es = wait_entries(sid, lambda es: any("phone line ended" in t for t in texts(es, "event")))
+        self.assertIn("phone line connected", texts(es, "event"))
+        self.assertRegex(texts(es, "event")[-1], r"phone line ended after \d+s \(normal_clearing, by the callee\)")
+        self.assertIsNone(http("/status", id=sid)[1]["device"]["call"])
+        ws.close()
+
+    def test_claude_can_call_before_any_screen_opens_the_room(self):
+        sid = create()
+        self.dial(sid)
+        self.assertEqual(http("/status", id=sid)[1]["state"], "live")
+        self.assertIn(sid, [s["id"] for s in http("/armed", token=None, k=DEV)[1]["sessions"] if s["state"] == "live"])
+
+    def test_an_unanswered_call_says_so(self):
+        sid = create()
+        ccid = self.dial(sid)
+        TELNYX.hang_up(ccid, cause="timeout", source="callee")
+        wait_entries(sid, lambda es: any("was not answered (timeout" in t for t in texts(es, "event")))
+
+    def test_a_screen_can_ask_for_the_call_and_hang_it_up(self):
+        sid = create()
+        ws = screen(sid, "watch")
+        ws.send(json.dumps({"type": "call", "to": LOUIE}))
+        self.room_call(ws, "ringing")
+        ccid = TELNYX.last()
+        self.assertIn("Louie asked for a call: calling his phone (…0123)", call_events(sid))
+        TELNYX.answer(ccid)
+        self.room_call(ws, "up")
+        ws.send(json.dumps({"type": "hangup"}))
+        wait_entries(sid, lambda es: any("by the caller" in t for t in texts(es, "event")))
+        self.assertEqual(TELNYX.hangups[-1], ccid)
+        ws.close()
+
+    def test_bad_numbers_and_a_second_call_are_refused(self):
+        sid = create()
+        ws = screen(sid, "phone")
+        self.assertEqual(http("/call", "POST", {"to": "4155550123"}, id=sid)[0], 400)
+        ws.send(json.dumps({"type": "call", "to": "call me"}))
+        self.assertIn("E.164", recv_until(ws, lambda m: m.get("type") == "call_failed")["error"])
+        self.dial(sid)
+        status, out = http("/call", "POST", {"to": LOUIE}, id=sid)
+        self.assertEqual(status, 400)
+        self.assertIn("already", out["error"])
+        self.assertEqual(http("/hangup", "POST", {}, id=create())[0], 400)
+        ws.close()
+
+    def test_only_webhooks_signed_with_the_accounts_key_count(self):
+        sid = create()
+        ccid = self.dial(sid)
+        body = json.dumps({"data": {"event_type": "call.answered", "payload": {
+            "call_control_id": ccid, "client_state": TELNYX.calls[ccid]["body"]["client_state"]}}})
+        url = f"{BASE}/telnyx"
+        forger = fake_telnyx.Ed25519PrivateKey.generate()
+        self.assertEqual(TELNYX.post_signed(url, body, key=forger), 401)
+        self.assertEqual(TELNYX.post_signed(url, body, ts=int(time.time()) - 3600), 401)
+        self.assertEqual(TELNYX.post_signed(url, body, sign_ts=int(time.time()) - 1), 401)
+        self.assertNotIn("phone line connected", call_events(sid))
+        self.assertEqual(TELNYX.post_signed(url, body), 200)
+        wait_entries(sid, lambda es: "phone line connected" in texts(es, "event"))
 
 
 class Archive(unittest.TestCase):

@@ -55,7 +55,9 @@ button:active{background:#2a2a2a}
 #menu svg{width:4vmin;height:4vmin;fill:var(--dim)}
 /* Over the whole stage, and inside the middle of a round face. */
 #sheet{position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
-       justify-content:center;gap:5vmin;z-index:1}
+       justify-content:center;justify-content:safe center;gap:4vmin;z-index:1;overflow-y:auto;padding:14vmin 0}
+#phonenum{width:62vmin;font-size:6vmin;text-align:center;border-radius:3vmin;padding:1.5vmin}
+#numrow button{font-size:4.5vmin;border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 1vmin}
 #holdrow{display:flex;flex-direction:column;align-items:center;gap:2vmin}
 .label{font-size:7vmin}
 .hint{color:var(--dim);font-size:4.5vmin;max-width:60vmin}
@@ -92,8 +94,8 @@ button:active{background:#2a2a2a}
   <div id="live" class="hide">
     <div id="status" class="hide"></div>
     <div id="choices" class="hide">
-      <div class="hint">No audio in the room yet</div>
       <button id="usehere" class="pill">This device</button>
+      <button id="callme" class="pill">Call me</button>
     </div>
     <div id="where" class="hide"></div>
     <div id="note"></div>
@@ -114,8 +116,13 @@ button:active{background:#2a2a2a}
     </div>
     <div class="hint">silence before your turn goes to Claude</div>
   </div>
+  <button id="callme2" class="pill hide">Call me</button>
+  <button id="hangup" class="pill hide">Hang up the call</button>
   <button id="usehere2" class="pill hide">Use this device</button>
   <button id="pip" class="pill hide">Picture in picture</button>
+  <div id="numrow" class="hint"></div>
+  <input id="phonenum" class="hide" type="tel" autocomplete="tel" placeholder="+1 415 555 0123">
+  <button id="savenum" class="pill hide">Save number</button>
   <button id="done" class="pill">Done</button>
 </div>
 <div id="debug" class="hide"></div>
@@ -149,7 +156,7 @@ let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = n
 let sendStream = null, muted = false, raw = null, aec = null;
 // The room can have many screens; at most one holds the audio. `roomAudio` is
 // which ("watch", "phone"), null for none, undefined until the relay says.
-let holding = false, roomAudio;
+let holding = false, roomAudio, roomCall = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
@@ -174,9 +181,16 @@ function renderRoom() {
   const inRoom = mode === "live";
   $("pause").classList.toggle("hide", !inRoom || !holding);
   $("mute").classList.toggle("hide", !inRoom || !holding);
-  $("choices").classList.toggle("hide", !inRoom || holding || roomAudio !== null);
-  $("where").classList.toggle("hide", !inRoom || holding || !roomAudio);
-  $("where").textContent = roomAudio ? `Audio on the ${roomAudio}` : "";
+  $("choices").classList.toggle("hide", !inRoom || holding || roomAudio !== null || !!roomCall);
+  $("where").classList.toggle("hide", !inRoom || !(roomCall || (!holding && roomAudio)));
+  $("where").textContent = roomCall
+    ? (roomCall.state === "up" ? `On the phone · ${elapsed(roomCall.up_at)}` : "Calling your phone…")
+    : roomAudio ? `Audio on the ${roomAudio}` : "";
+}
+
+function elapsed(since) {
+  const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 // Only trouble and pauses: an empty status leaves the room to the steer note.
 function status(text, cls) {
@@ -393,10 +407,12 @@ function onMessage(m) {
   else if (m.type === "voice_failed") voiceFailed(m.error);
   else if (m.type === "settings") { holdMs = m.hold_ms; renderSheet(); }
   else if (m.type === "release") releaseAudio();
+  else if (m.type === "call_failed") status(`Call failed: ${m.error}`, "red");
   else if (m.type === "room") {
     // Only a `release` takes the audio away: a room message sent before the
     // relay saw this screen's take would otherwise undo it.
     roomAudio = m.audio;
+    roomCall = m.call || null;
     renderRoom();
     renderSheet();
   }
@@ -416,8 +432,15 @@ try {
 
 function renderSheet() {
   $("holdrow").classList.toggle("hide", !talk);
-  $("usehere2").classList.toggle("hide", holding || !roomAudio);
+  $("callme2").classList.toggle("hide", !!roomCall);
+  $("hangup").classList.toggle("hide", !roomCall);
+  $("usehere2").classList.toggle("hide", holding || !(roomAudio || roomCall));
   $("pip").classList.toggle("hide", !PIP_OK || !holding);
+  const editing = editingNumber || !myNumber;
+  $("numrow").innerHTML = myNumber && !editing ? `Calls ${myNumber} <button id="changenum">change</button>` : "Your number, for Call me";
+  if ($("changenum")) $("changenum").onclick = () => { editingNumber = true; renderSheet(); };
+  $("phonenum").classList.toggle("hide", !editing);
+  $("savenum").classList.toggle("hide", !editing);
   if (holdMs == null) { $("holdval").textContent = "…"; return; }
   $("holdval").textContent = `${holdMs / 1000}s`;
   $("holddown").disabled = holdMs <= HOLD_STEPS[0];
@@ -434,7 +457,47 @@ function stepHold(dir) {
   renderSheet();
 }
 
-function closeSheet() { $("sheet").classList.add("hide"); }
+function closeSheet() { $("sheet").classList.add("hide"); editingNumber = false; }
+
+// ---- the phone line ------------------------------------------------------------------
+// The relay keeps no number: this device remembers Louie's and sends it with
+// each Call me.
+
+const PHONE_KEY = "intercom-phone";
+let myNumber = "", editingNumber = false;
+try { myNumber = localStorage.getItem(PHONE_KEY) || ""; } catch {}
+
+// Accepts what people type: "+1 (415) 555-0123", or ten US digits.
+function e164(text) {
+  const digits = text.replace(/[^\d]/g, "");
+  const n = text.trim().startsWith("+") ? `+${digits}` : digits.length === 10 ? `+1${digits}` : `+${digits}`;
+  return /^\+[1-9]\d{6,14}$/.test(n) ? n : null;
+}
+
+function callMe() {
+  if (!myNumber) {
+    editingNumber = true;
+    renderSheet();
+    $("sheet").classList.remove("hide");
+    return $("phonenum").focus();
+  }
+  closeSheet();
+  status("");
+  send({ type: "call", to: myNumber });
+}
+
+$("savenum").onclick = () => {
+  const n = e164($("phonenum").value);
+  if (!n) { $("numrow").textContent = "That doesn't look like a phone number"; return; }
+  myNumber = n;
+  try { localStorage.setItem(PHONE_KEY, n); } catch {}
+  editingNumber = false;
+  renderSheet();
+};
+$("callme").onclick = callMe;
+$("callme2").onclick = callMe;
+$("hangup").onclick = () => { closeSheet(); send({ type: "hangup" }); };
+setInterval(() => { if (roomCall?.state === "up") renderRoom(); }, 1000);
 
 $("menu").onclick = () => { renderSheet(); $("sheet").classList.remove("hide"); };
 $("done").onclick = closeSheet;

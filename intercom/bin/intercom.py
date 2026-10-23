@@ -143,6 +143,11 @@ def describe_device(d, state):
         return "no screen yet: Louie has not opened the room"
     screens = d.get("screens") or []
     who = d.get("audio")
+    call = d.get("call")
+    if call and call.get("state") != "up":
+        return f"calling Louie's phone ({call.get('to')}), {call.get('state')} for {call.get('s')}s"
+    if call:
+        return f"phone line up for {call.get('s')}s ({call.get('to')})"
     if not who:
         since = d.get("no_audio_s")
         ago = f" {since}s ago" if since is not None else ""
@@ -181,13 +186,17 @@ def cmd_health(cfg, args):
     missing = [k for k, v in body.get("secrets", {}).items() if not v]
     if missing:
         die(f"relay is missing secrets: {', '.join(missing)} (wrangler secret put)")
+    phone = body.get("phone_line") or {}
+    phone_line = "set up" if phone and all(phone.values()) else \
+        f"not set up (missing {', '.join(k for k, v in phone.items() if not v) or 'everything'}): `call` will fail"
     # 404 for a session that cannot exist proves the token passed the gate.
     status, body = relay(cfg, "/status", id="AAAA", timeout=15)
     if status == 401:
         die("relay rejected cli_token -- config.json and the CLI_TOKEN secret disagree")
     if status not in (200, 404):
         die(f"relay error on an authenticated route: {status} {error_text(body)}")
-    emit({"ok": True, "relay": cfg["worker_url"], "secrets": "all set", "cli_token": "accepted"})
+    emit({"ok": True, "relay": cfg["worker_url"], "secrets": "all set", "cli_token": "accepted",
+          "phone_line": phone_line})
 
 
 def read_terms(args):
@@ -327,6 +336,23 @@ def cmd_speak(cfg, args):
         out["hint"] = ("nothing was played: Louie said something you hadn't read, or is still talking. "
                        "Read his turn, then decide what to say now.")
     emit(out)
+
+
+def cmd_call(cfg, args):
+    sid = current_id(args)
+    status, body = relay(cfg, "/call", method="POST", id=sid, body={"to": args.to}, timeout=30)
+    if status != 200 or not isinstance(body, dict):
+        die(f"not called: {status} {error_text(body)}")
+    emit({"id": sid, "call": body.get("state"),
+          "next": "his phone is ringing; the device line and events say when it connects or ends"})
+
+
+def cmd_hangup(cfg, args):
+    sid = current_id(args)
+    status, body = relay(cfg, "/hangup", method="POST", id=sid, body={}, timeout=30)
+    if status != 200:
+        die(f"not hung up: {status} {error_text(body)}")
+    emit({"id": sid, "ok": True})
 
 
 def cmd_set(cfg, args):
@@ -503,6 +529,15 @@ def main():
                     help="testing: Louie's voice doesn't stop this one (pausing still does)")
     sp.add_argument("--id")
     sp.set_defaults(fn=cmd_speak)
+
+    ca = sub.add_parser("call", help="have Telnyx ring a phone (Louie's) for the room's audio")
+    ca.add_argument("--to", required=True, help="E.164, e.g. +14155550123; Louie's is in memory, never in config")
+    ca.add_argument("--id")
+    ca.set_defaults(fn=cmd_call)
+
+    hu = sub.add_parser("hangup", help="end the room's phone call")
+    hu.add_argument("--id")
+    hu.set_defaults(fn=cmd_hangup)
 
     se = sub.add_parser("set", help="talk mode: change a live session's settings")
     se.add_argument("--hold", type=float, required=True,

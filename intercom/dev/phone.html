@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fake handset</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;min-height:100vh;background:#111;color:#eee;font-family:system-ui,sans-serif;
+     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+h1{font-size:18px;font-weight:600;color:#999}
+#who{font-size:28px}
+#state{color:#9a9}
+.row{display:flex;gap:12px}
+button{font:inherit;font-size:18px;padding:12px 22px;border-radius:24px;border:1px solid #444;background:#222;color:#eee}
+#answer{background:#1d5a2a} #hangup,#decline{background:#6a1f1f}
+.hide{display:none}
+</style>
+</head><body>
+<h1>Fake handset (dev/fake_telnyx.py)</h1>
+<div id="who">No call</div>
+<div id="state"></div>
+<div class="row">
+  <button id="answer" class="hide">Answer</button>
+  <button id="decline" class="hide">Decline</button>
+  <button id="hangup" class="hide">Hang up</button>
+  <button id="drop" class="hide" title="as if the signal were lost">Drop</button>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let call = null;
+
+async function act(action) {
+  if (call) await fetch(`/fake/${action}/${encodeURIComponent(call.id)}`, { method: "POST" });
+  poll();
+}
+$("answer").onclick = () => act("answer");
+$("decline").onclick = () => act("hangup");
+$("hangup").onclick = () => act("hangup");
+$("drop").onclick = () => act("drop");
+
+async function poll() {
+  try { call = (await (await fetch("/fake/calls", { cache: "no-store" })).json()).at(-1) || null; } catch {}
+  $("who").textContent = call ? call.to : "No call";
+  $("state").textContent = call ? (call.state === "ringing" ? "Ringing…" : "On the call") : "";
+  const ringing = call?.state === "ringing", up = call?.state === "up";
+  $("answer").classList.toggle("hide", !ringing);
+  $("decline").classList.toggle("hide", !ringing);
+  $("hangup").classList.toggle("hide", !up);
+  $("drop").classList.toggle("hide", !up);
+}
+setInterval(poll, 500);
+poll();
+</script>
+</body></html>

@@ -284,6 +284,30 @@ class Talk(Base):
         code, out, _ = self.run_cli(["set", "--hold", "5"], relay)
         self.assertEqual((code, relay.calls[-1]["body"], json.loads(out)["hold_s"]), (0, {"hold_s": 5}, 5))
 
+    def test_call_sends_the_number_given_and_shows_a_refusal(self):
+        relay = Relay({"/call": (200, {"ok": True, "state": "dialing"})})
+        code, out, _ = self.run_cli(["call", "--to", "+14155550123"], relay)
+        self.assertEqual((code, relay.calls[-1]["body"], json.loads(out)["call"]), (0, {"to": "+14155550123"}, "dialing"))
+        relay = Relay({"/call": (400, {"ok": False, "error": "the relay has no phone line set up"})})
+        code, _, err = self.run_cli(["call", "--to", "+14155550123"], relay)
+        self.assertEqual(code, 1)
+        self.assertIn("no phone line set up", err)
+
+    def test_the_device_line_names_the_call(self):
+        ringing = {"screens": [], "audio": None, "call": {"state": "ringing", "to": "…0123", "s": 4}}
+        self.assertEqual(intercom.describe_device(ringing, "live"), "calling Louie's phone (…0123), ringing for 4s")
+        up = dict(ringing, call={"state": "up", "to": "…0123", "s": 30})
+        self.assertEqual(intercom.describe_device(up, "live"), "phone line up for 30s (…0123)")
+
+    def test_health_says_whether_the_phone_line_is_set_up(self):
+        secrets = {"CLI_TOKEN": True}
+        relay = Relay({"/health": (200, {"secrets": secrets, "phone_line": {"TELNYX_API_KEY": True,
+                                                                             "TELNYX_FROM": False}}),
+                       "/status": (404, {"error": "no such session"})})
+        code, out, _ = self.run_cli(["health"], relay)
+        self.assertEqual(code, 0)
+        self.assertIn("missing TELNYX_FROM", json.loads(out)["phone_line"])
+
     def test_refused_turn_wait_shows_the_relays_reason(self):
         relay = Relay({"/set": (400, {"ok": False, "error": "the turn wait must be 0-10s"})})
         code, _, err = self.run_cli(["set", "--hold", "30"], relay)

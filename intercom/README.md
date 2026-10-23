@@ -30,12 +30,13 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, set, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
 | `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
 | `dev/fake_stt.py` | Soniox-shaped live STT and TTS and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
+| `dev/fake_telnyx.py` | Telnyx-shaped call API and signed webhooks, driven by tests or by `dev/phone.html`, the fake handset it serves at `/phone` |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
 | `dev/soniox_compare.py` | streams a file straight to Soniox, for comparing providers on identical bytes |
 | `dev/make_sample.ps1` | two Windows voices act out a consultation -> `dev/sample.webm` |

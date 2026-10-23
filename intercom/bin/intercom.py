@@ -146,7 +146,7 @@ def describe_device(d, state):
     call = d.get("call")
     if call and call.get("state") != "up":
         return f"calling Louie's phone ({call.get('to')}), {call.get('state')} for {call.get('s')}s"
-    if call and who == "phone line":
+    if call and who == "line":
         audio = d.get("last_audio_s")
         if audio is not None and audio > 5:
             return f"on the phone line, but no call audio for {audio}s"
@@ -237,7 +237,7 @@ def cmd_start(cfg, args):
     write_state("current.json", {"id": sid, "label": args.label or "", "mode": args.mode, "at": time.time()})
     write_state(f"cursor-{sid}.json", {"since": 0})
     tap = (f"Tell Louie: open the intercom bookmark, join {sid} (check the id matches; it should say "
-           f"{args.mode.upper()}), and tap This device.")
+           f"{args.mode.upper()}), and tap Web (or Phone, to be called).")
     then = (" Then, if you have a Monitor tool (in any environment), arm it on the command `intercom follow`;"
             " only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
@@ -515,7 +515,7 @@ def main():
                    help="keep the audio for `transcript --batch`; deleted once that runs")
     s.add_argument("--hold", type=float,
                    help=f"talk mode: seconds of silence that close Louie's turn ({HOLD_RANGE}; default: "
-                        "his device's setting, else 3)")
+                        "his device's setting, else 0)")
     s.add_argument("--force", action="store_true", help="start even though one is still live")
     s.set_defaults(fn=cmd_start)
 

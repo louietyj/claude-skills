@@ -39,7 +39,8 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
   pass has run. Ask Louie only if he'd want a clean record; the default is off.
 - It prints an id like `K7QM`. Tell Louie: **"Join K7QM."** The bookmark
   shows whatever is waiting; the id is how he knows it's yours. Joining opens
-  the room with no audio; he then taps **This device** to use that page's mic.
+  the room with no audio; he then taps **Web** to use that page's mic, or
+  **Phone** to have the relay call him.
   Any number of his screens (phone, watch) can be in the room, and any of them
   can take the audio, but only one holds it at a time.
 - If his page says to ask for a pairing code (a new device, or cleared browser
@@ -95,7 +96,7 @@ intercom watch
   change; read it to stay current, but never steer on how it ends. A
   monologue is cut into turns at sentence ends every ~12s, so a long answer
   doesn't stay invisible until it stops. In talk mode a turn stays in `tail`
-  until Louie has been silent for the turn wait (3s unless changed), so a
+  until Louie has been silent for the turn wait (0s unless changed), so a
   pause to think doesn't end it.
 
 Leave `--interval` at the default 10s. Raising it saves tool calls but puts
@@ -239,9 +240,11 @@ whiteboard").
   for a second or two. So a turn that arrives mid-speech is deliberate.
 - He can mute: his mic sends silence, he still hears you, and you are not
   told. A long silence may be that, not inattention.
-- His turn reaches you once he has been silent for the **turn wait**, 3s by
-  default. If he says you keep cutting in, or asks for more time to think,
-  raise it: `intercom set --hold 5` (0-10s). He can change it himself in the
+- His turn reaches you once he has been silent for the **turn wait**: 0s by
+  default, so his turn comes the moment the transcriber hears him finish, and
+  his next words can arrive while you are answering (`speak` then hands them
+  back). If he says you keep cutting in, or asks for more time to think, raise
+  it: `intercom set --hold 3` (0-10s). He can change it himself in the
   page's settings too; that is logged quietly, not sent as an event, and
   `intercom status` shows the current value.
 - Without Monitor, use listen mode's loop, with a voice: `intercom watch`,
@@ -367,7 +370,7 @@ exact text in chat, saying out loud that it's there.
 | `mic SILENT for Ns` | the mic delivers pure zeros: Android silenced it (below) | tell Louie in chat at once: "your mic went silent, I'm not hearing anything" |
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no fresh mic reading: a watch (crown press, its mic stops after ~5s), a frozen phone page (an event says "stopped sending audio"), or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
 | `Louie LEFT AUDIO Ns ago` | he tapped pause (leave audio): mic and your voice are off on purpose, his screen is still in the room | nothing; keep working, and save what you'd say for when he turns it back on |
-| `in the room ... but hasn't turned audio on` | he joined and hasn't tapped This device yet | if it lasts, remind him once |
+| `in the room ... but hasn't turned audio on` | he joined and hasn't tapped Web or Phone yet | if it lasts, remind him once |
 | `holding the audio DISCONNECTED Ns ago` | the screen with the mic lost its connection (network, or the page closed) | tell him in chat; it takes the audio back by itself when it reconnects |
 | `NO SCREEN OPEN` | no page is in the room: notes don't reach him | tell him in chat if it matters |
 | `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
@@ -397,7 +400,7 @@ the relay has Telnyx ring his cell, and the call carries his voice to you and
 yours to him. Nothing else changes for you: the same turns, `speak` and turn
 wait. The device line says when the phone line holds the audio.
 
-- **He can start it** from a screen (Call me, with the number that device
+- **He can start it** from a screen (Phone, with the number that device
   keeps).
 - **You start it** when he asks, or when the screen holding the audio keeps
   dropping and he wants the line:

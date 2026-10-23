@@ -27,18 +27,21 @@ button:active{background:#2a2a2a}
 /* Centred between the clock and stop, not on the face, so a tall block
    never rides up into the clock. */
 #mid{position:absolute;top:56%;left:10%;right:10%;transform:translateY(-50%)}
+/* In a room the audio line sits under the id, so the notes start lower. */
+#stage.inroom #mid{top:62%}
 #pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
 /* Three buttons clear a round face's edge only this close together. */
 #bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:4vmin}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
 #msg{color:var(--dim);font-size:8vmin}
 #status{font-size:7vmin;font-weight:600}
-#choices{display:flex;flex-direction:column;align-items:center;gap:3vmin}
-#where{color:var(--dim);font-size:6vmin}
+#choices{display:flex;gap:3vmin;margin-top:2vmin}
+#choices .pill{font-size:5.5vmin;padding:1.2vmin 5vmin}
+#where{color:var(--dim);font-size:5.5vmin;margin-top:2vmin;font-variant-numeric:tabular-nums}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
 #note{color:#fff;font-weight:700;font-size:6.5vmin;line-height:1.2}
 /* Between the session id and the bottom row; what doesn't fit scrolls (the crown on the watch). */
-#live{max-height:36vh;max-height:36dvh;overflow-y:auto;width:100%;scrollbar-width:none}
+#live{max-height:28vh;max-height:28dvh;overflow-y:auto;width:100%;scrollbar-width:none}
 #live::-webkit-scrollbar{display:none}
 #note.flash{animation:flash .5s ease-in-out 6 alternate}
 #note.old{color:var(--dim);font-weight:600}
@@ -83,6 +86,12 @@ button:active{background:#2a2a2a}
     <span id="sid"></span>
     <button id="menu" class="hide" aria-label="settings"><svg viewBox="0 0 10 10"><circle cx="1.5" cy="5" r="1.1"/><circle cx="5" cy="5" r="1.1"/><circle cx="8.5" cy="5" r="1.1"/></svg></button>
   </div>
+  <!-- Where the room's audio is, or the two ways to give it some. -->
+  <div id="choices" class="hide">
+    <button id="usehere" class="pill">Web</button>
+    <button id="callme" class="pill">Phone</button>
+  </div>
+  <div id="where" class="hide"></div>
 </div>
 <div id="mid">
   <div id="pair" class="hide">
@@ -96,11 +105,6 @@ button:active{background:#2a2a2a}
   </div>
   <div id="live" class="hide">
     <div id="status" class="hide"></div>
-    <div id="choices" class="hide">
-      <button id="usehere" class="pill">This device</button>
-      <button id="callme" class="pill">Call me</button>
-    </div>
-    <div id="where" class="hide"></div>
     <div id="note"></div>
   </div>
 </div>
@@ -119,9 +123,9 @@ button:active{background:#2a2a2a}
     </div>
     <div class="hint">silence before your turn goes to Claude</div>
   </div>
-  <button id="callme2" class="pill hide">Call me</button>
-  <button id="hangup" class="pill hide">Hang up the call</button>
-  <button id="usehere2" class="pill hide">Use this device</button>
+  <button id="callme2" class="pill hide">Switch to phone</button>
+  <button id="hangup" class="pill hide">Hang up the phone</button>
+  <button id="usehere2" class="pill hide">Switch to web here</button>
   <button id="pip" class="pill hide">Picture in picture</button>
   <div id="numrow" class="hint"></div>
   <input id="phonenum" class="hide" type="tel" autocomplete="tel" placeholder="+1 415 555 0123">
@@ -137,6 +141,16 @@ const KEY = "intercom-k";   // changing it unpairs every device
 // Only reported to Claude; both devices show the same page.
 const UI = new URLSearchParams(location.search).get("ui")
   || (Math.min(innerWidth, innerHeight, screen.width, screen.height) <= 320 ? "watch" : "phone");
+
+// This browser's id in a room: its newest page replaces any older socket of its
+// own the relay still holds (a back swipe or reload doesn't always close one).
+const DEV = (() => {
+  try {
+    let d = localStorage.getItem("intercom-dev");
+    if (!d) { d = Math.random().toString(36).slice(2, 12); localStorage.setItem("intercom-dev", d); }
+    return d;
+  } catch { return Math.random().toString(36).slice(2, 12); }
+})();
 
 // The device token: from a #k= link (stored, then stripped), else storage, else pairing.
 function store(k) { try { k ? localStorage.setItem(KEY, k) : localStorage.removeItem(KEY); } catch {} }
@@ -159,7 +173,7 @@ let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = n
 let sendStream = null, muted = false, raw = null, aec = null;
 // The room can have many screens; at most one holds the audio. `roomAudio` is
 // which ("watch", "phone"), null for none, undefined until the relay says.
-let holding = false, roomAudio, roomCall = null;
+let holding = false, roomAudio, roomCall = null, roomSince = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
@@ -182,17 +196,23 @@ function show(screen) {
 // pops up only when nothing has it; moving it from elsewhere is in the sheet.
 function renderRoom() {
   const inRoom = mode === "live";
+  $("stage").classList.toggle("inroom", inRoom);
   $("pause").classList.toggle("hide", !inRoom || !holding);
   $("mute").classList.toggle("hide", !inRoom || !holding);
-  $("choices").classList.toggle("hide", !inRoom || holding || roomAudio !== null || !!roomCall);
-  $("where").classList.toggle("hide", !inRoom || !(roomCall || (!holding && roomAudio)));
-  $("where").textContent = roomCall
-    ? (roomCall.state === "up" ? `On the phone · ${elapsed(roomCall.up_at)}` : "Calling your phone…")
-    : roomAudio ? `Audio on the ${roomAudio}` : "";
+  const ringing = roomCall && roomCall.state !== "up";
+  const text = ringing ? "Calling your phone…"
+    : roomAudio === "line" ? `Phone · ${elapsed(roomSince)}`
+    : holding ? `Web · here · ${elapsed(roomSince)}`
+    : roomAudio ? `Web · other device · ${elapsed(roomSince)}` : "";
+  $("choices").classList.toggle("hide", !inRoom || roomAudio !== null || !!roomCall || holding);
+  $("where").classList.toggle("hide", !inRoom || !text);
+  $("where").textContent = text;
   if ($("note").textContent) fitNote($("note"));
 }
 
+// `since` is in this page's clock (see the room message); null before the relay says.
 function elapsed(since) {
+  if (since == null) return "0:00";
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
@@ -281,7 +301,7 @@ async function wake() {
 async function join(s) {
   talk = s.mode === "talk";
   session = s; sid = s.id; mode = "live"; failures = 0;
-  holding = false; roomAudio = undefined; holdMs = null; muted = false;
+  holding = false; roomAudio = undefined; roomCall = null; roomSince = null; holdMs = null; muted = false;
   clearTimeout(noteTimer); $("note").textContent = "";
   show("live");
   $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
@@ -349,13 +369,14 @@ function connect() {
     backoff = 1000; failures = 0;
     status("");
     // A screen that held the mic before the drop takes it back, if nothing else has.
-    send({ type: "hello", ui: UI, holding, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+    send({ type: "hello", ui: UI, dev: DEV, holding, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
     if (holding) startAudio();
   };
   sock.onmessage = (m) => { try { onMessage(JSON.parse(m.data)); } catch {} };
-  sock.onclose = () => {
+  sock.onclose = (e) => {
     if (ws !== sock || mode !== "live") return;
     stopRecorder();
+    if (e.code === 4001) return finish("Open in another tab");
     failures++;
     if (failures >= 4) return checkStillLive();
     status("Reconnecting…", "amber");
@@ -417,6 +438,8 @@ function onMessage(m) {
     // relay saw this screen's take would otherwise undo it.
     roomAudio = m.audio;
     roomCall = m.call || null;
+    // The relay's clock, moved onto this page's, so the timer starts right on any device.
+    roomSince = m.since == null ? null : m.since + (Date.now() - m.now);
     renderRoom();
     renderSheet();
   }
@@ -461,7 +484,24 @@ function stepHold(dir) {
   renderSheet();
 }
 
-function closeSheet() { $("sheet").classList.add("hide"); editingNumber = false; }
+// The sheet takes a history entry, so the watch's back swipe closes it instead
+// of leaving the page (and the room).
+function openSheet() {
+  renderSheet();
+  $("sheet").classList.remove("hide");
+  history.pushState({ sheet: true }, "");
+}
+
+function closeSheet() {
+  if ($("sheet").classList.contains("hide")) return;
+  $("sheet").classList.add("hide");
+  editingNumber = false;
+  if (history.state?.sheet) history.back();
+}
+
+addEventListener("popstate", () => {
+  if (!$("sheet").classList.contains("hide")) { $("sheet").classList.add("hide"); editingNumber = false; }
+});
 
 // ---- the phone line ------------------------------------------------------------------
 // The relay keeps no number: this device remembers Louie's and sends it with
@@ -481,8 +521,8 @@ function e164(text) {
 function callMe() {
   if (!myNumber) {
     editingNumber = true;
-    renderSheet();
-    $("sheet").classList.remove("hide");
+    if ($("sheet").classList.contains("hide")) openSheet();
+    else renderSheet();
     return $("phonenum").focus();
   }
   closeSheet();
@@ -501,9 +541,9 @@ $("savenum").onclick = () => {
 $("callme").onclick = callMe;
 $("callme2").onclick = callMe;
 $("hangup").onclick = () => { closeSheet(); send({ type: "hangup" }); };
-setInterval(() => { if (roomCall?.state === "up") renderRoom(); }, 1000);
+setInterval(() => { if (mode === "live" && roomSince != null) renderRoom(); }, 1000);
 
-$("menu").onclick = () => { renderSheet(); $("sheet").classList.remove("hide"); };
+$("menu").onclick = openSheet;
 $("done").onclick = closeSheet;
 $("usehere").onclick = takeAudio;
 $("usehere2").onclick = takeAudio;
@@ -739,12 +779,11 @@ async function answerVoice(sdp) {
   }
 }
 
-// A long steer shrinks until it fits between the session id and stop, beside
-// whatever else the middle shows (the audio choices, where the audio is); past
-// the smallest size, the middle scrolls.
+// A long steer shrinks until it fits between the audio line and stop, beside
+// any status; past the smallest size, the middle scrolls.
 function fitNote(n) {
-  let room = $("stage").clientHeight * 0.36;   // #live's max-height
-  for (const id of ["status", "choices", "where"]) {
+  let room = $("stage").clientHeight * 0.28;   // #live's max-height
+  for (const id of ["status"]) {
     const el = $(id);
     if (!el.classList.contains("hide")) room -= el.offsetHeight + $("stage").clientHeight * 0.04;
   }

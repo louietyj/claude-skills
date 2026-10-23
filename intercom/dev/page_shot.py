@@ -110,7 +110,7 @@ def main():
             tab.wait("document.getElementById('where').textContent.startsWith('Calling')")
             tab.shot(OUT / f"{name}-calling.png", round_face)
             ts.TELNYX.answer(ts.TELNYX.last())
-            tab.wait("document.getElementById('where').textContent.startsWith('On the phone')")
+            tab.wait("document.getElementById('where').textContent.startsWith('Phone')")
             tab.shot(OUT / f"{name}-oncall.png", round_face)
             tab.js("document.getElementById('stop').click()")
             time.sleep(1)

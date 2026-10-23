@@ -5,7 +5,7 @@ when the session starts. **Listen**: Claude follows a live conversation and
 steers him in chat. **Talk**: Louie and Claude talk hands-free while Claude
 keeps working; Claude speaks through the device with Soniox TTS (`tts-rt-v2`,
 voice Hazel). The relay refuses speech in a listen session, and the device
-shows the mode on the room's button, so Louie's tap on This device is the
+shows the mode on the room's button, so Louie's tap on Web or Phone is the
 consent.
 
 The device's browser streams mic audio to a Cloudflare Durable Object, which
@@ -203,21 +203,21 @@ differences between voices that diarization relies on. Talk mode turns all
 three on, echo cancellation above all: without it Claude transcribes its own
 voice from the speaker.
 
-**Talk mode lets Soniox end turns, then waits 3 s of silence.** Its semantic
+**Talk mode lets Soniox end turns, then can wait for silence.** Its semantic
 endpointing runs at its most patient (`max_endpoint_delay_ms` 3000,
-sensitivity -1), and a monologue is not split. Even so it closed turns while
-Louie paused to think, so the relay holds a turn until `TALK_HOLD_MS` passes
+sensitivity -1), and a monologue is not split. Even so it closes turns while
+Louie pauses to think, so the relay can hold a turn until a turn wait passes
 with no new words. An earlier merge window keyed off Soniox's punctuation, a
-guess stacked on a guess; this one keys off silence alone. Claude answers in
-seconds anyway, and whole thoughts matter more than quick turn-taking.
+guess stacked on a guess; this one keys off silence alone.
 
-The wait is per session, 0-10 s (0: Soniox's end of utterance alone): Louie
-sets it in half seconds in the page's settings (⋯),
-Claude with `intercom set --hold` or `start --hold`. Soniox's endpointing
-stays fixed: it is set when its stream opens. The page remembers Louie's last
-pick and offers it when a session starts, but never over a value set since,
-so a rejoin keeps what was chosen. His change is logged as news, so Claude
-knows why his turns arrive later.
+The wait is per session, 0-10 s, and 0 by default (`TALK_HOLD_MS`): Louie
+prefers quick replies, and raises it when he needs time to think. He sets it
+in half seconds in the page's settings (⋯), Claude with `intercom set --hold`
+or `start --hold`. Soniox's endpointing stays fixed: it is set when its stream
+opens. The page remembers Louie's last pick and offers it when a session
+starts, but never over a value set since, so a rejoin keeps what was chosen.
+His changes are logged as settings, not news: each tap of the stepper would
+otherwise wake Claude.
 
 **Claude's voice goes through Cloudflare's Realtime SFU.** Chrome on Android
 only cancels echo of audio that arrives from a real peer connection: Web Audio
@@ -294,7 +294,7 @@ screen at most holds the audio: only its chunks reach the transcriber, and
 only it gets Claude's voice and the transcriber's restarts. Taking the audio
 tells the old holder to let go; a holder that drops takes the audio back when
 it reconnects, unless another screen has it by then. Joining brings no audio:
-the page offers This device when nothing holds it, and keeps the move behind
+the page offers Web and Phone when nothing holds it, and keeps the move behind
 the ⋯ sheet otherwise, so a second screen never grabs the mic by accident.
 Pause is leaving audio: the screen stays, everything audio stops, and the room
 ends after an hour without audio, or five minutes with no screen at all.

@@ -272,7 +272,9 @@ class Lifecycle(unittest.TestCase):
 
 class Room(unittest.TestCase):
     def room(self, ws):
-        return recv_until(ws, lambda m: m.get("type") == "room")
+        """The next room message, without its clock fields."""
+        m = recv_until(ws, lambda m: m.get("type") == "room")
+        return {k: m[k] for k in ("type", "audio", "mine", "call")}
 
     def test_joining_brings_no_audio_until_a_screen_takes_it(self):
         n = stream_count()
@@ -349,6 +351,21 @@ class Room(unittest.TestCase):
         recv_until(a, lambda m: m.get("type") == "release")
         self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone")
         a.close(), b.close()
+
+    def test_a_devices_newest_page_replaces_its_old_socket(self):
+        sid = create()
+        old = screen(sid, "watch", dev="w1", holding=True)
+        wait_entries(sid, lambda es: es)
+        other = screen(sid, "phone", dev="p1")
+        new = screen(sid, "watch", dev="w1", holding=True)        # a reload; the old socket never closed
+        with self.assertRaises(ConnectionClosed) as cm:
+            while True:
+                old.recv(timeout=5)
+        self.assertEqual(cm.exception.rcvd.code, 4001)
+        wait_entries(sid, lambda es: any("watch reconnected" in t for t in texts(es, "event")))
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((sorted(dev["screens"]), dev["audio"]), (["phone", "watch"], "watch"))
+        other.close(), new.close()
 
     def test_any_screen_can_stop_the_room(self):
         sid = create()
@@ -1144,8 +1161,8 @@ class PhoneAudio(unittest.TestCase):
         ccid = TELNYX.last()
         TELNYX.answer(ccid)
         if ws:
-            recv_until(ws, lambda m: m.get("type") == "room" and m.get("audio") == "phone line")
-        wait_entries(sid, lambda es: any("phone line" in t and ("recording started" in t or "moved" in t)
+            recv_until(ws, lambda m: m.get("type") == "room" and m.get("audio") == "line")
+        wait_entries(sid, lambda es: any(t.endswith("the line") and ("recording started" in t or "moved" in t)
                                          for t in texts(es, "event")))
         s = wait_streams(n + 1)
         end = time.time() + 5
@@ -1161,14 +1178,14 @@ class PhoneAudio(unittest.TestCase):
         recv_until(ws, lambda m: m.get("type") == "release")
         self.assertEqual((s["config"]["audio_format"], s["config"]["sample_rate"], s["config"]["num_channels"]),
                          ("mulaw", 8000, 1))
-        self.assertIn("audio moved from the watch to the phone line", texts(entries(sid), "event"))
+        self.assertIn("audio moved from the watch to the line", texts(entries(sid), "event"))
         TELNYX.send_audio(ccid, b"\x7f" * 160)
         ws.send(b"from-the-watch")             # no longer the holder: dropped
         end = time.time() + 5
         while time.time() < end and not s["audio"]:
             time.sleep(0.1)
         self.assertEqual(s["audio"], [b"\x7f" * 160])
-        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone line")
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "line")
         ws.close()
 
     def test_turns_come_from_the_call(self):
@@ -1215,7 +1232,7 @@ class PhoneAudio(unittest.TestCase):
         ws = screen(sid, "phone")
         ccid, _ = self.answered(sid, ws)
         ws.send(json.dumps({"type": "take"}))
-        wait_entries(sid, lambda es: "audio moved from the phone line to the phone" in texts(es, "event"))
+        wait_entries(sid, lambda es: "audio moved from the line to the phone" in texts(es, "event"))
         end = time.time() + 5
         while time.time() < end and ccid not in TELNYX.hangups:
             time.sleep(0.1)

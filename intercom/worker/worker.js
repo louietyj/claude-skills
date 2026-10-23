@@ -84,10 +84,10 @@ const SONIOX_MODEL = "stt-rt-v5";
 // Talk mode: Soniox's semantic endpointing at its most patient decides when a turn is over.
 const TALK_ENDPOINT = { max_endpoint_delay_ms: 3000, endpoint_sensitivity: -1.0,
                         endpoint_latency_adjustment_level: 0 };
-// Even so it ends a turn while Louie gathers his thoughts, so the turn stays
-// open until this much silence follows: Claude takes seconds to answer anyway.
-// Louie (the page's settings) or Claude (`intercom set`) can change it per session.
-const TALK_HOLD_MS = 3000;
+// It can still end a turn while Louie gathers his thoughts, so a turn can be
+// held open until this much silence follows. Louie prefers quick replies by
+// default and raises it (the page's settings, or `intercom set`) for slow thinking.
+const TALK_HOLD_MS = 0;
 const HOLD_MIN_MS = 0;         // Soniox's end of utterance alone
 const HOLD_MAX_MS = 10_000;
 // 48 kHz mono from Soniox; the SFU adapter takes 48 kHz stereo.
@@ -339,7 +339,8 @@ export class Session {
     return stub.fetch(`https://registry${path}`, { method: "POST", body: JSON.stringify(body) });
   }
 
-  ui(ws) { return ws && ws === this.phone ? "phone line" : this.screens.get(ws)?.ui ?? "device"; }
+  // "line" for the call, so it is never confused with Louie's phone's browser.
+  ui(ws) { return ws && ws === this.phone ? "line" : this.screens.get(ws)?.ui ?? "device"; }
 
   // Audio plumbing (transcriber restarts, Claude's voice) concerns only a holding page.
   toHolder(msg) {
@@ -353,11 +354,14 @@ export class Session {
   }
 
   // Each screen learns where the audio is, and whether it is itself.
+  // `since` is how long the audio has been where it is, in the relay's clock:
+  // pages count from it with the offset `now` gives them.
   sendRoom() {
     const audio = this.holder ? this.ui(this.holder) : null;
     const call = this.meta.call ? { state: this.meta.call.state, up_at: this.meta.call.up_at ?? null } : null;
+    const since = this.meta.audio_since ?? null, now = Date.now();
     for (const ws of this.screens.keys()) {
-      try { ws.send(JSON.stringify({ type: "room", audio, mine: ws === this.holder, call })); } catch {}
+      try { ws.send(JSON.stringify({ type: "room", audio, mine: ws === this.holder, call, since, now })); } catch {}
     }
   }
 
@@ -693,6 +697,7 @@ export class Session {
       if (old !== this.phone) { try { old.send(JSON.stringify({ type: "release" })); } catch {} }
     }
     this.holder = ws;
+    this.meta.audio_since = ws ? Date.now() : null;
     this.mic = null;
     this.audioStalledAt = null;
     this.lastAudioAt = 0;
@@ -873,31 +878,39 @@ export class Session {
       try { msg = JSON.parse(m.data); } catch { return; }
       return this.onDeviceMessage(server, msg);
     });
-    const gone = async () => {
-      try { server.close(1000); } catch {}
-      if (!this.screens.has(server)) return;
-      const who = this.ui(server);
-      // The page closes soon after a stop, often before ending is done: not a drop.
-      if (this.live() && !this.stopping && server === this.holder) {
-        await this.setHolder(null, "dropped");        // while it still has a name
-        await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
-      }
-      this.screens.delete(server);
-      if (this.live() && !this.stopping && !this.screens.size && !this.meta.call) {
-        this.meta.absent_since = Date.now();
-        await this.saveMeta();
-        await this.armTimer();
-      }
-    };
+    const gone = () => { try { server.close(1000); } catch {} return this.dropScreen(server); };
     server.addEventListener("close", gone);
     server.addEventListener("error", gone);
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  async dropScreen(server) {
+    if (!this.screens.has(server)) return;
+    const who = this.ui(server);
+    // The page closes soon after a stop, often before ending is done: not a drop.
+    if (this.live() && !this.stopping && server === this.holder) {
+      await this.setHolder(null, "dropped");        // while it still has a name
+      await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
+    }
+    this.screens.delete(server);
+    if (this.live() && !this.stopping && !this.screens.size && !this.meta.call) {
+      this.meta.absent_since = Date.now();
+      await this.saveMeta();
+      await this.armTimer();
+    }
+  }
+
   // Room controls come from any screen; audio plumbing only from the holder.
   async onDeviceMessage(ws, msg) {
     if (msg.type === "hello") {
-      this.screens.get(ws).ui = msg.ui ?? null;
+      Object.assign(this.screens.get(ws), { ui: msg.ui ?? null, dev: msg.dev ?? null });
+      // A device that left its page (a back swipe, a reload) may never have
+      // closed the old socket: its newest page replaces it.
+      for (const [other, info] of this.screens) {
+        if (other === ws || !msg.dev || info.dev !== msg.dev) continue;
+        try { other.close(4001, "replaced by this device's newer page"); } catch {}
+        await this.dropScreen(other);
+      }
       if (this.talk()) {
         // The device's remembered wait seeds a session nobody has set yet, so a
         // rejoin never undoes what Claude or Louie chose since.

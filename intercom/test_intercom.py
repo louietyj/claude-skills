@@ -298,7 +298,7 @@ class Talk(Base):
         self.assertEqual(intercom.describe_device(ringing, "live"), "calling Louie's phone (…0123), ringing for 4s")
         up = dict(ringing, call={"state": "up", "to": "…0123", "s": 30})
         self.assertIn("its audio not started", intercom.describe_device(up, "live"))
-        on_line = dict(up, audio="phone line", last_audio_s=0)
+        on_line = dict(up, audio="line", last_audio_s=0)
         self.assertEqual(intercom.describe_device(on_line, "live"), "on the phone line for 30s (…0123)")
         self.assertIn("no call audio for 9s", intercom.describe_device(dict(on_line, last_audio_s=9), "live"))
         ended = {"screens": ["watch"], "audio": None, "no_audio_why": "call ended", "no_audio_s": 3}

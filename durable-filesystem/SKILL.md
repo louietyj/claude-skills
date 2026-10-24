@@ -146,7 +146,7 @@ That index is asynchronous, so it will not see a file written moments ago; if yo
 /memory/tack/INDEX.md     an area that outgrew that
 ```
 
-Nest at most two levels. Start an area flat, promote it to a directory only when splitting is genuinely needed, and update the parent index when you do. Link across areas with relative markdown links.
+“Keep it shallow: add a level only when an INDEX is too long to scan; about three levels is normal, deeper needs a reason. Start an area flat, promote it to a directory only when splitting is genuinely needed, and update the parent index when you do. Link across areas with relative markdown links.
 
 Absolute dates only. Stamp facts that can go stale — `Hotel: booked _(as of 2026-08-16)_` — because sessions may reach you out of order, making file mtime weak evidence for when a line became true. When two entries disagree, trust the later stamp and reconcile rather than leaving both.
 

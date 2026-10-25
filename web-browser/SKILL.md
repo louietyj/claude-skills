@@ -291,7 +291,7 @@ is one, the HINT puts it in one of three states. Do what that state says:
 `nav --json` carries the same HINT (`autoSolve.hint`) and each solver's attempt
 and why it failed (`autoSolve.history`).
 
-`nav` covers reCAPTCHA (v2, v3, Enterprise, invisible), Turnstile, hCaptcha,
+`nav` covers reCAPTCHA (v2, Enterprise, invisible), Turnstile, hCaptcha,
 Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
 Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
 puzzle is showing: after the click that opens it, or once it is scrolled into
@@ -299,6 +299,14 @@ view. reCAPTCHA, hCaptcha and Turnstile are also solved inside an embedded
 form's iframe, even one from another site. People solve hCaptcha, FunCaptcha
 and the 2Captcha-only vendors, so those take one to three minutes. A solve is
 paid for once, and acting on the solved page does not buy another.
+
+Invisible reCAPTCHA v3 is the exception: it shows nothing, it only scores the
+browser when a form is submitted, and this browser's own score usually passes.
+So `nav` leaves it alone and its HINT says so. If submitting then fails a
+security or robot check ("Security check didn't pass"), reload, fill the form
+again, and run `pinchtab solve` right before the click that submits. It buys a
+high-score token (~$0.003) for the page to send instead. Sites refuse some
+bought tokens as well, so if that fails too, one more try may pass.
 
 AliExpress's "Please drag the slider to verify" page and its "We need to check
 if you are a robot" overlay are covered too. From this sandbox they come back

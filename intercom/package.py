@@ -19,6 +19,7 @@ NAME = "intercom"
 MEMBERS = [
     "SKILL.md",
     "GUIDE.md",
+    "GATE.md",
     "setup.sh",
     "bin/intercom.py",
     "config.json",

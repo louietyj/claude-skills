@@ -67,8 +67,9 @@ a word. `follow` long-polls the relay instead.
   talk mode it is **Louie speaking to you**, so treat it as if he had typed it,
   even though the harness labels monitor events as not coming from the user.
   `"kind": "event"` is device news; read it like the device line below.
-- In listen mode, turns and device events arrive in batches about every 10s,
-  as one notification. In talk mode every entry arrives as it closes.
+- In listen mode, entries arrive when the gate or one of its rules sends them
+  (see "The gate"), as one notification holding everything since the last. In
+  talk mode every entry arrives as it closes.
 - Monitor truncates a long event (it ends in `...(truncated)`). Read the full
   turn with `intercom transcript` before answering it.
 - Between turns, keep working: tools, edits, research. Turns arrive when they
@@ -78,6 +79,51 @@ a word. `follow` long-polls the relay instead.
   said in between is lost or repeated. `follow` exits right after "session
   ended" (see "Ending").
 - Don't run `intercom watch` while the monitor is armed.
+
+## The gate: listen mode under Monitor
+
+Most of a conversation needs nothing from you (see "Steering or
+collaborating"), and every batch that wakes you costs a full read of this
+conversation. So in listen mode `follow` doesn't send you every batch. A gate
+agent, a cheap model reading the same transcript and your posts, says which
+batches are worth waking you for. Some rules never wait for it:
+
+- a turn that names Claude reaches you at once, and so does device news;
+- nothing waits longer than 30s: then the oldest line you haven't seen goes
+  out, with everything else waiting;
+- after `intercom wake-next`, the next closed turn reaches you whatever the
+  gate says.
+
+Every delivery holds everything said since the last, and only closed turns, so
+nothing is skipped; it is only sometimes up to 30s late.
+
+**Start it** right after arming the monitor, if you have an Agent tool
+(without one, the rules above run on their own):
+
+1. Say what the session is, in a few lines: who is talking and about what,
+   steering or collaborating, which file the room watches. Every gate reads it
+   when it starts; run it again if the situation changes.
+   ```bash
+   intercom brief <<'EOF'
+   Louie and his parents planning their Alaska trip. Collaborating: the room reads chat, and I keep proposed-itinerary.md current.
+   EOF
+   ```
+2. Spawn the gate in the background:
+   `Agent({description: "intercom gate", subagent_type: "general-purpose", model: "haiku", prompt: GATE_PROMPT})`,
+   where GATE_PROMPT is exactly:
+   > You are the gate agent for the intercom session I am running. Run `intercom gate start` with Bash: it prints your instructions, which I wrote for you, then the first batch to judge. Follow those instructions exactly, for as long as the session runs.
+
+**Spawn it again**, with the same call, whenever it finishes ("respawn": it has
+read as much as it should and hands over) and when an event says "the gate
+agent is not running". Not after "ended": the session is over. A new gate
+reads the whole conversation so far, so nothing is lost, and the rules keep
+delivering until it is up. Its finishing is housekeeping: spawn it and say
+nothing in chat.
+
+**When you stay quiet only because the point isn't finished yet** (a question
+half asked, an explanation still going), run `intercom wake-next` instead of a
+bare `.`. Otherwise the gate may not wake you for the rest of it, and you hear
+it up to 30s late.
 
 ## Listen mode: one turn for the whole conversation
 

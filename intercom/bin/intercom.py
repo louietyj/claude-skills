@@ -8,8 +8,11 @@ on disk. Stdlib only, so nothing needs installing mid-conversation.
 """
 
 import argparse
+import datetime
+import glob
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -18,6 +21,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(os.path.dirname(HERE), "config.json")
+GUIDE = os.path.join(os.path.dirname(HERE), "GUIDE.md")
+GATE_PROMPT = os.path.join(os.path.dirname(HERE), "GATE.md")
 # The skill directory can be read-only (/mnt/skills), so state goes under $HOME.
 STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 
@@ -30,6 +35,23 @@ SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off pla
 HOLD_RANGE = "0-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
 NOT_NEWS = {"note", "said", "setting"}   # as the relay's: logged, but wake nobody
+
+# The gate (listen mode under Monitor): `follow` decides when the main agent wakes,
+# and a cheap gate agent says which batches are worth waking it for.
+CEILING_S = 30            # no closed turn waits longer than this for the main agent
+GATE_GATHER_S = 10        # the gate judges speech in batches, as listen mode always has
+GATE_STALE_S = 30         # a gate that hasn't polled this long while speech waits isn't running
+GATE_POLL_S = 2           # follow's long-poll, short so the gate's answers land fast
+GATE_PREFIX_TOKENS = 60_000    # a subagent's own system prompt and tools, before anything we print
+GATE_CONTEXT_TOKENS = 95_000   # respawn before this: past 100K, Haiku's input costs 5x
+GATE_MIN_TOKENS = 15_000       # a late handover is large; still give each gate this much to read
+GATE_CALL_TOKENS = 120         # each call's own framing, beyond what it prints
+NAME = re.compile(r"\bclaude\b", re.I)
+GATE_QUESTION = ("Would the main-agent have a 40% or greater chance of acting on this batch under "
+                 "<main-agent-guidance>? Think briefly, then answer with `intercom gate y` or "
+                 "`intercom gate n`.")
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+CFS_EDIT = re.compile(r"\bcfs (?:edit|write)(?: --new)? (\S+)")
 
 
 def die(msg, code=1):
@@ -238,8 +260,10 @@ def cmd_start(cfg, args):
     write_state(f"cursor-{sid}.json", {"since": 0})
     tap = (f"Tell Louie: open the intercom bookmark, join {sid} (check the id matches; it should say "
            f"{args.mode.upper()}), and tap Web (or Phone, to be called).")
-    then = (" Then, if you have a Monitor tool (in any environment), arm it on the command `intercom follow`;"
-            " only without one, run `intercom watch` and keep watching in this same turn.")
+    then = (" Then, if you have a Monitor tool (in any environment), arm it on the command `intercom follow`"
+            + ("; in listen mode, then write the brief and spawn the gate (guide: \"The gate\")"
+               if args.mode == "listen" else "")
+            + "; only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
           "archive": args.archive, "next": tap + then})
 
@@ -390,16 +414,17 @@ def cmd_monitor_url(cfg, args):
 
 def cmd_follow(cfg, args):
     """For Monitor's command mode, whose websocket goes deaf on a quiet socket
-    (README). Keeps its own cursor, not watch's, because `speak` defaults to that one."""
+    (README). Keeps its own cursor, not watch's, because `speak` defaults to that one.
+    Talk turns go out as they close; listen mode goes through the gate."""
     sid = current_id(args)
     status, body = relay(cfg, "/status", id=sid, timeout=15)
     if status != 200 or not isinstance(body, dict):
         die(f"status failed: {status} {error_text(body)}")
-    # Listen-mode turns are gathered for 10s, as the event stream does; talk turns go at once.
-    interval = 0 if body.get("mode") == "talk" else WATCH_INTERVAL
+    if body.get("mode") != "talk":
+        return follow_gated(cfg, sid, args.since)
     since, backoff = args.since, 1
     while True:
-        status, body = relay(cfg, "/watch", id=sid, since=since, interval=interval,
+        status, body = relay(cfg, "/watch", id=sid, since=since, interval=0,
                              wait=WATCH_BUDGET, timeout=WATCH_BUDGET + 20)
         if status in (401, 403, 404):
             print(json.dumps({"kind": "error", "text": f"follow stopped: {status} {error_text(body)}"}), flush=True)
@@ -415,6 +440,328 @@ def cmd_follow(cfg, args):
         since = max(since, body.get("last") or 0)
         if body["event"] == "ended" and not body.get("more"):
             return
+
+
+# --- the gate ----------------------------------------------------------------------
+# `follow` alone reads the relay and spools to gate-<id>/; the gate reads the spool and
+# answers through flag files. One writer per file, so nothing needs locking.
+
+def gate_file(sid, name):
+    d = state_path(f"gate-{sid}")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, name)
+
+
+def read_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, value):
+    """Atomic, so the other process never reads half a file. Windows won't replace a
+    file someone has open, hence the retry."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(value, fh)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
+def take_flag(sid, name):
+    try:
+        os.remove(gate_file(sid, name))
+        return True
+    except OSError:
+        return False
+
+
+def read_spool(sid):
+    """Every entry follow has seen, with `at`, its arrival time. A last line with no
+    newline is still being written."""
+    try:
+        with open(gate_file(sid, "spool.jsonl"), encoding="utf-8") as fh:
+            lines = fh.read().split("\n")[:-1]
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+class Scheduler:
+    """Which closed turns the main agent gets, and when: the gate's yes, its name, a
+    `wake-next`, device news, or the oldest waiting line reaching CEILING_S."""
+
+    def __init__(self):
+        self.pending = []          # (arrived, entry)
+        self.next_turn = False     # `wake-next`: deliver with the next closed turn
+
+    def add(self, entry, now):
+        """True when this entry makes a delivery due right away."""
+        self.pending.append((now, entry))
+        if entry.get("kind") != "turn":
+            return True
+        if NAME.search(entry.get("text") or ""):
+            return True
+        if self.next_turn:
+            self.next_turn = False
+            return True
+        return False
+
+    def overdue(self, now):
+        return bool(self.pending) and now - self.pending[0][0] >= CEILING_S
+
+    def take(self):
+        out = [e for _, e in self.pending]
+        self.pending = []
+        return out
+
+
+def gate_alert(sid, sched, now):
+    """A line for the main agent when speech waits and no gate is polling."""
+    polled = (read_json(gate_file(sid, "gate.json")) or {}).get("polled_at", 0)
+    waiting = [at for at, e in sched.pending if e.get("kind") == "turn"]
+    if waiting and now - polled > GATE_STALE_S and now - waiting[0] >= GATE_STALE_S:
+        return {"kind": "event", "text": "the gate agent is not running (it has not polled for "
+                f"{int(now - polled) if polled else 'ever'}s): start it again, as in the guide's \"The gate\""}
+    return None
+
+
+def follow_gated(cfg, sid, since):
+    spool = gate_file(sid, "spool.jsonl")
+    seen = max((e.get("n", 0) for e in read_spool(sid)), default=0)
+    write_json(gate_file(sid, "delivered.json"), {"upto": since})
+    sched, polled_since, backoff = Scheduler(), since, 1
+
+    def deliver(extra=()):
+        nonlocal since
+        batch = sched.take()
+        for e in [*batch, *extra]:
+            print(json.dumps(e, ensure_ascii=False), flush=True)
+        since = max([since, *(e["n"] for e in batch if "n" in e)])
+        write_json(gate_file(sid, "delivered.json"), {"upto": since})
+
+    while True:
+        if take_flag(sid, "wake-next"):
+            sched.next_turn = True
+        status, body = relay(cfg, "/watch", id=sid, since=polled_since, interval=0,
+                             wait=GATE_POLL_S, timeout=GATE_POLL_S + 20)
+        now = time.time()
+        if status in (401, 403, 404):
+            deliver([{"kind": "error", "text": f"follow stopped: {status} {error_text(body)}"}])
+            return
+        due = False
+        if status == 200 and isinstance(body, dict):
+            backoff = 1
+            with open(spool, "a", encoding="utf-8") as fh:
+                for e in body.get("entries", []):
+                    if e["n"] > seen:
+                        fh.write(json.dumps({"at": now, **e}, ensure_ascii=False) + "\n")
+                        seen = e["n"]
+                    if e["n"] > since and e.get("kind") not in NOT_NEWS:
+                        due = sched.add(e, now) or due
+            polled_since = max(polled_since, body.get("last") or 0)
+        else:
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+        due = take_flag(sid, "wake") or due or sched.overdue(now)
+        # Needs speech that has waited as long as the ceiling, so it never adds a wake.
+        alert = gate_alert(sid, sched, now)
+        ended = (status == 200 and isinstance(body, dict) and body.get("event") == "ended"
+                 and not body.get("more"))
+        if (due or alert or ended) and sched.pending:
+            deliver([alert] if alert else [])
+        if ended:
+            with open(spool, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": now, "kind": "end"}) + "\n")
+            return
+
+
+def main_transcript():
+    """The main agent's JSONL: subagents inherit its session id, so the gate finds it by name."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not sid:
+        return None
+    hits = glob.glob(os.path.join(os.path.expanduser("~/.claude/projects"), "*", f"{sid}.jsonl"))
+    return max(hits, key=os.path.getmtime) if hits else None
+
+
+def epoch(iso):
+    try:
+        return datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return 0
+
+
+def main_posts(path, offset):
+    """(posts, new offset): the main agent's chat text and file edits after `offset`,
+    as (time, text)."""
+    if not path:
+        return [], offset
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+    except OSError:
+        return [], offset
+    end = data.rfind(b"\n") + 1
+    posts = []
+    for line in data[:end].splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("type") != "assistant" or r.get("isSidechain"):
+            continue
+        at = epoch(r.get("timestamp"))
+        for b in (r.get("message") or {}).get("content") or []:
+            if b.get("type") == "text" and b.get("text", "").strip() not in ("", "."):
+                posts.append((at, b["text"].strip()))
+            elif b.get("type") == "tool_use":
+                inp = b.get("input") or {}
+                if b.get("name") in EDIT_TOOLS and inp.get("file_path"):
+                    posts.append((at, f"updated {os.path.basename(inp['file_path'])}"))
+                for m in CFS_EDIT.finditer(inp.get("command") or ""):
+                    posts.append((at, f"updated {os.path.basename(m.group(1))}"))
+    return posts, offset + end
+
+
+def gate_lines(entries, posts, delivered=None):
+    """The transcript as the gate reads it, the main agent's posts in time order.
+    With `delivered`, lines the rules already sent to the main agent say so."""
+    items = [(e.get("at", 0), 0, e) for e in entries if e.get("kind") in ("turn", "event", "note")]
+    items += [(at, 1, text) for at, text in posts]
+    out = []
+    for _, is_post, x in sorted(items, key=lambda i: (i[0], i[1])):
+        if is_post:
+            out.append(f"<main-agent-post>\n{x}\n</main-agent-post>")
+        else:
+            sent = delivered is not None and x.get("n", 0) <= delivered
+            out.append(render(x) + ("  [delivered]" if sent else ""))
+    return out
+
+
+def gate_print(g, lines):
+    text = "\n".join(lines)
+    print(text, flush=True)
+    g["budget"] = g.get("budget", 0) - len(text) // 4 - GATE_CALL_TOKENS
+
+
+def gate_next(sid, g):
+    """Block until speech the rules haven't delivered has gathered for GATE_GATHER_S,
+    then print it with the question. What the rules delivered meanwhile is context."""
+    path, start, shown = main_transcript(), time.time(), []
+    while True:
+        g["polled_at"] = time.time()
+        write_json(gate_file(sid, "gate.json"), g)
+        entries = read_spool(sid)
+        delivered = (read_json(gate_file(sid, "delivered.json")) or {}).get("upto", 0)
+        new = [e for e in entries if e.get("n", 0) > g["cursor"]]
+        if any(e.get("kind") == "end" for e in entries):
+            posts, g["posts_at"] = main_posts(path, g.get("posts_at", 0))
+            gate_print(g, [*shown, *gate_lines(new, posts, delivered),
+                           "ENDED: the session is over. End your turn now with the single word: ended."])
+            g["asked"] = False
+            break
+        open_turns = [e for e in new if e.get("kind") == "turn" and e["n"] > delivered]
+        if open_turns and time.time() - open_turns[0]["at"] >= GATE_GATHER_S:
+            posts, g["posts_at"] = main_posts(path, g.get("posts_at", 0))
+            g["cursor"], g["asked"] = new[-1]["n"], True
+            gate_print(g, [*shown, *gate_lines(new, posts, delivered), GATE_QUESTION])
+            break
+        if new and not open_turns:
+            posts, g["posts_at"] = main_posts(path, g.get("posts_at", 0))
+            shown += gate_lines(new, posts, delivered)
+            g["cursor"] = new[-1]["n"]
+        if time.time() - start >= WATCH_BUDGET:
+            g["asked"] = False
+            gate_print(g, [*shown, "Nothing new to judge yet. Run `intercom gate wait`."])
+            break
+        time.sleep(0.5)
+    g["polled_at"] = time.time()
+    write_json(gate_file(sid, "gate.json"), g)
+
+
+def guide_section(title):
+    with open(GUIDE, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.index(f"## {title}")
+    end = text.find("\n## ", start + 1)
+    return text[start:end if end != -1 else None].strip()
+
+
+def cmd_gate(cfg, args):
+    """`start`: the prompt, the whole conversation so far, then the first batch. `y`/`n`
+    answer the batch shown and wait for the next; `wait` only waits."""
+    sid = current_id(args)
+    g = read_json(gate_file(sid, "gate.json")) or {}
+    if args.action == "start":
+        delivered = (read_json(gate_file(sid, "delivered.json")) or {}).get("upto", 0)
+        entries = [e for e in read_spool(sid) if e.get("n", 0) <= delivered]
+        path = main_transcript()
+        posts, offset = main_posts(path, 0)
+        first = entries[0]["at"] if entries else time.time()
+        posts = [(at, text) for at, text in posts if at >= first - 60]
+        with open(GATE_PROMPT, encoding="utf-8") as fh:
+            prompt = fh.read()
+        brief = ""
+        try:
+            with open(gate_file(sid, "brief.txt"), encoding="utf-8") as fh:
+                brief = fh.read().strip()
+        except OSError:
+            pass
+        prompt = (prompt.replace("{{MAIN_AGENT_GUIDANCE}}", guide_section("Steering or collaborating"))
+                        .replace("{{BRIEF}}", brief or "(none given: work it out from the conversation)"))
+        handover = gate_lines(entries, posts)
+        text = "\n".join([prompt, "", "<conversation_so_far>", *handover, "</conversation_so_far>",
+                          *([] if path else ["(The main-agent's posts are not available here.)"])])
+        print(text, flush=True)
+        g = {"instance": g.get("instance", 0) + 1, "cursor": delivered, "posts_at": offset, "asked": False,
+             "budget": max(GATE_MIN_TOKENS, GATE_CONTEXT_TOKENS - GATE_PREFIX_TOKENS - len(text) // 4)}
+        print("\nThe newest batch follows.", flush=True)
+        return gate_next(sid, g)
+    if args.action in ("y", "n") and g.get("asked"):
+        with open(gate_file(sid, "answers.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"instance": g.get("instance"), "upto": g["cursor"],
+                                 "answer": args.action, "at": time.time()}) + "\n")
+        if args.action == "y":
+            write_json(gate_file(sid, "wake"), {"upto": g["cursor"]})
+        g["asked"] = False
+    if not g:
+        die("no gate here yet -- run `intercom gate start`")
+    if g.get("budget", 0) <= 0:
+        print("RESPAWN: this gate has read as much as it should. End your turn now with the single "
+              "word: respawn. A fresh gate takes over.", flush=True)
+        write_json(gate_file(sid, "gate.json"), g)
+        return
+    gate_next(sid, g)
+
+
+def cmd_wake_next(cfg, args):
+    sid = current_id(args)
+    write_json(gate_file(sid, "wake-next"), {"at": time.time()})
+    emit({"ok": True, "next": "the next closed turn reaches you whatever the gate says"})
+
+
+def cmd_brief(cfg, args):
+    sid = current_id(args)
+    text = read_text(args, "brief", "Louie and his parents planning an Alaska trip; I keep plan.md current.")
+    with open(gate_file(sid, "brief.txt"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    emit({"ok": True, "next": "every gate reads it from its next `intercom gate start`"})
 
 
 def cmd_stop(cfg, args):
@@ -571,6 +918,20 @@ def main():
     fo.add_argument("--since", type=int, default=0, help="the last entry number you saw (default 0)")
     fo.add_argument("--id")
     fo.set_defaults(fn=cmd_follow)
+
+    ga = sub.add_parser("gate", help="for the gate agent only: start, then answer each batch y or n")
+    ga.add_argument("action", choices=("start", "y", "n", "wait"))
+    ga.add_argument("--id")
+    ga.set_defaults(fn=cmd_gate)
+
+    wn = sub.add_parser("wake-next", help="listen mode: the next closed turn reaches you whatever the gate says")
+    wn.add_argument("--id")
+    wn.set_defaults(fn=cmd_wake_next)
+
+    br = sub.add_parser("brief", help="listen mode: what this session is, on stdin, for every gate to read")
+    br.add_argument("text", nargs="?", help=argparse.SUPPRESS)
+    br.add_argument("--id")
+    br.set_defaults(fn=cmd_brief)
 
     st = sub.add_parser("stop", help="end the session")
     st.add_argument("--id")

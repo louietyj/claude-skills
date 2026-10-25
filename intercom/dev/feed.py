@@ -59,6 +59,7 @@ def main():
 
     ws = connect(f"{base.replace('https', 'wss')}/device?k={k}&id={sid}", open_timeout=15)
     ws.send(json.dumps({"type": "hello", "ui": "feed"}))
+    ws.send(json.dumps({"type": "take"}))          # joining a room brings no audio, as on the page
     ws.send(json.dumps({"type": "seg"}))
 
     def show():

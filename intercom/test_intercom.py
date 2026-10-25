@@ -106,9 +106,10 @@ class Follow(Base):
                          ["1", "3", "3", "3"])
         self.assertEqual(relay.calls[1]["params"]["interval"], "0")
 
-    def test_listen_mode_gathers_turns_like_the_event_stream(self):
+    def test_listen_mode_polls_often_so_the_gates_answers_land_fast(self):
         relay, _ = self.follow([(200, watch_body(event="ended"))], mode="listen")
-        self.assertEqual(relay.calls[1]["params"]["interval"], str(intercom.WATCH_INTERVAL))
+        self.assertEqual((relay.calls[1]["params"]["interval"], relay.calls[1]["params"]["wait"]),
+                         ("0", str(intercom.GATE_POLL_S)))
 
     def test_a_gone_session_stops_with_a_line_instead_of_retrying(self):
         _, lines = self.follow([(404, {"error": "no such session"})])
@@ -118,6 +119,239 @@ class Follow(Base):
         intercom.write_state("cursor-K7QM.json", {"since": 1})
         self.follow([(200, watch_body(event="ended", last=9))])
         self.assertEqual(intercom.read_state("cursor-K7QM.json"), {"since": 1})
+
+
+class Clock:
+    """time.time and time.sleep for the gate's waits, so 30s pass instantly."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+
+
+def turn(n, text, at=None, t=None):
+    e = {"n": n, "kind": "turn", "t": n * 5 if t is None else t, "spk": 0, "text": text}
+    return e if at is None else {"at": at, **e}
+
+
+class Schedule(unittest.TestCase):
+    def test_plain_talk_waits_for_the_gate(self):
+        self.assertFalse(intercom.Scheduler().add(turn(1, "So the fee is fifteen hundred."), 0))
+
+    def test_naming_claude_device_news_and_wake_next_go_at_once(self):
+        s = intercom.Scheduler()
+        self.assertTrue(s.add(turn(1, "Claude, can you check that?"), 0))
+        self.assertTrue(s.add({"n": 2, "kind": "event", "text": "mic silent"}, 0))
+        s.next_turn = True
+        self.assertTrue(s.add(turn(3, "and the second thing"), 0))
+        self.assertFalse(s.add(turn(4, "and a third"), 0), "wake-next is for one turn only")
+
+    def test_the_oldest_waiting_line_sets_the_ceiling(self):
+        s = intercom.Scheduler()
+        s.add(turn(1, "a"), 100)
+        s.add(turn(2, "b"), 125)
+        self.assertFalse(s.overdue(100 + intercom.CEILING_S - 1))
+        self.assertTrue(s.overdue(100 + intercom.CEILING_S))
+        self.assertEqual([e["n"] for e in s.take()], [1, 2])
+        self.assertFalse(s.overdue(10_000))
+
+
+class Gate(Base):
+    def setUp(self):
+        super().setUp()
+        intercom.write_state("current.json", {"id": "K7QM"})
+        self.clock = Clock()
+        self.patches += [mock.patch.object(intercom.time, "time", self.clock.time),
+                         mock.patch.object(intercom.time, "sleep", self.clock.sleep),
+                         mock.patch.object(intercom, "main_transcript", lambda: None)]
+        for p in self.patches[-3:]:
+            p.start()
+
+    def path(self, name):
+        return intercom.gate_file("K7QM", name)
+
+    def spool(self, *entries):
+        with open(self.path("spool.jsonl"), "a", encoding="utf-8") as fh:
+            for e in entries:
+                fh.write(json.dumps(e) + "\n")
+
+    def follow(self, steps):
+        """Each step runs at the next poll, then answers it; the run ends with the session."""
+        steps = iter(steps)
+
+        def watch(params, body):
+            out = next(steps)()
+            self.clock.now += intercom.GATE_POLL_S
+            return out
+        relay = Relay({"/status": (200, {"mode": "listen"}), "/watch": watch})
+        code, out, _ = self.run_cli(["follow"], relay)
+        return [json.loads(l) for l in out.splitlines()]
+
+    def delivered(self):
+        return intercom.read_json(self.path("delivered.json"))["upto"]
+
+    def test_plain_talk_is_spooled_and_held_until_the_gate_says_yes(self):
+        seen = {}
+
+        def gate_says_yes():
+            seen["before"] = self.delivered()
+            intercom.write_json(self.path("wake"), {"upto": 1})
+            return 200, watch_body(event="idle")
+
+        def end():
+            seen["after"] = self.delivered()
+            return 200, watch_body(event="ended", last=2, entries=[{"n": 2, "kind": "event", "text": "session ended"}])
+        lines = self.follow([lambda: (200, watch_body(last=1, entries=[turn(1, "The fee is standard.")])),
+                             gate_says_yes, end])
+        self.assertEqual(seen, {"before": 0, "after": 1})
+        self.assertEqual([l["n"] for l in lines], [1, 2])
+        spooled = intercom.read_spool("K7QM")
+        self.assertEqual([e.get("n") for e in spooled], [1, 2, None])
+        self.assertEqual(spooled[-1]["kind"], "end")
+
+    def test_nothing_waits_past_the_ceiling_even_with_no_gate(self):
+        seen = {}
+
+        def later():
+            self.clock.now += intercom.CEILING_S
+            return 200, watch_body(event="idle")
+
+        def end():
+            seen["delivered"] = self.delivered()
+            return 200, watch_body(event="ended")
+        lines = self.follow([lambda: (200, watch_body(last=1, entries=[turn(1, "Out the door it's 24,900.")])),
+                             later, end])
+        self.assertEqual(seen["delivered"], 1)
+        self.assertEqual(lines[0]["n"], 1)
+        self.assertIn("gate agent is not running", lines[1]["text"])
+
+    def test_a_polling_gate_raises_no_alarm(self):
+        def later():
+            intercom.write_json(self.path("gate.json"), {"polled_at": self.clock.now})
+            self.clock.now += intercom.CEILING_S
+            intercom.write_json(self.path("gate.json"), {"polled_at": self.clock.now})
+            return 200, watch_body(event="idle")
+        lines = self.follow([lambda: (200, watch_body(last=1, entries=[turn(1, "hm")])),
+                             later, lambda: (200, watch_body(event="ended"))])
+        self.assertEqual([l.get("n") for l in lines], [1])
+
+    def test_wake_next_delivers_the_next_closed_turn(self):
+        seen = {}
+
+        def ask():
+            intercom.write_json(self.path("wake-next"), {})
+            return 200, watch_body(event="idle")
+
+        def end():
+            seen["delivered"] = self.delivered()
+            return 200, watch_body(event="ended", last=1)
+        self.follow([ask, lambda: (200, watch_body(last=1, entries=[turn(1, "so the point is")])), end])
+        self.assertEqual(seen["delivered"], 1)
+
+    def test_start_hands_over_the_whole_conversation_then_asks_about_the_newest(self):
+        now = self.clock.now
+        self.spool(turn(1, "Hi everyone.", at=now - 300), turn(2, "Claude, listen in.", at=now - 290),
+                   turn(3, "So the reindeer is a filler.", at=now - 20))
+        intercom.write_json(self.path("delivered.json"), {"upto": 2})
+        intercom.write_json(self.path("gate.json"), {"instance": 4})
+        with open(self.path("brief.txt"), "w", encoding="utf-8") as fh:
+            fh.write("Alaska planning with Mum and Dad.")
+        code, out, _ = self.run_cli(["gate", "start"], Relay({}))
+        self.assertEqual(code, 0)
+        self.assertIn("## Steering or collaborating", out)
+        self.assertNotIn("{{", out)
+        self.assertIn("Alaska planning with Mum and Dad.", out)
+        handover = out.rpartition("<conversation_so_far>")[2].partition("</conversation_so_far>")[0]
+        self.assertIn("Hi everyone.", handover)
+        self.assertNotIn("reindeer", handover)
+        self.assertNotIn("[delivered]", handover)
+        self.assertTrue(out.rstrip().endswith(intercom.GATE_QUESTION))
+        self.assertIn("[00:15 S0] So the reindeer is a filler.\n", out)
+        g = intercom.read_json(self.path("gate.json"))
+        self.assertEqual((g["instance"], g["cursor"], g["asked"]), (5, 3, True))
+
+    def test_speech_is_gathered_before_the_gate_judges_it(self):
+        self.spool(turn(1, "So", at=self.clock.now))
+        intercom.write_json(self.path("delivered.json"), {"upto": 0})
+        before = self.clock.now
+        self.run_cli(["gate", "start"], Relay({}))
+        self.assertGreaterEqual(self.clock.now - before, intercom.GATE_GATHER_S)
+
+    def test_yes_wakes_the_main_agent_and_is_logged(self):
+        intercom.write_json(self.path("gate.json"), {"instance": 1, "cursor": 3, "asked": True, "budget": 9999})
+        _, out, _ = self.run_cli(["gate", "y"], Relay({}))
+        self.assertEqual(intercom.read_json(self.path("wake")), {"upto": 3})
+        answers = [json.loads(l) for l in Path(self.path("answers.jsonl")).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(a["answer"], a["upto"]) for a in answers], [("y", 3)])
+        self.assertIn("intercom gate wait", out)
+
+    def test_no_is_logged_but_wakes_nobody(self):
+        intercom.write_json(self.path("gate.json"), {"instance": 1, "cursor": 3, "asked": True, "budget": 9999})
+        self.run_cli(["gate", "n"], Relay({}))
+        self.assertFalse(os.path.exists(self.path("wake")))
+
+    def test_what_the_rules_delivered_is_context_not_a_question(self):
+        now = self.clock.now
+        self.spool(turn(4, "Claude, check the fee.", at=now - 40), turn(5, "And the parking?", at=now - 15))
+        intercom.write_json(self.path("delivered.json"), {"upto": 4})
+        intercom.write_json(self.path("gate.json"), {"instance": 1, "cursor": 3, "asked": False, "budget": 9999})
+        _, out, _ = self.run_cli(["gate", "wait"], Relay({}))
+        self.assertIn("Claude, check the fee.  [delivered]", out)
+        self.assertIn("And the parking?\n", out)
+        self.assertEqual(out.count(intercom.GATE_QUESTION), 1)
+
+    def test_a_gate_that_has_read_enough_is_told_to_hand_over(self):
+        intercom.write_json(self.path("gate.json"), {"instance": 1, "cursor": 3, "asked": True, "budget": 0})
+        _, out, _ = self.run_cli(["gate", "n"], Relay({}))
+        self.assertTrue(out.startswith("RESPAWN"))
+
+    def test_the_end_of_the_session_ends_the_gate(self):
+        self.spool({"at": self.clock.now, "kind": "end"})
+        intercom.write_json(self.path("gate.json"), {"instance": 1, "cursor": 3, "asked": False, "budget": 9999})
+        _, out, _ = self.run_cli(["gate", "wait"], Relay({}))
+        self.assertIn("ENDED", out)
+
+    def test_answering_before_any_gate_started_says_to_start(self):
+        code, _, err = self.run_cli(["gate", "y"], Relay({}))
+        self.assertEqual(code, 1)
+        self.assertIn("intercom gate start", err)
+
+    def test_wake_next_and_brief_leave_files_for_follow_and_the_gate(self):
+        code, _, _ = self.run_cli(["wake-next"], Relay({}))
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(self.path("wake-next")))
+        self.run_cli(["brief"], Relay({}), stdin=io.StringIO("Steering: Louie at the dealer.\n"))
+        self.assertEqual(Path(self.path("brief.txt")).read_text(encoding="utf-8"), "Steering: Louie at the dealer.")
+
+
+class MainPosts(unittest.TestCase):
+    def test_chat_text_and_edits_count_but_blank_turns_and_subagents_do_not(self):
+        rows = [
+            {"type": "assistant", "timestamp": "2026-10-25T07:41:31Z",
+             "message": {"content": [{"type": "text", "text": "."}]}},
+            {"type": "assistant", "timestamp": "2026-10-25T07:41:59Z",
+             "message": {"content": [{"type": "text", "text": "The modern one is SpringHill."}]}},
+            {"type": "assistant", "timestamp": "2026-10-25T07:42:17Z",
+             "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/plan.md"}},
+                                     {"type": "tool_use", "name": "Bash",
+                                      "input": {"command": "cfs edit /memory/trip/todo.md --rev 1 <<'EOF'"}}]}},
+            {"type": "assistant", "isSidechain": True, "timestamp": "2026-10-25T07:43:00Z",
+             "message": {"content": [{"type": "text", "text": "a subagent's notes"}]}},
+            {"type": "user", "timestamp": "2026-10-25T07:44:00Z", "message": {"content": "hi"}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "main.jsonl")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(json.dumps(r) for r in rows) + "\n" + '{"type": "assist')
+            posts, offset = intercom.main_posts(path, 0)
+            self.assertEqual([p[1] for p in posts],
+                             ["The modern one is SpringHill.", "updated plan.md", "updated todo.md"])
+            self.assertEqual(intercom.main_posts(path, offset), ([], offset), "a half-written line waits")
 
 
 class Watch(Base):

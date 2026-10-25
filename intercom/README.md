@@ -30,7 +30,8 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
-| `bin/intercom.py` | the CLI: health, start, watch, follow, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
+| `GATE.md` | the gate agent's prompt; `intercom gate start` fills in GUIDE.md's "Steering or collaborating" and the brief |
+| `bin/intercom.py` | the CLI: health, start, watch, follow, gate, wake-next, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
@@ -341,9 +342,40 @@ flushes the batch at once; talk mode sends each turn as it closes.
 after a few quiet minutes: on a 7-minute idle socket it delivered nothing, not
 even the close, while a plain client on the same socket got the end frame. A
 pause in the conversation silently ended Claude's listening. `follow` loops
-`/watch` instead (gathering 10s in listen mode, as the stream batches), prints
-each news entry as the same JSON line the stream would send, and exits at the
-end. `/events` and `monitor-url` stay for other clients.
+`/watch` instead, prints each news entry as the same JSON line the stream would
+send, and exits at the end. `/events` and `monitor-url` stay for other clients.
+
+**Listen mode under Monitor has a gate.** Every Monitor event wakes Claude, and
+a wake re-reads the whole conversation from cache, so a quiet one costs about as
+much as a busy one. On a 3-hour collaborating call (Opus, 10s batches), 302 of
+595 calls were a bare `.`, and they were 55% of its 154M cache-read tokens. So
+`follow` holds listen-mode turns, and a Haiku subagent running `intercom gate`
+says which batches the main agent would act on. Deterministic rules don't wait
+for it: a turn naming Claude, device news, `wake-next`, and a 30 s ceiling on
+the oldest undelivered line. Replayed against that call (Haiku answering each of
+its 523 batches, scored against what Opus actually did), Opus woke 226 times
+instead of 480; 63% of its actions arrived on the spot, 80% within 15 s, all
+within 30 s. Rules alone woke it 166 times but put only 22% on the spot. What
+made the gate work:
+- It sees the main agent's posts (read from its JSONL), so it can tell the room
+  reading out an answer from a new question. Without them it woke Opus twice as
+  often and drifted towards "no" as its context grew.
+- Its question line sits after every batch. How the threshold is worded (40%,
+  "think briefly") made no measurable difference.
+- Half its "false" wakes were one batch early: Opus waited for the point. Hence
+  `wake-next`, which only Opus can know to ask for.
+
+The relay is unchanged. `follow` is its only reader, and the two agents meet in
+files under `~/.intercom/gate-<id>/`, one writer each (spool and delivery cursor
+from `follow`; answers, gate state and the `wake` flag from the gate;
+`wake-next` and the brief from the main agent). A gate that ends its turn
+notifies the main agent, which is how a respawn is asked for: past 100K tokens
+Haiku's input costs 5x, so each gate is told `RESPAWN` after reading up to
+~35K, and the next starts from the whole conversation so far, compact. That
+fits easily: the call above was ~40K tokens of transcript and posts, while most
+of a long-running gate's context was its own per-call framing. Polling the
+relay every 2 s instead of long-polling for 10 s costs ~1,800 requests a meeting
+hour, well inside the free plan.
 
 **`speak` is compare-and-swap.** Claude passes the last entry it read; a newer
 turn from Louie, or one still in progress, means nothing is played and the
@@ -373,6 +405,6 @@ then fails the *next* request.
 logged but don't count as news. The cursor is written only after output is
 printed, so a killed watch replays rather than skips.
 
-**Free plan fits.** Per meeting hour: ~450 GB-s of 13,000/day, ~720 billed
-requests of 100k/day (incoming WebSocket messages bill 20:1), ~720 rows
-written. Archived audio is buffered to ~30s per row for the same reason.
+**Free plan fits.** Per meeting hour: ~450 GB-s of 13,000/day, ~2,500 billed
+requests of 100k/day (incoming WebSocket messages bill 20:1, and the gated
+`follow` polls every 2 s), ~720 rows written. Archived audio is buffered to ~30s per row for the same reason.

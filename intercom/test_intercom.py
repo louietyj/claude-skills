@@ -72,6 +72,18 @@ class Base(unittest.TestCase):
         return relay, (json.loads(out) if out.strip() else None), err
 
 
+def monitor_lines(out):
+    """`follow`'s output as {"n", "text"}: `51 [07:20 S1] text`, or `[--] text` without an n."""
+    lines = []
+    for line in out.splitlines():
+        if line.startswith("[--] "):
+            lines.append({"text": line[5:]})
+        else:
+            n, _, rest = line.partition(" ")
+            lines.append({"n": int(n), "text": rest.split("] ", 1)[1]})
+    return lines
+
+
 def watch_body(**kw):
     body = {"event": "transcript", "id": "K7QM", "state": "live", "elapsed_s": 75,
             "entries": [], "last": 0, "more": False, "tail": None,
@@ -91,7 +103,7 @@ class Follow(Base):
         relay = Relay({"/status": (200, {"mode": mode}), "/watch": lambda p, b: next(answers)})
         with mock.patch.object(intercom.time, "sleep", lambda s: None):
             code, out, _ = self.run_cli(list(argv), relay)
-        return relay, [json.loads(l) for l in out.splitlines()]
+        return relay, monitor_lines(out)
 
     def test_entries_stream_one_line_each_until_the_end_without_claudes_own(self):
         relay, lines = self.follow([
@@ -113,7 +125,14 @@ class Follow(Base):
 
     def test_a_gone_session_stops_with_a_line_instead_of_retrying(self):
         _, lines = self.follow([(404, {"error": "no such session"})])
-        self.assertEqual(lines[0]["kind"], "error")
+        self.assertEqual(lines, [{"text": "follow stopped: 404 no such session"}])
+
+    def test_monitor_lines_are_compact_and_lead_with_the_entry_number(self):
+        _, lines = self.follow([(200, watch_body(event="ended", last=2, entries=[
+            {"n": 2, "kind": "turn", "t": 61, "spk": 1, "text": "Only medical."}]))])
+        self.assertEqual(lines, [{"n": 2, "text": "Only medical."}])
+        self.assertEqual(intercom.follow_line({"n": 2, "kind": "turn", "t": 61, "spk": 1, "text": "Only medical."}),
+                         "2 [01:01 S1] Only medical.")
 
     def test_follow_never_moves_the_cursor_speak_defaults_to(self):
         intercom.write_state("cursor-K7QM.json", {"since": 1})
@@ -190,7 +209,7 @@ class Gate(Base):
             return out
         relay = Relay({"/status": (200, {"mode": "listen"}), "/watch": watch})
         code, out, _ = self.run_cli(["follow"], relay)
-        return [json.loads(l) for l in out.splitlines()]
+        return monitor_lines(out)
 
     def delivered(self):
         return intercom.read_json(self.path("delivered.json"))["upto"]

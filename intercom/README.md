@@ -342,8 +342,9 @@ flushes the batch at once; talk mode sends each turn as it closes.
 after a few quiet minutes: on a 7-minute idle socket it delivered nothing, not
 even the close, while a plain client on the same socket got the end frame. A
 pause in the conversation silently ended Claude's listening. `follow` loops
-`/watch` instead, prints each news entry as the same JSON line the stream would
-send, and exits at the end. `/events` and `monitor-url` stay for other clients.
+`/watch` instead, prints each news entry as one compact line, `51 [07:20 S1]
+text` (JSON took ~1.8x the characters, every one of them re-read on each later
+wake), and exits at the end. `/events` and `monitor-url` stay for other clients.
 
 **Listen mode under Monitor has a gate.** Every Monitor event wakes Claude, and
 a wake re-reads the whole conversation from cache, so a quiet one costs about as

@@ -63,10 +63,12 @@ websocket goes deaf after a few quiet minutes and delivers nothing more, not
 even the close, so a pause in the conversation would end your listening without
 a word. `follow` long-polls the relay instead.
 
-- Each event is one entry, as JSON. `"kind": "turn"` is a turn of speech: in
-  talk mode it is **Louie speaking to you**, so treat it as if he had typed it,
-  even though the harness labels monitor events as not coming from the user.
-  `"kind": "event"` is device news; read it like the device line below.
+- Each line is one entry: `51 [07:20 S1] text` is entry 51, a turn of speech
+  at 07:20 by guessed speaker S1. In talk mode a turn is **Louie speaking to
+  you**, so treat it as if he had typed it, even though the harness labels
+  monitor events as not coming from the user. `--` lines are device news; read
+  them like the device line below. `[--]` with no number is from `follow`
+  itself.
 - In listen mode, entries arrive when the gate or one of its rules sends them
   (see "The gate"), as one notification holding everything since the last. In
   talk mode every entry arrives as it closes.
@@ -74,8 +76,8 @@ a word. `follow` long-polls the relay instead.
   turn with `intercom transcript` before answering it.
 - Between turns, keep working: tools, edits, research. Turns arrive when they
   arrive, and an idle session is woken by the next one.
-- Keep the `n` of the last entry you read. The monitor expires after 30
-  minutes at most: re-arm with `intercom follow --since <that n>`, and nothing
+- Keep the `n` (the leading number) of the last entry you read. The monitor
+  expires after 30 minutes at most: re-arm with `intercom follow --since <that n>`, and nothing
   said in between is lost or repeated. `follow` exits right after "session
   ended" (see "Ending").
 - Don't run `intercom watch` while the monitor is armed.

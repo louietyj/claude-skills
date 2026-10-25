@@ -155,6 +155,11 @@ def render(e):
     return f"[{at} --] {e['text']}"
 
 
+def follow_line(e):
+    """A Monitor event: the entry's n first, for `follow --since` and `speak --since`."""
+    return f"{e['n']} {render(e)}" if "n" in e else f"[--] {e['text']}"
+
+
 def describe_device(d, state):
     """Whether audio really reaches the transcriber: a quiet room vs a dead mic."""
     if not d:
@@ -427,7 +432,7 @@ def cmd_follow(cfg, args):
         status, body = relay(cfg, "/watch", id=sid, since=since, interval=0,
                              wait=WATCH_BUDGET, timeout=WATCH_BUDGET + 20)
         if status in (401, 403, 404):
-            print(json.dumps({"kind": "error", "text": f"follow stopped: {status} {error_text(body)}"}), flush=True)
+            print(follow_line({"kind": "error", "text": f"follow stopped: {status} {error_text(body)}"}), flush=True)
             return
         if status != 200 or not isinstance(body, dict):
             time.sleep(backoff)
@@ -436,7 +441,7 @@ def cmd_follow(cfg, args):
         backoff = 1
         for e in body.get("entries", []):
             if e.get("kind") not in NOT_NEWS:
-                print(json.dumps(e, ensure_ascii=False), flush=True)
+                print(follow_line(e), flush=True)
         since = max(since, body.get("last") or 0)
         if body["event"] == "ended" and not body.get("more"):
             return
@@ -550,7 +555,7 @@ def follow_gated(cfg, sid, since):
         nonlocal since
         batch = sched.take()
         for e in [*batch, *extra]:
-            print(json.dumps(e, ensure_ascii=False), flush=True)
+            print(follow_line(e), flush=True)
         since = max([since, *(e["n"] for e in batch if "n" in e)])
         write_json(gate_file(sid, "delivered.json"), {"upto": since})
 

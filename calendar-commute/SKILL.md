@@ -47,6 +47,11 @@ be there to answer, skip the event and list it in the report with the question.
 date doesn't. Add one only when something calls for it: a flight, an event that
 says "please arrive 15 minutes early", or Louie asking for one.
 
+Look for that instruction before deciding there is none. It is often not in
+the calendar event: an event created from Gmail, or one carrying a booking
+reference, came from a confirmation email, and "arrive early" lines usually
+live there. Search Gmail for it and read it.
+
 When there is a buffer, **it is always its own event. Never fold it into the
 drive** by padding its length ("~31 min + buffer") or by ending the drive early
 and leaving a gap. The day must stay contiguous:

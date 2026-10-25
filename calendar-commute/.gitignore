@@ -1,0 +1,4 @@
+# Built by package.py.
+*.zip
+
+__pycache__/

@@ -335,9 +335,15 @@ mic is never reported as silenced, and Claude isn't told about mute at all.
 conversation has a turn every few seconds, so the relay holds listen-mode
 turns for 10s and then sends them back to back as separate frames: Monitor
 joins frames that arrive together into one notification, and its truncation
-(around 500 characters) appeared to apply per frame, which one big frame
-would hit far more often. Device news
+applies per line, which one big frame would hit far more often. Device news
 flushes the batch at once; talk mode sends each turn as it closes.
+
+**`follow` wraps long entries.** Monitor cuts each stdout line at ~400
+characters (`...(truncated)`, not configurable), and every long talk-mode turn
+then cost an `intercom transcript` call before Claude could answer. Lines
+printed within 200 ms arrive whole in one notification, so `follow` wraps an
+entry at word boundaries into lines of at most 380, continuations prefixed
+`<n>+ `.
 
 **Monitor runs `follow`, not the event socket.** Monitor's websocket went deaf
 after a few quiet minutes: on a 7-minute idle socket it delivered nothing, not

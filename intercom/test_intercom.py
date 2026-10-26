@@ -134,6 +134,16 @@ class Follow(Base):
         self.assertEqual(intercom.follow_line({"n": 2, "kind": "turn", "t": 61, "spk": 1, "text": "Only medical."}),
                          "2 [01:01 S1] Only medical.")
 
+    def test_a_long_entry_wraps_onto_continuation_lines_monitor_keeps_whole(self):
+        text = " ".join(f"word{i}" for i in range(200))
+        lines = intercom.follow_line({"n": 7, "kind": "turn", "t": 5, "text": text}).split("\n")
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(all(len(l) <= intercom.FOLLOW_WIDTH for l in lines))
+        self.assertTrue(lines[0].startswith("7 [00:05 S0] word0 "))
+        self.assertTrue(all(l.startswith("7+ ") for l in lines[1:]))
+        rejoined = " ".join([lines[0].split("] ", 1)[1], *(l[3:] for l in lines[1:])])
+        self.assertEqual(rejoined, text)
+
     def test_follow_never_moves_the_cursor_speak_defaults_to(self):
         intercom.write_state("cursor-K7QM.json", {"since": 1})
         self.follow([(200, watch_body(event="ended", last=9))])

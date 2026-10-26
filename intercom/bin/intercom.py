@@ -154,9 +154,25 @@ def render(e):
     return f"[{at} --] {e['text']}"
 
 
+FOLLOW_WIDTH = 380  # Monitor truncates each stdout line at ~400 chars; lines in one batch stay whole
+
+
 def follow_line(e):
-    """A Monitor event: the entry's n first, for `follow --since` and `speak --since`."""
-    return f"{e['n']} {render(e)}" if "n" in e else f"[--] {e['text']}"
+    """A Monitor event: the entry's n first, for `follow --since` and `speak --since`.
+    A long entry wraps at word boundaries onto `n+` continuation lines, so it arrives whole."""
+    line = f"{e['n']} {render(e)}" if "n" in e else f"[--] {e['text']}"
+    if len(line) <= FOLLOW_WIDTH:
+        return line
+    cont = f"{e['n']}+ " if "n" in e else "[--]+ "
+    out, rest = [], line
+    while rest:
+        room = FOLLOW_WIDTH - (len(cont) if out else 0)
+        cut = len(rest) if len(rest) <= room else rest.rfind(" ", 0, room + 1)
+        if cut <= 0:
+            cut = room
+        out.append((cont if out else "") + rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    return "\n".join(out)
 
 
 def describe_device(d, state):

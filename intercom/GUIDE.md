@@ -75,8 +75,8 @@ a word. `follow` long-polls the relay instead.
 - In listen mode, entries arrive when the gate or one of its rules sends them
   (see "The gate"), as one notification holding everything since the last. In
   talk mode every entry arrives as it closes.
-- Monitor truncates a long event (it ends in `...(truncated)`). Read the full
-  turn with `intercom transcript` before answering it.
+- A long entry wraps: a line starting `51+` continues entry 51. `--since`
+  takes the plain number.
 - Between turns, keep working: tools, edits, research. Turns arrive when they
   arrive, and an idle session is woken by the next one.
 - Keep the `n` (the leading number) of the last entry you read. The monitor

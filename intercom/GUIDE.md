@@ -33,6 +33,9 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
 - `--mode listen|talk`, default listen. The device shows it on the room's
   button, so Louie knows whether you can talk before he turns audio on.
 - `--label` shows under the id on the device: a few words.
+- `--default-terms` adds Louie's standing list, for when there is no topic
+  yet (he rang you from the power button). A failed fetch still starts the
+  session, with a `keyterms_warning`.
 - `--archive` keeps the audio so `intercom transcript --batch` can run a
   full-file pass afterwards. That transcript is far more accurate, and is the
   input for the transcript-humanize skill. The audio is deleted once the batch

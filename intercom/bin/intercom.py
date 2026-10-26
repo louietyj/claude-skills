@@ -233,18 +233,31 @@ def cmd_health(cfg, args):
           "phone_line": phone_line})
 
 
-def read_terms(args):
+def fetch_default_terms(cfg):
+    """(lines, warning); never raises, so a failed fetch can't hold up a fast dial."""
+    url = cfg.get("keyterms_url")
+    if not url:
+        return [], "config.json has no keyterms_url; started without the default terms"
+    status, body = request(url, timeout=10)
+    if status != 200 or not isinstance(body, str):
+        return [], f"default terms not fetched ({status} {error_text(body)}); started without them"
+    return body.splitlines(), None
+
+
+def read_terms(cfg, args):
+    lines, warning = fetch_default_terms(cfg) if args.default_terms else ([], None)
     terms = list(args.term or [])
     if args.terms_file:
         with open(args.terms_file, encoding="utf-8") as fh:
-            for line in fh:
-                terms.extend(p.strip() for p in line.split(","))
+            lines.extend(fh)
+    for line in lines:
+        terms.extend(p.strip() for p in line.split(","))
     seen, out = set(), []
     for t in terms:
         if t and t.lower() not in seen:
             seen.add(t.lower())
             out.append(t)
-    return out
+    return out, warning
 
 
 def cmd_start(cfg, args):
@@ -254,7 +267,7 @@ def cmd_start(cfg, args):
         if status == 200 and body.get("state") in ("armed", "live"):
             die(f"session {prev} is still {body['state']}. Keep watching it, `intercom stop` it, "
                 "or pass --force to start another alongside it.")
-    terms = read_terms(args)
+    terms, terms_warning = read_terms(cfg, args)
     status, body = relay(cfg, "/session", method="POST", timeout=20,
                          body={"label": args.label or "", "keyterms": terms, "archive": args.archive,
                                "mode": args.mode, **({"hold_s": args.hold} if args.hold is not None else {})})
@@ -270,6 +283,7 @@ def cmd_start(cfg, args):
                if args.mode == "listen" else "")
             + "; only without one, run `intercom watch` and keep watching in this same turn.")
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
+          **({"keyterms_warning": terms_warning} if terms_warning else {}),
           "archive": args.archive, "next": tap + then})
 
 
@@ -863,6 +877,9 @@ def main():
     s.add_argument("--label", help="a few words shown under the id on the device")
     s.add_argument("--term", action="append", help="a keyterm for the transcriber (repeatable)")
     s.add_argument("--terms-file", help="keyterms, one per line or comma-separated")
+    s.add_argument("--default-terms", action="store_true",
+                   help="also fetch the standing keyterm list from config.json's keyterms_url; "
+                        "if that fails, start without it and say so")
     s.add_argument("--archive", action="store_true",
                    help="keep the audio for `transcript --batch`; deleted once that runs")
     s.add_argument("--hold", type=float,

@@ -509,6 +509,30 @@ class Start(Base):
         self.assertEqual(body["keyterms"], ["Louie", "trustee", "Wooga", "beneficiary"])
         self.assertTrue(body["archive"])
 
+    def start_with_default_terms(self, cfg, list_answer):
+        relay = Relay({"/session": (200, {"id": "ACDE"}), "https://dl.test/terms.txt": list_answer})
+        with mock.patch.object(intercom, "load_config", lambda: dict(cfg)):
+            code, out, _ = self.run_cli(["start", "--term", "Louie", "--default-terms"], relay)
+        self.assertEqual(code, 0)
+        return relay.calls[-1]["body"]["keyterms"], json.loads(out)
+
+    def test_default_terms_are_fetched_from_the_config_url_and_merged(self):
+        cfg = {**CFG, "keyterms_url": "https://dl.test/terms.txt"}
+        terms, out = self.start_with_default_terms(cfg, (200, "Felicia\nlouie\n\nFragomen, GMT\n"))
+        self.assertEqual(terms, ["Louie", "Felicia", "Fragomen", "GMT"])
+        self.assertNotIn("keyterms_warning", out)
+
+    def test_an_unreachable_default_list_still_starts_the_session_and_says_so(self):
+        cfg = {**CFG, "keyterms_url": "https://dl.test/terms.txt"}
+        terms, out = self.start_with_default_terms(cfg, (0, {"error": "URLError: timed out"}))
+        self.assertEqual(terms, ["Louie"])
+        self.assertIn("timed out", out["keyterms_warning"])
+
+    def test_default_terms_without_a_configured_url_still_starts_and_says_so(self):
+        terms, out = self.start_with_default_terms(CFG, (200, "unused"))
+        self.assertEqual(terms, ["Louie"])
+        self.assertIn("keyterms_url", out["keyterms_warning"])
+
 
 class Talk(Base):
     def setUp(self):

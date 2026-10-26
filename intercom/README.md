@@ -75,7 +75,8 @@ pass one each time (the repo is public). `intercom health` says whether the
 phone line is set up.
 
 `config.json` (gitignored; see `config.example.json`) holds `worker_url`,
-`cli_token` and `device_token`. Then `python bin/intercom.py health`.
+`cli_token`, `device_token` and optionally `keyterms_url`, the standing list
+`intercom start --default-terms` fetches. Then `python bin/intercom.py health`.
 
 **Devices:** bookmark the plain worker URL. The first visit asks for a pairing
 code: `intercom pair` issues one (6 digits, single use, 5 minutes, 5 tries, and 20

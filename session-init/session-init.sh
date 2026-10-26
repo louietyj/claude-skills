@@ -9,7 +9,7 @@
 # being printed, and the caller has to be able to see which half worked. Each
 # stage records its own status and the summary at the end reports all of them.
 
-TOTAL=6
+TOTAL=7
 step=0
 summary=()
 failed=0
@@ -90,6 +90,7 @@ elif ! run "bash $DFS/setup.sh" bash "$DFS/setup.sh"; then
   note '/memory/INDEX.md' 'UNAVAILABLE'
 else
   note 'durable-filesystem/setup.sh' 'OK -- `cfs` is on PATH'
+  cfs_ok=1
 
   if run "cat $DFS/SKILL.md" cat "$DFS/SKILL.md"; then
     note 'durable-filesystem/SKILL.md' 'OK -- printed in full above'
@@ -158,6 +159,73 @@ then
   note '~/.claude/settings.json' 'OK -- native web tools denied, use mcp-parallel'
 else
   note '~/.claude/settings.json' 'FAILED -- native web tools still allowed'
+fi
+
+# --- snapshot connector tool policies for triggered runs ----------------------
+# Triggered cloud runs allow every connector tool and never see these policies,
+# so their SessionStart hook re-imposes them from this snapshot. This step alone
+# owns the file, so it overwrites it unattended.
+if [ -z "${cfs_ok:-}" ]; then
+  skip 'cfs is not working'
+  note 'connector policy snapshot' 'SKIPPED'
+elif run 'snapshot connector policies to /connector-policy.json' python3 -I - <<'PY'
+import glob, json, os, re, subprocess, sys, tempfile
+
+STORE_PATH = "/connector-policy.json"
+
+policy = {}
+for path in glob.glob("/tmp/mcp-config-*.json"):
+    try:
+        with open(path) as f:
+            servers = json.load(f).get("mcpServers", {})
+    except (OSError, ValueError):
+        continue
+    for server, cfg in servers.items():
+        tools = cfg.get("tools", [])
+        if not any("permission_policy" in t for t in tools):
+            continue
+        entry = policy.setdefault(server, {"ask": [], "deny": []})
+        for t in tools:
+            p = t.get("permission_policy")
+            if p == "always_ask":
+                entry["ask"].append(t["name"])
+            elif p == "always_deny":
+                entry["deny"].append(t["name"])
+
+if not policy:
+    print("No connector policies in this session (triggered run, or not cloud); nothing to snapshot.")
+    sys.exit(0)
+
+body = json.dumps(policy, indent=2, sort_keys=True) + "\n"
+
+with tempfile.TemporaryDirectory() as tmp:
+    local = os.path.join(tmp, "current.json")
+    subprocess.run(["cfs", "download", STORE_PATH, "--to", local], capture_output=True)
+    current = open(local).read() if os.path.exists(local) else None
+if current == body:
+    print("Connector policies unchanged.")
+    sys.exit(0)
+
+if current is None:
+    cmd = ["cfs", "write", STORE_PATH, "--new"]
+else:
+    out = subprocess.run(["cfs", "read", STORE_PATH], capture_output=True, text=True).stdout
+    m = re.search(r"^rev: (\S+)", out, re.M)
+    if not m:
+        print(out)
+        sys.exit(1)
+    cmd = ["cfs", "write", STORE_PATH, "--rev", m.group(1)]
+proc = subprocess.run(cmd, input=body, capture_output=True, text=True)
+if proc.returncode != 0:
+    print(proc.stdout + proc.stderr)
+    sys.exit(proc.returncode)
+asks = sum(len(e["ask"]) for e in policy.values())
+print(f"Connector policies changed: updated {STORE_PATH} ({len(policy)} servers, {asks} ask).")
+PY
+then
+  note 'connector policy snapshot' 'OK -- see step 7'
+else
+  note 'connector policy snapshot' 'FAILED -- triggered runs may use a stale policy'
 fi
 
 printf '\n%s SESSION INIT COMPLETE %s\n' "$RULE_H" "$RULE_H"

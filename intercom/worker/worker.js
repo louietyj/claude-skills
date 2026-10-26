@@ -107,8 +107,6 @@ const VOICE_LEAD_S = 0.2;
 const VOICE_PLAYOUT_MS = 700;
 // The page's WebRTC connection takes a few seconds after START; audio fed before it is up is lost.
 const VOICE_READY_WAIT_MS = 10_000;
-// A nudge toward short spoken paragraphs, not a technical limit.
-const SPEAK_MAX = 400;
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
 const MODES = new Set(["listen", "talk"]);
@@ -1194,9 +1192,6 @@ export class Session {
     const text = String(body?.text ?? "").trim();
     if (!this.talk()) return json({ ok: false, error: "this is a listen session: Claude has no voice in it" }, 409);
     if (!text) return json({ ok: false, error: "nothing to say" }, 400);
-    if (text.length > SPEAK_MAX) {
-      return json({ ok: false, error: `${text.length} chars; ${SPEAK_MAX} at most per call` }, 413);
-    }
     if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
     if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
     if (!this.holder) {

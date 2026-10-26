@@ -346,11 +346,10 @@ EOF
 - **Always pass `--since`** with the `n` of the last entry you read (with
   `watch`, the saved cursor does this for you). If he has said anything newer,
   nothing is played: you would be answering a moment that has passed.
-- **Speak in short paragraphs, each one making sense on its own: 400
-  characters at most per call.** The cap is there to keep you talking, not
-  reading out a document. A longer answer is several `speak` calls; chaining
-  them in one command with the same `--since` is fine, because if he cuts in,
-  the rest are refused.
+- **Speak in short paragraphs, each one making sense on its own**: you are
+  talking, not reading out a document. A longer answer can be several `speak`
+  calls chained in one command with the same `--since`: if he cuts in, the
+  rest are refused.
 - It blocks until he has heard it, then returns a `status`:
   - `done`: he heard all of it.
   - `not_spoken`: nothing was played, because he said something you hadn't

@@ -698,12 +698,9 @@ class Modes(unittest.TestCase):
 
 
 class Speak(unittest.TestCase):
-    def test_too_long_and_no_device_are_refused_without_speaking(self):
+    def test_no_device_is_refused_without_speaking(self):
         sid, _ = create_talk()
         before = len(FAKE.speeches)
-        status, out = http("/speak", "POST", {"text": "x" * 401}, id=sid)
-        self.assertEqual(status, 413)
-        self.assertIn("400 at most", out["error"])
         ws = device(sid)
         wait_entries(sid, lambda es: es)
         ws.close()

@@ -245,10 +245,10 @@ track and tell the page to mute. Playback position is time since the first
 frame less the SFU-plus-jitter delay (`VOICE_PLAYOUT_MS`), and Soniox's
 character timestamps turn that into the words he heard.
 
-**`speak` takes at most 400 characters.** That isn't a technical limit:
-calls chained in one command lose and report the same as one long call
-would. It's there because a hard refusal reshapes an answer into short
-spoken paragraphs where a guideline alone doesn't.
+**`speak` has no length cap.** A 400-character cap was tried, to push
+answers into short spoken paragraphs. Claude just split the same answer into
+more calls, chained in one command, so the refusal only cost a tool call. The
+Bash call's 120s timeout already bounds what one command can say.
 
 **While Claude speaks, only sustained sound counts.** The watch's own echo
 canceller leaves loud but brief bursts, while Louie's speech holds 70-100% of

@@ -602,13 +602,10 @@ class Talk(Base):
         self.assertEqual(code, 1)
         self.assertIn("0-10s", err)
 
-    def test_long_speech_is_refused_with_how_to_split_it(self):
-        relay = Relay({})
-        code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("word " * 100))
-        self.assertEqual(code, 1)
-        self.assertIn("400 at most", err)
-        self.assertIn("one `intercom speak` each", err)
-        self.assertEqual(relay.calls, [])
+    def test_long_speech_goes_to_the_relay_whole(self):
+        relay = Relay({"/speak": (200, {"status": "done", "spoken": "", "unspoken": ""})})
+        self.run_cli(["speak"], relay, stdin=io.StringIO("word " * 300))
+        self.assertEqual(relay.calls[-1]["body"]["text"], ("word " * 300).strip())
 
     def test_speech_as_an_argument_is_refused(self):
         code, _, err = self.run_cli(["speak", "it costs $50"], Relay({}), stdin=io.StringIO(""))
@@ -650,9 +647,6 @@ class Talk(Base):
         out = json.loads(out)
         self.assertEqual(out["turns"], [{"n": 9, "text": "blue"}])
         self.assertIn("nothing was played", out["hint"])
-
-    def test_longest_speech_still_fits_the_bash_timeout(self):
-        self.assertLess(intercom.speak_timeout("x" * intercom.SPEAK_MAX), 120)
 
     def test_monitor_url_carries_the_event_key_not_the_cli_token(self):
         relay = Relay({"/status": (200, {"state": "live", "event_key": "ek123"})})

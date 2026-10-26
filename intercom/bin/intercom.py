@@ -30,7 +30,6 @@ STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 WATCH_BUDGET = 90
 WATCH_INTERVAL = 10
 NOTE_MAX = 120
-SPEAK_MAX = 400           # a nudge toward short spoken paragraphs, not a technical limit
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 HOLD_RANGE = "0-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
@@ -360,9 +359,6 @@ def speak_timeout(text):
 def cmd_speak(cfg, args):
     sid = current_id(args)
     text = read_text(args, "speak", "Okay, the tests are back and two failed.")
-    if len(text) > SPEAK_MAX:
-        die(f"{len(text)} chars; {SPEAK_MAX} at most per call. Say it as short spoken paragraphs, "
-            "one `intercom speak` each (chained with the same --since is fine), not a written answer read out.")
     # Monitor users pass the last event's n; watch users have it in the saved cursor.
     since = args.since if args.since is not None else (read_state(f"cursor-{sid}.json") or {}).get("since")
     status, body = relay(cfg, "/speak", method="POST", id=sid,
@@ -903,7 +899,7 @@ def main():
     n.add_argument("--id")
     n.set_defaults(fn=cmd_note)
 
-    sp = sub.add_parser("speak", help=f"talk mode: say <= {SPEAK_MAX} chars, on stdin, through the "
+    sp = sub.add_parser("speak", help="talk mode: say text on stdin through the "
                                       "device; blocks until played or Louie cuts in")
     sp.add_argument("text", nargs="?", help=argparse.SUPPRESS)
     sp.add_argument("--since", type=int,

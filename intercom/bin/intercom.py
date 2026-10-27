@@ -238,6 +238,8 @@ def cmd_health(cfg, args):
     phone = body.get("phone_line") or {}
     phone_line = "set up" if phone and all(phone.values()) else \
         f"not set up (missing {', '.join(k for k, v in phone.items() if not v) or 'everything'}): `call` will fail"
+    isolation = "set up" if (body.get("voice_isolation") or {}).get("KRISP_API_KEY") else \
+        "not set up (no KRISP_API_KEY): talk mode hears music and other voices"
     # 404 for a session that cannot exist proves the token passed the gate.
     status, body = relay(cfg, "/status", id="AAAA", timeout=15)
     if status == 401:
@@ -245,7 +247,7 @@ def cmd_health(cfg, args):
     if status not in (200, 404):
         die(f"relay error on an authenticated route: {status} {error_text(body)}")
     emit({"ok": True, "relay": cfg["worker_url"], "secrets": "all set", "cli_token": "accepted",
-          "phone_line": phone_line})
+          "phone_line": phone_line, "voice_isolation": isolation})
 
 
 def fetch_default_terms(cfg):
@@ -285,7 +287,8 @@ def cmd_start(cfg, args):
     terms, terms_warning = read_terms(cfg, args)
     status, body = relay(cfg, "/session", method="POST", timeout=20,
                          body={"label": args.label or "", "keyterms": terms, "archive": args.archive,
-                               "mode": args.mode, **({"hold_s": args.hold} if args.hold is not None else {})})
+                               "mode": args.mode, "isolate": args.mode == "talk" and not args.no_isolate,
+                               **({"hold_s": args.hold} if args.hold is not None else {})})
     if status != 200 or not isinstance(body, dict) or not body.get("id"):
         die(f"could not create a session: {status} {error_text(body)}")
     sid = body["id"]
@@ -826,6 +829,7 @@ def cmd_status(cfg, args):
         die(f"status failed: {status} {error_text(body)}")
     emit({"id": sid, "mode": body.get("mode") or "listen", "state": body.get("state"),
           **({"hold_s": body["hold_s"]} if "hold_s" in body else {}),
+          **({"isolate": body.get("isolate", False)} if body.get("mode") == "talk" else {}),
           "label": body.get("label"), "elapsed": mmss(body.get("elapsed_s")), "entries": body.get("seq"),
           "archive": body.get("archive"), "keyterms": body.get("keyterms"),
           "device": describe_device(body.get("device"), body.get("state"))})
@@ -897,6 +901,9 @@ def main():
     s.add_argument("--hold", type=float,
                    help=f"talk mode: seconds of silence that close Louie's turn ({HOLD_RANGE}; default: "
                         "his device's setting, else 0)")
+    s.add_argument("--no-isolate", action="store_true",
+                   help="talk mode: transcribe the room as it is, without Krisp's voice isolation "
+                        "dropping music, chatter and other voices")
     s.add_argument("--force", action="store_true", help="start even though one is still live")
     s.set_defaults(fn=cmd_start)
 

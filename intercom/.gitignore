@@ -18,5 +18,6 @@ __pycache__/
 dev/*.webm
 dev/*.wav
 
-# AEC3 wasm build tree (sources, meson, objects); aec/aec3.wasm is the product.
+# wasm build trees (sources, objects); aec/aec3.wasm and opus/opus.wasm are the products.
 aec/.work/
+opus/.work/

@@ -17,7 +17,7 @@
 //                     the one holding it, in; room state, notes and the end out
 // Claude (CLI_TOKEN as ?token=):
 //   POST /pair        a one-time 6-digit code for pairing a device
-//   POST /session     create and arm a session, {mode: listen|talk} -> {id, event_key}
+//   POST /session     create and arm a session, {mode: listen|talk, isolate} -> {id, event_key}
 //   GET  /watch?id    long-poll for entries past ?since
 //   POST /note?id     a short note for the device (vibrates the watch)
 //   POST /speak?id    talk mode: say {text} through the device; blocks until played or interrupted
@@ -39,6 +39,8 @@ import PAGE from "./page.html";
 import AEC3_WASM from "../aec/aec3.wasm";
 import AEC3_JS from "../aec/aec3.js";
 import AEC3_WORKLET from "../aec/worklet.js";
+import OPUS_WASM from "../opus/opus.wasm";
+import { WebmOpusDecoder } from "../opus/opus.js";
 
 const AEC_FILES = {
   "/aec/aec3.wasm": [AEC3_WASM, "application/wasm"],
@@ -79,6 +81,15 @@ const PAIR_FAILS_PER_HOUR = 20;
 const WATCH_MAX_S = 590;
 const MAX_ENTRIES = 400;
 const PENDING_AUDIO_MAX = 200;      // chunks held while the transcriber's socket opens
+
+// Talk mode's voice isolation (Krisp): 16-bit PCM in 30 ms frames, at 8 or 16 kHz.
+const KRISP_API_URL = "https://api.developers.krisp.ai";
+const KRISP_URL = "https://streaming.krisp.ai/voice-isolation";
+const KRISP_TOKEN_MIN = 300;        // the longest session token Krisp issues
+const ISO_RATE = 16000;             // a page's audio is decoded to this
+const ISO_FRAME_MS = 30;
+// A frame Krisp hasn't returned by then means it has stalled or never connected.
+const ISO_STALL_MS = 3000;
 
 const SONIOX_MODEL = "stt-rt-v5";
 // Talk mode: Soniox's semantic endpointing at its most patient decides when a turn is over.
@@ -185,6 +196,85 @@ function wav(raw, data) {
   return concat([new Uint8Array(head.buffer), data]);
 }
 
+// Krisp keeps the voice nearest the mic and drops music, chatter and noise.
+// Frames come back one for one and in order, so the transcriber's clock is
+// unchanged. Whatever Krisp can't take (no token, a dropped socket, a stall)
+// goes to the transcriber unfiltered instead: the transcript never stops.
+class Isolation {
+  constructor({ url, token, rate, send, report }) {
+    Object.assign(this, { rate, send, report });
+    this.frameBytes = rate * ISO_FRAME_MS / 1000 * 2;
+    this.carry = new Uint8Array(0);
+    this.waiting = [];           // frames not yet returned, sent or not: {frame, at}
+    this.ws = null;
+    this.ready = false;
+    this.off = false;
+    this.connect(url, token).catch((e) => this.fail(e.message ?? String(e)));
+  }
+
+  async connect(url, token) {
+    const key = await token();
+    const resp = await fetch(url, { headers: { Upgrade: "websocket", Authorization: `api-key ${key}` } });
+    const ws = resp.webSocket;
+    if (!ws) throw new Error(`Krisp refused the connection (HTTP ${resp.status})`);
+    ws.accept();
+    if (this.off) { try { ws.close(1000); } catch {} return; }   // closed while connecting
+    this.ws = ws;
+    ws.addEventListener("message", (m) => this.onMessage(m.data));
+    ws.addEventListener("close", (c) => this.fail(`Krisp closed the stream: ${c.code}${c.reason ? ` ${c.reason}` : ""}`));
+    ws.addEventListener("error", () => this.fail("Krisp's stream failed"));
+    ws.send(JSON.stringify({ model: "VIVA-tel", sample_rate: this.rate, suppression_level: 100 }));
+  }
+
+  onMessage(data) {
+    if (this.off) return;
+    if (typeof data !== "string") {
+      if (this.waiting.shift()) this.send(new Uint8Array(data));
+      return;
+    }
+    let m;
+    try { m = JSON.parse(data); } catch { return; }
+    if (m.type === "ready") {
+      this.ready = true;
+      for (const w of this.waiting) this.ws.send(w.frame);
+    } else if (m.type === "error") {
+      this.fail(`Krisp: ${m.error?.code ?? "error"}`);
+    }
+  }
+
+  push(pcm) {
+    if (this.off) { this.send(pcm); return; }
+    const b = concat([this.carry, pcm]);
+    let at = 0;
+    for (; at + this.frameBytes <= b.length; at += this.frameBytes) {
+      const frame = b.slice(at, at + this.frameBytes);
+      this.waiting.push({ frame, at: Date.now() });
+      if (this.ready) this.ws.send(frame);
+    }
+    this.carry = b.slice(at);
+    if (this.waiting.length && Date.now() - this.waiting[0].at > ISO_STALL_MS) {
+      this.fail(`Krisp returned nothing for ${ISO_STALL_MS / 1000}s`);
+    }
+  }
+
+  fail(why) {
+    if (this.off) return;
+    this.close();
+    this.report(why);
+  }
+
+  // What Krisp still holds goes out as it was.
+  close() {
+    if (this.off) return;
+    this.off = true;
+    for (const w of this.waiting) this.send(w.frame);
+    if (this.carry.length) this.send(this.carry);
+    this.waiting = [];
+    this.carry = new Uint8Array(0);
+    try { this.ws?.close(1000); } catch {}
+  }
+}
+
 function mmss(sec) {
   const s = Math.max(0, Math.floor(sec));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
@@ -289,6 +379,10 @@ export class Session {
     this.sttOpening = false;
     this.quickFails = 0;
     this.pendingAudio = [];
+    this.iso = null;             // talk mode: the segment's Isolation, if it has one
+    this.decoder = null;         // ...and a page's webm decoded to PCM for it
+    this.krisp = null;           // Krisp session token: {key, until}
+    this.isoUnset = false;       // said once that the relay has no Krisp key
     this.cur = null;             // turn being assembled: {spk, t, text, gap}
     this.holdTimer = null;       // talk mode: delivers cur after TALK_HOLD_MS of silence
     this.pending = null;         // words still being recognised, never stored
@@ -500,6 +594,7 @@ export class Session {
   // stream. A stream resumed mid-container is not reliably decodable, so every
   // reconnect on either side starts a new segment.
   // `format` is Soniox's for raw audio (the phone line); a page sends webm, which Soniox detects.
+  // Isolated audio reaches Soniox as PCM either way.
   async startSegment(format = { audio_format: "auto" }) {
     // Synchronous up to the first await: the header chunk arrives right behind
     // the `seg` message and must land in pendingAudio.
@@ -509,6 +604,17 @@ export class Session {
     const seg = { n: this.meta.segs.length, start_s: this.elapsed(),
                   ...(format.audio_format !== "auto" ? { raw: format } : {}) };
     this.meta.segs.push(seg);
+    const rate = this.isolationRate(format);
+    if (rate) {
+      if (format.audio_format === "auto") this.decoder = new WebmOpusDecoder(OPUS_WASM, rate);
+      this.iso = new Isolation({
+        url: this.env.KRISP_URL ?? KRISP_URL, token: () => this.krispToken(), rate,
+        send: (frame) => this.toTranscriber(frame),
+        report: (why) => this.addEntry("event", {
+          text: `voice isolation off until the audio restarts (${why}); the transcriber hears unfiltered audio` }).catch(() => {}),
+      });
+      format = { audio_format: "pcm_s16le", sample_rate: rate, num_channels: 1 };
+    }
     await this.saveMeta();
 
     let ws;
@@ -549,9 +655,52 @@ export class Session {
     }, KEEPALIVE_MS);
   }
 
+  // Talk mode's isolation runs on 16-bit PCM: a page's webm is decoded to it,
+  // and the phone line's L16 already is. Other call codecs go as they are.
+  isolationRate(format) {
+    if (!this.talk() || !this.meta.isolate) return 0;
+    if (!this.env.KRISP_API_KEY) {
+      if (!this.isoUnset) {
+        this.isoUnset = true;
+        this.addEntry("event", { text: "voice isolation is unavailable (the relay has no KRISP_API_KEY); the transcriber hears unfiltered audio" }).catch(() => {});
+      }
+      return 0;
+    }
+    if (format.audio_format === "auto") return ISO_RATE;
+    if (format.audio_format === "pcm_s16le" && [8000, 16000].includes(format.sample_rate)) return format.sample_rate;
+    return 0;
+  }
+
+  // Session tokens are reused while they have a while left.
+  async krispToken() {
+    const now = Date.now();
+    if (this.krisp && this.krisp.until - now > 10 * 60_000) return this.krisp.key;
+    const resp = await fetch(`${this.env.KRISP_API_URL ?? KRISP_API_URL}/v2/sdk/tokens/session`, {
+      method: "POST",
+      headers: { Authorization: `api-key ${this.env.KRISP_API_KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ usage_type: "viva", expiration_ttl: KRISP_TOKEN_MIN }),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!body.data?.session_key) throw new Error(`Krisp refused a token: ${body.error_code ?? `HTTP ${resp.status}`}`);
+    this.krisp = { key: body.data.session_key, until: now + KRISP_TOKEN_MIN * 60_000 };
+    return this.krisp.key;
+  }
+
+  toTranscriber(chunk) {
+    if (this.stt) {
+      try { this.stt.send(chunk); } catch {}
+    } else if (this.sttOpening && this.pendingAudio.length < PENDING_AUDIO_MAX) {
+      this.pendingAudio.push(chunk);
+    }
+  }
+
   // An empty frame makes Soniox send its last finals and close; the old
   // listener still lands them. Resolves on close (or after 3s), for end().
   closeTranscriber() {
+    this.iso?.close();                  // the frames Krisp still holds, before the end of stream
+    this.iso = null;
+    this.decoder?.free();
+    this.decoder = null;
     const ws = this.stt;
     this.stt = null;
     clearInterval(this.keepalive);
@@ -597,11 +746,8 @@ export class Session {
   async onAudio(chunk) {
     this.lastAudioAt = Date.now();
     // Forward before any await, so chunks reach the transcriber in arrival order.
-    if (this.stt) {
-      try { this.stt.send(chunk); } catch {}
-    } else if (this.sttOpening && this.pendingAudio.length < PENDING_AUDIO_MAX) {
-      this.pendingAudio.push(chunk);
-    }
+    if (this.iso) this.isolate(chunk);
+    else this.toTranscriber(chunk);
     if (this.audioStalledAt) {
       const s = Math.round((this.lastAudioAt - this.audioStalledAt) / 1000);
       this.audioStalledAt = null;
@@ -609,6 +755,21 @@ export class Session {
       this.addEntry("event", { text: `${who} audio is back after ${s}s; nothing was heard in between` }).catch(() => {});
     }
     if (this.meta.archive) await this.archive(chunk);
+  }
+
+  isolate(chunk) {
+    if (!this.decoder) return this.iso.push(new Uint8Array(chunk));
+    if (this.decoder.failed) return;          // until the fresh recorder's segment
+    let pcm;
+    try {
+      pcm = this.decoder.push(chunk);
+    } catch (e) {
+      // A webm stream that can't be followed can't be resumed: a fresh recorder starts one.
+      this.decoder.failed = true;
+      this.addEntry("event", { text: `couldn't decode the page's audio (${e.message}); restarting the recorder` }).catch(() => {});
+      return this.toHolder({ type: "restart" });
+    }
+    if (pcm.length) this.iso.push(new Uint8Array(pcm.buffer));
   }
 
   async archive(chunk) {
@@ -1453,7 +1614,7 @@ export class Session {
       // The mode is set here and nowhere else: a listen session can never speak.
       this.meta = {
         id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive,
-        mode: b.mode, event_key: randomKey(), origin: b.origin, hold_ms: b.hold_ms ?? null,
+        mode: b.mode, isolate: !!b.isolate, event_key: randomKey(), origin: b.origin, hold_ms: b.hold_ms ?? null,
         state: "armed", created_at: Date.now(), started_at: null, ended_at: null,
         end_reason: null, seq: 0, news_seq: 0, segs: [],
       };
@@ -1582,7 +1743,7 @@ export default {
       }, phone_line: {
         TELNYX_API_KEY: !!env.TELNYX_API_KEY, TELNYX_PUBLIC_KEY: !!env.TELNYX_PUBLIC_KEY,
         TELNYX_CONNECTION_ID: !!env.TELNYX_CONNECTION_ID, TELNYX_FROM: !!env.TELNYX_FROM,
-      } });
+      }, voice_isolation: { KRISP_API_KEY: !!env.KRISP_API_KEY } });
     }
 
     // Telnyx's webhooks: the signature is the gate, and client_state names the session.
@@ -1641,6 +1802,8 @@ export default {
           return json({ error: `the turn wait must be ${HOLD_MIN_MS / 1000}-${HOLD_MAX_MS / 1000}s` }, 400);
         }
       }
+      // Isolation keeps one voice: listening needs everyone's.
+      if (b.isolate && mode !== "talk") return json({ error: "voice isolation is for talk sessions only" }, 400);
       const keyterms = (b.keyterms ?? []).map((t) => String(t).trim()).filter(Boolean).slice(0, 100);
       const claim = await (await registry.fetch("https://registry/claim", {
         method: "POST", body: JSON.stringify({ label: b.label ?? "", mode }) })).json();
@@ -1648,7 +1811,7 @@ export default {
       const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
       return stub.fetch("https://session/create", { method: "POST",
         body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive, mode,
-                               hold_ms, origin: url.origin }) });
+                               isolate: !!b.isolate, hold_ms, origin: url.origin }) });
     }
 
     // The stream URL as Telnyx was given it, which a Worker sees with an http scheme.

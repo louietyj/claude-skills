@@ -21,6 +21,12 @@ adapter dials its endpoint, as the real one does, and records the payload size
 and arrival time of every packet the relay sends. Sessions, track requests,
 renegotiation and adapter closes are recorded.
 
+Voice isolation, Krisp-shaped (`POST /v2/sdk/tokens/session`, `/voice-isolation`):
+issues a session token, then answers the hello with `ready` and returns each
+frame as CLEANED bytes of the same length, so a test can tell what went through
+it. `krisp["refuse_token"]` refuses tokens; `krisp["close_after"]` = n drops
+the stream after n frames.
+
 Import it and call start() to run in a background thread with its state
 inspectable (test_session.py does), or run it directly to serve on :8798.
 """
@@ -43,6 +49,7 @@ CANNED_BATCH = {"results": {"channels": [{"alternatives": [{"words": [
 
 TTS_WORD_S = 0.5
 TTS_PACE_S = 0.15            # wall time between word frames
+CLEANED = 0x11               # every byte of a frame Krisp returns
 
 
 class Fake:
@@ -52,6 +59,7 @@ class Fake:
         self.speeches = []     # one dict per TTS connection
         self.sfu = {"adapters": [], "packets": [], "sessions": 0, "subscribes": [],
                     "answers": [], "closed": []}
+        self.krisp = {"tokens": [], "streams": [], "refuse_token": False, "close_after": None}
         self._client = None
 
     def tokens(self, words, *, final=True, end=False, lead=False):
@@ -211,6 +219,34 @@ class Fake:
         return web.json_response({})
 
 
+    # --- Krisp -----------------------------------------------------------------------
+
+    async def krisp_token(self, request):
+        self.krisp["tokens"].append({"auth": request.headers.get("Authorization"), "body": await request.json()})
+        if self.krisp["refuse_token"]:
+            return web.json_response({"code": 1, "error_code": "BALANCE_EXHAUSTED", "message": "no credit"},
+                                     status=403)
+        return web.json_response({"data": {"session_key": "krisp-session", "usage_type": "viva"}})
+
+    async def krisp_viva(self, request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        rec = {"auth": request.headers.get("Authorization"), "hello": None, "frames": [], "closed": None}
+        self.krisp["streams"].append(rec)
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT and rec["hello"] is None:
+                rec["hello"] = json.loads(msg.data)
+                await ws.send_str(json.dumps({"type": "ready"}))
+            elif msg.type == WSMsgType.BINARY:
+                rec["frames"].append(len(msg.data))
+                if self.krisp["close_after"] is not None and len(rec["frames"]) > self.krisp["close_after"]:
+                    rec["closed"] = 1011
+                    await ws.close(code=1011)
+                    break
+                await ws.send_bytes(bytes([CLEANED]) * len(msg.data))
+        return ws
+
+
 def start(port=8798):
     fake = Fake()
     app = web.Application(client_max_size=64 * 1024 * 1024)
@@ -222,6 +258,8 @@ def start(port=8798):
     app.router.add_route("POST", "/v1/apps/{app}/sessions/{sid}/tracks/new", fake.tracks_new)
     app.router.add_route("PUT", "/v1/apps/{app}/sessions/{sid}/renegotiate", fake.renegotiate)
     app.router.add_route("POST", "/v1/listen", fake.batch)
+    app.router.add_route("POST", "/v2/sdk/tokens/session", fake.krisp_token)
+    app.router.add_route("GET", "/voice-isolation", fake.krisp_viva)
     ready = threading.Event()
 
     def run():

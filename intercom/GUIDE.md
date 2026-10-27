@@ -32,6 +32,10 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
 
 - `--mode listen|talk`, default listen. The device shows it on the room's
   button, so Louie knows whether you can talk before he turns audio on.
+- Talk mode keeps only Louie's voice: music, chatter and other people's voices
+  around him are dropped before transcription. `--no-isolate` turns that off,
+  for when he wants you to hear someone else in the room. If isolation fails,
+  an event says so and you hear everything.
 - `--label` shows under the id on the device: a few words.
 - `--default-terms` adds Louie's standing list, for when there is no topic
   yet (he rang you from the power button). A failed fetch still starts the

@@ -45,7 +45,11 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
-                 "--var TELNYX_FROM:+15550100")
+                 "--var TELNYX_FROM:+15550100 --var KRISP_API_KEY:krkey "
+                 "--var KRISP_API_URL:http://127.0.0.1:8798 --var KRISP_URL:http://127.0.0.1:8798/voice-isolation")
+# Chrome's MediaRecorder as the page runs it (opus, 64 kbps, 250 ms chunks): 3.96 s once decoded.
+WEBM = (HERE / "chrome-opus.webm").read_bytes()
+WEBM_PCM_BYTES = 63360 * 2
 FAKE = None
 TELNYX = None
 WRANGLER = None
@@ -1298,6 +1302,84 @@ class PhoneAudio(unittest.TestCase):
         for bad in (url + "wrong", url + k):            # a wrong key; the right key, unsigned
             with self.assertRaises(Exception):
                 connect(bad, open_timeout=10).recv(timeout=2)
+
+
+class Isolation(unittest.TestCase):
+    def setUp(self):
+        FAKE.krisp.update(refuse_token=False, close_after=None)
+
+    def page_audio(self, sid):
+        """A page holding the audio sends one recorder run, split anywhere; returns the transcriber stream."""
+        n = stream_count()
+        ws = device(sid)
+        ws.send(json.dumps({"type": "seg"}))
+        for i in range(0, len(WEBM), 2400):
+            ws.send(WEBM[i:i + 2400])
+        return ws, wait_streams(n + 1)
+
+    def heard(self, s, nbytes, timeout=8):
+        end = time.time() + timeout
+        while time.time() < end and sum(map(len, s["audio"])) < nbytes:
+            time.sleep(0.1)
+        return b"".join(s["audio"])
+
+    def test_a_pages_audio_reaches_the_transcriber_through_krisp_as_pcm(self):
+        k = len(FAKE.krisp["streams"])
+        sid = create(mode="talk", isolate=True)
+        ws, s = self.page_audio(sid)
+        audio = self.heard(s, WEBM_PCM_BYTES)
+        c = s["config"]
+        self.assertEqual((c["audio_format"], c["sample_rate"], c["num_channels"]), ("pcm_s16le", 16000, 1))
+        self.assertEqual(audio, bytes([fake_stt.CLEANED]) * WEBM_PCM_BYTES)
+        krisp = FAKE.krisp["streams"][k]
+        self.assertEqual(krisp["auth"], "api-key krisp-session")
+        self.assertEqual((krisp["hello"]["model"], krisp["hello"]["sample_rate"]), ("VIVA-tel", 16000))
+        self.assertEqual(set(krisp["frames"]), {960})          # 30 ms at 16 kHz
+        self.assertEqual(FAKE.krisp["tokens"][-1], {"auth": "api-key krkey",
+                                                    "body": {"usage_type": "viva", "expiration_ttl": 300}})
+        ws.close()
+
+    def test_when_krisp_drops_the_rest_is_transcribed_unfiltered(self):
+        FAKE.krisp["close_after"] = 20
+        sid = create(mode="talk", isolate=True)
+        ws, s = self.page_audio(sid)
+        audio = self.heard(s, WEBM_PCM_BYTES)
+        self.assertEqual(len(audio), WEBM_PCM_BYTES)          # nothing lost at the switch
+        self.assertEqual(audio[:20 * 960], bytes([fake_stt.CLEANED]) * 20 * 960)
+        self.assertNotIn(bytes([fake_stt.CLEANED]) * 960, audio[20 * 960:])
+        wait_entries(sid, lambda es: any("voice isolation off" in t and "1011" in t for t in texts(es, "event")))
+        ws.close()
+
+    def test_a_refused_token_leaves_the_audio_unfiltered_and_says_why(self):
+        FAKE.krisp["refuse_token"] = True
+        sid = create(mode="talk", isolate=True)
+        ws, s = self.page_audio(sid)
+        audio = self.heard(s, WEBM_PCM_BYTES)
+        self.assertEqual(len(audio), WEBM_PCM_BYTES)
+        self.assertNotIn(bytes([fake_stt.CLEANED]) * 960, audio)
+        wait_entries(sid, lambda es: any("BALANCE_EXHAUSTED" in t for t in texts(es, "event")))
+        ws.close()
+
+    def test_the_phone_lines_audio_goes_through_krisp_too(self):
+        sid = create(mode="talk", isolate=True)
+        ccid, s = PhoneAudio.answered(self, sid)
+        self.assertEqual((s["config"]["audio_format"], s["config"]["sample_rate"]), ("pcm_s16le", 16000))
+        for _ in range(3):
+            TELNYX.send_audio(ccid, b"\x01\x02" * 320)           # 20 ms frames, as Telnyx sends them
+        self.assertEqual(self.heard(s, 1920), bytes([fake_stt.CLEANED]) * 1920)   # two of Krisp's 30 ms
+
+    def test_listen_sessions_cannot_isolate_and_talk_sessions_need_not(self):
+        status, out = http("/session", "POST", {"label": "t", "mode": "listen", "isolate": True})
+        self.assertEqual(status, 400, out)
+        n = stream_count()
+        sid = create(mode="talk")
+        ws = device(sid)
+        ws.send(json.dumps({"type": "seg"}))
+        ws.send(b"WEBM-HEADER")
+        s = wait_streams(n + 1)
+        self.assertEqual(self.heard(s, 11), b"WEBM-HEADER")
+        self.assertEqual(s["config"]["audio_format"], "auto")
+        ws.close()
 
 
 class Archive(unittest.TestCase):

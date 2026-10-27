@@ -563,6 +563,16 @@ class Talk(Base):
         self.run_cli(["start"], relay)
         self.assertEqual(relay.calls[-1]["body"]["mode"], "listen")
 
+    def test_talk_mode_isolates_unless_told_not_to_and_listen_never_does(self):
+        intercom.write_state("current.json", {})
+        relay = Relay({"/session": (200, {"id": "ACDE"})})
+        self.run_cli(["start", "--mode", "talk"], relay)
+        self.assertTrue(relay.calls[-1]["body"]["isolate"])
+        self.run_cli(["start", "--mode", "talk", "--no-isolate", "--force"], relay)
+        self.assertFalse(relay.calls[-1]["body"]["isolate"])
+        self.run_cli(["start", "--force"], relay)
+        self.assertFalse(relay.calls[-1]["body"]["isolate"])
+
     def test_turn_wait_reaches_the_relay_from_start_and_set(self):
         intercom.write_state("current.json", {})
         relay = Relay({"/session": (200, {"id": "ACDE"}), "/set": (200, {"ok": True, "hold_s": 5})})
@@ -599,6 +609,7 @@ class Talk(Base):
         code, out, _ = self.run_cli(["health"], relay)
         self.assertEqual(code, 0)
         self.assertIn("missing TELNYX_FROM", json.loads(out)["phone_line"])
+        self.assertIn("no KRISP_API_KEY", json.loads(out)["voice_isolation"])
 
     def test_speech_cut_by_the_audio_moving_says_to_say_the_rest_again(self):
         relay = Relay({"/speak": (200, {"status": "interrupted", "spoken": "Yes, I can",

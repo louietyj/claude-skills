@@ -9,7 +9,8 @@ shows the mode on the room's button, so Louie's tap on Web or Phone is the
 consent.
 
 The device's browser streams mic audio to a Cloudflare Durable Object, which
-relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms) and
+relays it to Soniox (`stt-rt-v5`, speaker diarization, context terms; in talk
+mode, through Krisp's voice isolation first) and
 stores numbered entries: speaker turns, device events, notes sent. Claude
 long-polls them with `intercom watch` from a sandbox that can be recycled at any
 moment, or streams them into `Monitor` with `intercom follow`, the same
@@ -35,8 +36,9 @@ video call to join.
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
-| `worker/test_session.py` | relay tests against `wrangler dev` and the fakes |
-| `dev/fake_stt.py` | Soniox-shaped live STT and TTS and Deepgram-shaped batch stand-ins, scripted by the test's audio frames |
+| `opus/` | the relay's webm/opus decoder for voice isolation: `opus.wasm` (libopus's decoder), its wrapper and webm demuxer `opus.js`; rebuilt by `build.sh` |
+| `worker/test_session.py` | relay tests against `wrangler dev` and the fakes; `chrome-opus.webm` is Chrome's recorder output for them |
+| `dev/fake_stt.py` | Soniox-shaped live STT and TTS, Deepgram-shaped batch and Krisp-shaped voice isolation stand-ins, scripted by the test's audio frames |
 | `dev/telnyx_api.py` | Telnyx's API with the key in `dev/telnyx.key` (gitignored), for setting up the phone line |
 | `dev/fake_telnyx.py` | Telnyx-shaped call API and signed webhooks, driven by tests or by `dev/phone.html`, the fake handset it serves at `/phone` |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
@@ -57,6 +59,7 @@ npx wrangler secret put CLI_TOKEN          # long alphanumeric
 npx wrangler secret put DEVICE_TOKEN       # long alphanumeric, different
 npx wrangler secret put SONIOX_API_KEY
 npx wrangler secret put DEEPGRAM_API_KEY   # only for `transcript --batch`
+npx wrangler secret put KRISP_API_KEY      # talk mode's voice isolation (developers.krisp.ai)
 ```
 
 The phone line (optional) needs a Telnyx account: a Call Control application
@@ -204,6 +207,20 @@ looks like from outside.
 differences between voices that diarization relies on. Talk mode turns all
 three on, echo cancellation above all: without it Claude transcribes its own
 voice from the speaker.
+
+**Talk mode hears only Louie: Krisp's voice isolation.** Music, chatter and
+other voices around him went into the transcript as his. Noise suppression
+(the browser's, or a phone's) keeps any speech, sung lyrics included, so the
+relay runs Krisp's hosted Voice Isolation API (`VIVA-tel`, $0.003/min) on
+every source: a page's webm is decoded in the object (libopus's decoder,
+built to wasm by `opus/build.sh`, ~0.5 ms per 250 ms chunk), the phone line's
+L16 is already PCM. 30 ms frames go to Krisp and come back one for one, in
+order, so Soniox's clock is unchanged; Soniox then gets PCM. Anything Krisp
+can't take (a refused token, a dropped socket, a 3 s stall) goes to Soniox
+unfiltered, and an event says so. Telnyx sells the same Krisp model on the
+phone leg alone, at $0.005/min. Listen mode never isolates: it would keep only
+the nearest voice of a conversation. Session tokens last 5 hours; whether an
+open stream outlives its token is untested.
 
 **Talk mode lets Soniox end turns, then can wait for silence.** Its semantic
 endpointing runs at its most patient (`max_endpoint_delay_ms` 3000,

@@ -28,10 +28,12 @@ cat > "$LMCPS_CONFIG" <<'EOF'
 {"mcpServers": {
   "everything": {
     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"],
-    "description": "reference server: echo, arithmetic, resources, sampling"},
+    "description": "reference server: echo, arithmetic, resources, sampling",
+    "permissions": {"default": "allow"}},
   "time": {
     "command": "uvx", "args": ["mcp-server-time", "--local-timezone", "Europe/London"],
-    "description": "current time and timezone conversion"}
+    "description": "current time and timezone conversion",
+    "permissions": {"default": "allow"}}
 }}
 EOF
 

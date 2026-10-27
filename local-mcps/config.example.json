@@ -1,5 +1,6 @@
 {
   "catalogUrl": "https://www.dropbox.com/scl/fi/.../mcp-catalog.json?rlkey=...",
+  "authorizeUrl": "https://lmcps-authorize.example.com",
   "mcpServers": {
     "tomtom": {
       "type": "http",
@@ -15,12 +16,14 @@
         { "label": "me@gmail.com", "LMCPS_KEY": "apify_api_..." },
         { "label": "alt@gmail.com", "LMCPS_KEY": "apify_api_..." }
       ],
-      "description": "web scraping and data extraction via Apify Actors"
+      "description": "web scraping and data extraction via Apify Actors",
+      "permissions": { "ask": ["call-actor"] }
     },
     "time": {
       "command": "uvx",
       "args": ["mcp-server-time", "--local-timezone", "Europe/London"],
-      "description": "current time in any timezone, and timezone conversion"
+      "description": "current time in any timezone, and timezone conversion",
+      "permissions": { "default": "allow" }
     },
     "sqlite": {
       "command": "uvx",

@@ -15,6 +15,7 @@ config.example.json      the config schema, with a worked example of each transp
 test_lmcps.py            offline tests (no network, no npx)
 fake_mcp_server.py       the misbehaving stdio server those tests run against
 integration_test.sh      live tests against real npx and uvx servers
+authorize-worker/        the Cloudflare worker that records the user's approvals, and its tests
 ```
 
 ## The problem
@@ -159,6 +160,32 @@ Free tiers are small, so the workaround had been one custom connector per key: `
 
 A rotation changes the expanded headers or URL, so it opens a new HTTP session rather than reusing one opened under the previous account.
 
+## Approvals
+
+Until 2026-10 every configured tool ran on the model's say-so. Each server's `permissions` (see `references/config.md`) now marks tools `ask` or `deny`, and the default gates any tool its server does not mark read-only. An `ask` tool runs only on an approval the user gives in claude.ai's own approval card, which is the one prompt that reaches the user on every surface: chat and Cowork bash never prompt, and bash cannot raise a connector card itself (`-32003` from the relay, no card).
+
+So the card belongs to a connector, `lmcps-authorize` (`authorize-worker/`), whose two tools are set to "Needs approval". Reaching its `tools/call` at all means the user clicked Allow, so the worker just records the approval in a Durable Object. `lmcps call` redeems it over `/redeem` right before sending the call. Redeeming can only consume an approval, never create one, so the sandbox holds no secret; the connector's bearer stays with Anthropic's relay.
+
+- **The model asks and calls in one batch, authorize first.** Measured in cloud Claude Code on 2026-10-27: a batch runs strictly in order, each call waiting on the previous one's card, and a denied card does not stop the rest of the batch. So lmcps never waits: if no approval is there when it runs, the user declined or nobody asked, and it says which call to make.
+- **An approval is bound to a conversation id** that lmcps keeps in `$LMCPS_HOME/conversation.txt`. claude.ai sends nothing that identifies a conversation (windows-gate's README has the measurement), so lmcps supplies one and the card shows it. It is not a secret; it only makes an approval useless anywhere else.
+- **`authorize_call` is single use, for exactly those args, within 10 minutes**, consumed atomically by the Durable Object. Args are compared as parsed JSON, so key order and `1` vs `1.0` cannot matter. `authorize_tool_for_conversation` covers any args to one tool, for 12 hours, and is not consumed.
+- **Redeeming happens after the server has started**, just before `tools/call` goes out, so a server that never starts does not spend an approval.
+- **The gate sits in `call()`**, which every `tools/call` passes through, not in the `call` verb.
+- **This is a guardrail, not a sandbox.** The model can read the config's API keys and could edit `lmcps.py`. The design assumes it won't, and `SKILL.md` says so; what it prevents is the honest mistake of running a gated tool without asking.
+
+### Deploying the worker
+
+```
+cd authorize-worker
+npx wrangler dev --port 8787 --var BEARER:test & python test_worker.py   # local
+npx wrangler deploy                                                      # CLOUDFLARE_API_TOKEN etc. in the env
+```
+
+1. Set the worker's `BEARER` secret yourself, in the Cloudflare dashboard, never from the sandbox: whoever holds it can create approvals.
+2. Add a custom connector in claude.ai: URL `https://lmcps-authorize.louietyj.me/mcp`, header `Authorization: Bearer <that secret>`.
+3. Set **both** of its tools to "Needs approval". The worker trusts that setting completely; "Always allow" turns the gate off without any sign of it.
+4. Put `"authorizeUrl": "https://lmcps-authorize.louietyj.me"` at the top level of `mcp.json`.
+
 ## Security posture
 
 The config sits in plaintext in a private Dropbox app folder, and holds API keys. `${VAR}` and `${VAR:-default}` expansion works in `command`, `args`, `env`, `url` and `headers`, so a key can be pasted per conversation instead — but the default is plaintext at rest, chosen deliberately over a manual step every conversation.
@@ -170,7 +197,7 @@ The share link is unlisted rather than secret — anyone with the URL can fetch 
 ## Testing
 
 ```
-python test_lmcps.py       # 94 offline tests, no network and no npx
+python test_lmcps.py       # 111 offline tests, no network and no npx
 bash integration_test.sh   # 18 live tests against real npx and uvx servers
 TOMTOM_KEY=... bash integration_test.sh   # +2, against the real TomTom server
 ```

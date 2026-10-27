@@ -17,6 +17,7 @@ server's README works unchanged. See SKILL.md for where it comes from.
 """
 import argparse
 import base64
+import fnmatch
 import hashlib
 import json
 import mimetypes
@@ -24,6 +25,7 @@ import os
 import queue
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -364,6 +366,145 @@ def server_env(name, cfg):
     return {**os.environ, **pool[i][1]}
 
 
+# --- permissions ------------------------------------------------------------
+#
+# Each server's `permissions` decides per tool: deny > ask > allow > default,
+# Claude Code's precedence. The default, "annotations", gates any tool not
+# marked read-only, so a write tool a server adds later is gated without a
+# config change. An "ask" tool runs only on an approval the user gave in the
+# lmcps-authorize connector's card. The gate sits in `call`, which every
+# tools/call passes through.
+
+EXIT_NEEDS_APPROVAL = 4
+EXIT_DENIED = 5
+
+CONVERSATION_FILE = LMCPS_HOME / "conversation.txt"
+CONVERSATION_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+CONVERSATION_RE = re.compile(r"[a-z2-9]{8}")
+
+DEFAULTS = ("annotations", "allow", "ask")
+
+# A read-only hint the caller has no way to know, as opposed to one the server omitted.
+UNKNOWN = object()
+
+
+def refuse(code, msg):
+    print(f"lmcps: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def conversation_id():
+    """Binds approvals to this conversation. Not a secret: it only makes an
+    approval useless anywhere else. The sandbox disk lives as long as the
+    conversation, so a file is exactly the right lifetime."""
+    try:
+        cid = CONVERSATION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        cid = ""
+    if not CONVERSATION_RE.fullmatch(cid):
+        cid = "".join(secrets.choice(CONVERSATION_ALPHABET) for _ in range(8))
+        LMCPS_HOME.mkdir(parents=True, exist_ok=True)
+        CONVERSATION_FILE.write_text(cid, encoding="utf-8")
+    return cid
+
+
+def permissions(name, cfg):
+    """The server's rules, validated. Raises rather than dying, so `servers` can degrade."""
+    p = cfg.get("permissions", {})
+    if not isinstance(p, dict):
+        raise ValueError(f"'{name}': `permissions` must be an object")
+    for key in ("deny", "ask", "allow"):
+        rules = p.get(key, [])
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            raise ValueError(f"'{name}': `permissions.{key}` must be a list of tool-name globs")
+    if p.get("default", "annotations") not in DEFAULTS:
+        raise ValueError(f"'{name}': `permissions.default` must be one of {', '.join(DEFAULTS)}")
+    return p
+
+
+def decide(name, cfg, tool, read_only):
+    """Returns "deny", "ask" or "allow", or None when that hangs on a hint we
+    don't have. `read_only` is a callable, so the tool list is consulted only
+    when no rule settles it."""
+    p = permissions(name, cfg)
+    for verdict in ("deny", "ask", "allow"):
+        if any(fnmatch.fnmatchcase(tool, g) for g in p.get(verdict, [])):
+            return verdict
+    default = p.get("default", "annotations")
+    if default != "annotations":
+        return default
+    hint = read_only()
+    if hint is UNKNOWN:
+        return None
+    return "allow" if hint is True else "ask"
+
+
+def declared_read_only(name, cfg, tool):
+    entry = list_tools(name, cfg)
+    found = [t for t in entry["tools"] if t.get("name") == tool]
+    if not found and cfg.get("type", "stdio") == "stdio":
+        # A cached list can predate a tool the server has since added.
+        entry = list_tools(name, cfg, refresh=True)
+        found = [t for t in entry["tools"] if t.get("name") == tool]
+    return ((found[0].get("annotations") if found else None) or {}).get("readOnlyHint")
+
+
+def marker(name, cfg, tool, read_only):
+    try:
+        verdict = decide(name, cfg, tool, lambda: read_only)
+    except ValueError:
+        return " [permissions misconfigured]"
+    return f" [{verdict}]" if verdict in ("ask", "deny") else ""
+
+
+def gate(name, cfg, tool, arguments):
+    """What must happen before tools/call is sent: None, or a redeem to run."""
+    try:
+        verdict = decide(name, cfg, tool, lambda: declared_read_only(name, cfg, tool))
+    except ValueError as e:
+        refuse(EXIT_DENIED, f"{e}. Nothing runs until the user fixes mcp.json.")
+    if verdict == "allow":
+        return None
+    if verdict == "deny":
+        refuse(EXIT_DENIED, f"'{name}' tool '{tool}' is denied by its `permissions` in "
+                            f"mcp.json. Only the user can change that; do not look for "
+                            f"another way to run it.")
+    return lambda: redeem(name, tool, arguments)
+
+
+def redeem(name, tool, arguments):
+    url = load_config().get("authorizeUrl")
+    if not url:
+        refuse(EXIT_NEEDS_APPROVAL, f"'{name}' tool '{tool}' needs the user's approval, "
+                                    f"but mcp.json has no `authorizeUrl` to get one from.")
+    conv = conversation_id()
+    body = {"conversation": conv, "server": name, "tool": tool, "args": arguments}
+    req = urllib.request.Request(url.rstrip("/") + "/redeem", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json",
+                                  "User-Agent": f"{CLIENT_INFO['name']}/{CLIENT_INFO['version']}"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            verdict = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        die(f"the approval ledger refused the lookup (HTTP {e.code}): "
+            f"{e.read().decode(errors='replace')[:300]}")
+    except (OSError, json.JSONDecodeError) as e:
+        die(f"cannot reach the approval ledger at {url}: {e}")
+    if verdict.get("ok"):
+        return
+    one = json.dumps(body, ensure_ascii=False)
+    every = json.dumps({k: body[k] for k in ("conversation", "server", "tool")})
+    refuse(EXIT_NEEDS_APPROVAL, textwrap.dedent(
+        f"""\
+        '{name}' tool '{tool}' needs the user's approval, and none is on record for this conversation.
+        Ask for it with the lmcps-authorize connector, as a native tool call listed BEFORE this command in the same batch:
+          authorize_call {one}
+        then run this same command again, unchanged. When you expect several calls to this tool, say so in chat and use instead:
+          authorize_tool_for_conversation {every}
+        If the user declined, stop and ask them. Do not retry, and do not look for another way to run it."""))
+
+
 # --- transports -------------------------------------------------------------
 
 
@@ -454,7 +595,7 @@ def session_headers(headers, record):
             "MCP-Protocol-Version": record["version"]}
 
 
-def call_http(name, cfg, method, params):
+def call_http(name, cfg, method, params, before_send=None):
     keyenv = server_env(name, cfg)
     url = expand(cfg["url"], keyenv)
     # Cloudflare 403s urllib's default `Python-urllib/3.x` (Alpha Vantage does).
@@ -474,6 +615,8 @@ def call_http(name, cfg, method, params):
         record = open_session(name, url, headers)
         save_session(slot, record)
     message = rpc(method, "lmcps-1", **params)
+    if before_send:
+        before_send()
     try:
         _, resp = http_post(name, url, session_headers(headers, record), message)
     except SessionExpired:
@@ -486,7 +629,7 @@ def call_http(name, cfg, method, params):
     return resp
 
 
-def call_stdio(name, cfg, method, params):
+def call_stdio(name, cfg, method, params, before_send=None):
     keyenv = server_env(name, cfg)
     env = dict(os.environ)
     for k, v in (cfg.get("env") or {}).items():
@@ -581,6 +724,9 @@ def call_stdio(name, cfg, method, params):
         die(f"'{name}' exited before responding to initialize." + stderr_tail())
     LAST_INIT.update(init.get("result") or {})
     send(rpc("notifications/initialized"))
+    # Only now, so a server that never starts does not spend an approval.
+    if before_send:
+        before_send()
     send(rpc(method, "lmcps-call", **params))
     resp = await_id("lmcps-call")
     try:
@@ -607,10 +753,13 @@ def respond_to(req):
 
 def call(name, cfg, method, params):
     ttype = cfg.get("type", "stdio")
+    before_send = None
+    if method == "tools/call":
+        before_send = gate(name, cfg, params["name"], params.get("arguments", {}))
     if ttype in ("http", "streamable-http"):
-        resp = call_http(name, cfg, method, params)
+        resp = call_http(name, cfg, method, params, before_send)
     elif ttype == "stdio":
-        resp = call_stdio(name, cfg, method, params)
+        resp = call_stdio(name, cfg, method, params, before_send)
     else:
         die(f"'{name}': transport '{ttype}' is not supported (stdio and "
             f"http/streamable-http only)")
@@ -657,7 +806,7 @@ def blurb(text, width=BLURB_WIDTH):
     return s if len(s) <= width else s[:width - 3] + "..."
 
 
-def print_index(name, entry):
+def print_index(name, cfg, entry):
     """The tool lines under one server. Absent, failed and enormous all have to
     print something, because this runs at the top of every conversation."""
     if entry is None:
@@ -670,13 +819,18 @@ def print_index(name, entry):
     if not tools:
         print("  (no tools)")
         return
+    # An index built before it recorded hints has no `readOnly`, which is not the
+    # same as a server declaring none.
+    def tag(t):
+        return marker(name, cfg, t.get("name", ""), t.get("readOnly", UNKNOWN))
+
     for t in tools[:MAX_INDEXED_TOOLS]:
-        name_, said = t.get("name", ""), blurb(t.get("description"))
+        name_, said = t.get("name", "") + tag(t), blurb(t.get("description"))
         print(f"  {name_} -- {said}" if said else f"  {name_}")
     rest = tools[MAX_INDEXED_TOOLS:]
     if rest:
         # Names cost a word each; dropping them would hide what exists.
-        names = ", ".join(t.get("name", "") for t in rest)
+        names = ", ".join(t.get("name", "") + tag(t) for t in rest)
         print(textwrap.fill(f"... and {len(rest)} more, undescribed: {names}",
                             width=100, initial_indent="  ", subsequent_indent="    ",
                             break_on_hyphens=False))
@@ -705,9 +859,12 @@ def cmd_servers(args):
         if note:
             print(f"  {note}")
         if catalog is not None:
-            print_index(name, indexed.get(name))
+            print_index(name, cfg, indexed.get(name))
 
     print()
+    print(f"Tools marked [ask] need the user's approval through the lmcps-authorize "
+          f"connector, and [deny] ones\nnever run. This conversation's id for "
+          f"approvals: {conversation_id()}")
     if catalog is None:
         print("No tool index available -- `lmcps tools <server>` lists one server's "
               "tools live.")
@@ -763,9 +920,12 @@ def cmd_tools(args):
     if not tools:
         print(f"'{args.server}' exposes no tools.")
         return
-    width = max(len(t.get("name", "")) for t in tools)
-    for t in tools:
-        print(f"{t.get('name', '').ljust(width)}  {first_line(t.get('description'))}")
+    names = [t.get("name", "") + marker(args.server, cfg, t.get("name", ""),
+                                        (t.get("annotations") or {}).get("readOnlyHint"))
+             for t in tools]
+    width = max(len(n) for n in names)
+    for n, t in zip(names, tools):
+        print(f"{n.ljust(width)}  {first_line(t.get('description'))}")
     print(f"\n`lmcps tools {args.server} --schema <tool>[,<tool>...]` for full input schemas.")
 
 
@@ -840,8 +1000,9 @@ def cmd_call(args):
     try:
         result = call(args.server, cfg, "tools/call",
                       {"name": args.tool, "arguments": arguments})
-    except SystemExit:
-        if note:
+    except SystemExit as e:
+        # A refusal never reached the server, so no quota was spent.
+        if note and e.code == 1:
             print(f"lmcps: {note}", file=sys.stderr)
         raise
 
@@ -928,7 +1089,8 @@ def enumerate_server(name, timeout):
         return None, "did not return a tool list"
     # Stored whole, truncated at display time: the index is expensive to rebuild,
     # so the column budget stays a rendering decision rather than a stored one.
-    return [{"name": t.get("name", ""), "description": t.get("description") or ""}
+    return [{"name": t.get("name", ""), "description": t.get("description") or "",
+             "readOnly": (t.get("annotations") or {}).get("readOnlyHint")}
             for t in entry.get("tools") or []], None
 
 

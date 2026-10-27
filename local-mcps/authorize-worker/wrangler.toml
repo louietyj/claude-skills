@@ -1,0 +1,18 @@
+name = "lmcps-authorize"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# The custom domain only. /mcp is behind the bearer and /redeem can only consume,
+# but there is no reason to serve either on workers.dev too.
+workers_dev = false
+routes = [{ pattern = "lmcps-authorize.louietyj.me", custom_domain = true }]
+
+# BEARER is a secret, set by the user in the dashboard, never from the sandbox.
+
+[[durable_objects.bindings]]
+name = "LEDGER"
+class_name = "Ledger"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Ledger"]

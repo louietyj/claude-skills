@@ -36,8 +36,13 @@ class Base(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.config_path = self.tmp / "config.json"
 
-    def write_config(self, servers):
-        self.config_path.write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+    def write_config(self, servers, **top):
+        # The fake tools declare no annotations, so the default would gate them
+        # all. Only TestPermissions is about the gate; everything else opts out.
+        for cfg in servers.values():
+            cfg.setdefault("permissions", {"default": "allow"})
+        self.config_path.write_text(json.dumps({"mcpServers": servers, **top}),
+                                    encoding="utf-8")
 
     def run_lmcps(self, *args, env=None, timeout=30):
         e = dict(os.environ)
@@ -987,6 +992,195 @@ class TestRefreshBuild(Base):
         body = (HERE / "routine" / "refresh.py").read_text(encoding="utf-8")
         self.assertIn(body, r.stdout.replace("\r\n", "\n"))
         self.assertTrue(r.stdout.rstrip().endswith("exit 0"))
+
+
+class LedgerHandler(BaseHTTPRequestHandler):
+    """Stands in for the authorize worker's /redeem."""
+    answer = {"ok": True, "kind": "call"}
+    bodies = []
+
+    def do_POST(self):
+        LedgerHandler.bodies.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+        raw = json.dumps(LedgerHandler.answer).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *a):
+        pass
+
+
+class TestPermissions(Base):
+    def setUp(self):
+        super().setUp()
+        LedgerHandler.answer = {"ok": True, "kind": "call"}
+        LedgerHandler.bodies = []
+        self.httpd = HTTPServer(("127.0.0.1", 0), LedgerHandler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.shutdown)
+        self.ledger = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        self.log = self.tmp / "fake.log"
+
+    def configure(self, permissions=None, mode="plain", ledger=True):
+        cfg = fake_server(mode, env={"FAKE_LOG": str(self.log)})
+        cfg["permissions"] = permissions if permissions is not None else {}
+        self.write_config({"adder": cfg}, **({"authorizeUrl": self.ledger} if ledger else {}))
+
+    def call_add(self, *extra):
+        return self.run_lmcps("call", "adder", "add", '{"a": 2, "b": 3}', *extra)
+
+    def sent_methods(self):
+        if not self.log.is_file():
+            return []
+        return [json.loads(l).get("method") for l in self.log.read_text().splitlines()]
+
+    def test_a_denied_tool_never_spawns_the_server(self):
+        self.configure({"deny": ["add"]})
+        r = self.call_add()
+        self.assertEqual(r.returncode, 5, r.stderr)
+        self.assertIn("denied", r.stderr)
+        self.assertEqual(self.sent_methods(), [])
+        self.assertEqual(LedgerHandler.bodies, [])
+
+    def test_deny_beats_ask_beats_allow(self):
+        self.configure({"deny": ["add"], "ask": ["add"], "allow": ["add"]})
+        self.assertEqual(self.call_add().returncode, 5)
+        self.configure({"ask": ["a*"], "allow": ["add"]})
+        LedgerHandler.answer = {"ok": False}
+        self.assertEqual(self.call_add().returncode, 4)
+
+    def test_an_approved_call_runs_and_sends_this_conversations_id(self):
+        self.configure({"ask": ["add"]})
+        r = self.call_add()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "5")
+        conv = (self.tmp / "home" / "conversation.txt").read_text()
+        self.assertRegex(conv, r"^[a-z2-9]{8}$")
+        self.assertEqual(LedgerHandler.bodies, [{"conversation": conv, "server": "adder",
+                                                 "tool": "add", "args": {"a": 2, "b": 3}}])
+        servers = self.run_lmcps("servers")
+        self.assertIn(f"id for approvals: {conv}", servers.stdout)
+
+    def test_no_approval_prints_the_authorize_call_and_sends_nothing(self):
+        self.configure({"ask": ["add"]})
+        LedgerHandler.answer = {"ok": False}
+        r = self.call_add()
+        self.assertEqual(r.returncode, 4, r.stderr)
+        conv = (self.tmp / "home" / "conversation.txt").read_text()
+        line = next(l for l in r.stderr.splitlines() if l.strip().startswith("authorize_call "))
+        self.assertEqual(json.loads(line.split(" ", 3)[-1]),
+                         {"conversation": conv, "server": "adder", "tool": "add",
+                          "args": {"a": 2, "b": 3}})
+        self.assertIn("authorize_tool_for_conversation", r.stderr)
+        self.assertNotIn("tools/call", self.sent_methods())
+
+    def test_a_server_that_never_starts_does_not_spend_the_approval(self):
+        self.write_config({"adder": {**fake_server("crash"), "permissions": {"ask": ["add"]}}},
+                          authorizeUrl=self.ledger)
+        r = self.call_add()
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(LedgerHandler.bodies, [])
+
+    def test_read_only_tools_run_and_others_are_asked_by_default(self):
+        self.configure(mode="annotated")
+        LedgerHandler.answer = {"ok": False}
+        self.assertEqual(self.call_add().returncode, 0)
+        self.assertEqual(LedgerHandler.bodies, [])
+        r = self.run_lmcps("call", "adder", "boom", "{}")
+        self.assertEqual(r.returncode, 4, r.stderr)
+
+    def test_a_tool_with_no_annotation_is_asked(self):
+        self.configure()
+        LedgerHandler.answer = {"ok": False}
+        self.assertEqual(self.call_add().returncode, 4)
+
+    def test_default_allow_and_default_ask(self):
+        self.configure({"default": "allow"}, ledger=False)
+        self.assertEqual(self.call_add().returncode, 0)
+        self.configure({"default": "ask"}, mode="annotated")
+        LedgerHandler.answer = {"ok": False}
+        self.assertEqual(self.call_add().returncode, 4)
+
+    def test_without_an_authorize_url_an_asked_tool_cannot_run(self):
+        self.configure({"ask": ["add"]}, ledger=False)
+        r = self.call_add()
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("authorizeUrl", r.stderr)
+
+    def test_an_unreachable_ledger_fails_closed(self):
+        self.configure({"ask": ["add"]})
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        r = self.call_add()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot reach the approval ledger", r.stderr)
+        self.assertNotIn("tools/call", self.sent_methods())
+
+    def test_malformed_permissions_fail_closed(self):
+        self.configure({"default": "sometimes"})
+        r = self.call_add()
+        self.assertEqual(r.returncode, 5)
+        self.assertIn("permissions.default", r.stderr)
+
+    def test_the_conversation_id_is_kept(self):
+        self.configure({"ask": ["add"]})
+        self.call_add()
+        self.call_add()
+        self.assertEqual(LedgerHandler.bodies[0]["conversation"],
+                         LedgerHandler.bodies[1]["conversation"])
+
+    def test_a_refusal_does_not_blame_the_key(self):
+        self.write_config({"adder": {**fake_server(), "keys": ["k1", "k2"],
+                                     "permissions": {"deny": ["add"]}}})
+        r = self.call_add()
+        self.assertNotIn("[key:", r.stderr)
+
+    def test_tools_marks_asked_and_denied_tools(self):
+        self.configure({"deny": ["boom"]}, mode="annotated")
+        r = self.run_lmcps("tools", "adder")
+        self.assertRegex(r.stdout, r"(?m)^add\s+Add two")
+        self.assertRegex(r.stdout, r"(?m)^boom \[deny\]\s+Always fails")
+        self.configure(mode="annotated")
+        r = self.run_lmcps("tools", "adder", "--refresh")
+        self.assertRegex(r.stdout, r"(?m)^boom \[ask\]")
+
+    def test_servers_marks_from_the_index_only_when_it_carries_hints(self):
+        self.configure()
+        path = self.tmp / "catalog.json"
+        hinted = {"builtAt": "2099-01-01T00:00:00Z", "error": None, "tools": [
+            {"name": "add", "description": "does add", "readOnly": True},
+            {"name": "boom", "description": "does boom", "readOnly": None}]}
+        path.write_text(json.dumps(catalog({"adder": hinted})))
+        r = self.run_lmcps("servers", env={"LMCPS_CATALOG": str(path)})
+        self.assertIn("  add -- does add", r.stdout)
+        self.assertIn("  boom [ask] -- does boom", r.stdout)
+        path.write_text(json.dumps(catalog({"adder": indexed("add", "boom")})))
+        r = self.run_lmcps("servers", env={"LMCPS_CATALOG": str(path)})
+        self.assertIn("  boom -- does boom", r.stdout)
+
+    def test_the_index_records_read_only_hints(self):
+        self.configure(mode="annotated")
+        out = json.loads(self.run_lmcps("index").stdout)
+        hints = {t["name"]: t["readOnly"] for t in out["servers"]["adder"]["tools"]}
+        self.assertEqual(hints, {"add": True, "boom": False})
+
+    def test_an_http_server_is_gated_before_the_call_is_sent(self):
+        StubHandler.mode, StubHandler.methods = "json", []
+        stub = HTTPServer(("127.0.0.1", 0), StubHandler)
+        threading.Thread(target=stub.serve_forever, daemon=True).start()
+        self.addCleanup(stub.server_close)
+        self.addCleanup(stub.shutdown)
+        self.write_config({"maps": {"type": "http", "url": f"http://127.0.0.1:{stub.server_address[1]}/mcp",
+                                    "permissions": {"ask": ["geocode"]}}}, authorizeUrl=self.ledger)
+        LedgerHandler.answer = {"ok": False}
+        r = self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertNotIn("tools/call", StubHandler.methods)
+        LedgerHandler.answer = {"ok": True, "kind": "call"}
+        r = self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("tools/call", StubHandler.methods)
 
 
 class TestPackaging(Base):

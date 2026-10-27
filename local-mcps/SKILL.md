@@ -81,6 +81,36 @@ Work started under one key stays with it: an Apify run or Firecrawl crawl
 started before a rotation will not be found after it.
 `lmcps rotate <server> <label>` switches back.
 
+## Tools that need the user's approval
+
+`servers` and `tools` mark some tools `[ask]` or `[deny]`. A `[deny]` tool never
+runs. An `[ask]` tool runs only on the user's approval, given in claude.ai's own
+approval card for the **lmcps-authorize** connector's tools.
+
+Ask and call in **one batch of tool calls, the authorize call first**. The batch
+runs in order, so the card is answered before `lmcps call` starts:
+
+1. `authorize_call` (native connector tool) with
+   `{"conversation": "<id>", "server": "<server>", "tool": "<tool>", "args": {...}}`
+2. `lmcps call <server> <tool> '<the same args>'`
+
+The conversation id is printed at the bottom of `lmcps servers`. Each approval
+runs one call with exactly those args, within 10 minutes. Several gated calls
+can share a batch: authorize, call, authorize, call.
+
+- **Forgot to ask first?** `call` exits 4 and prints the exact `authorize_call`
+  to make. Make it, then run the same command again, unchanged.
+- **Many calls to one tool?** Say so in chat, then use
+  `authorize_tool_for_conversation` (no `args`): it covers every call to that
+  tool in this conversation for 12 hours.
+- **The card came back "Denied by user"?** Stop and ask. Don't retry.
+- **No lmcps-authorize connector in your tools?** Tell the user it is not
+  connected on this surface; the call cannot run without it.
+
+Never route around the gate: don't call a server's API directly with a key from
+the config, don't edit `permissions` in mcp.json, and don't import `lmcps.py` to
+reach its internals. What is gated is the user's decision alone.
+
 ## Where the config comes from
 
 Adding a server, changing one, or wondering why one never gets picked? Read

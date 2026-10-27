@@ -36,6 +36,45 @@ description, and its full `instructions`. Write the line from that and paste it
 into the server's block. `describe` offers no generated line: reducing that
 material to one useful sentence is the judgement, and it is yours to make.
 
+## Permissions
+
+Each server can carry a `permissions` block, another non-standard key, deciding
+per tool whether it runs freely, needs the user's approval, or never runs:
+
+```json
+"firecrawl": {
+  "type": "http", "url": "...",
+  "permissions": {
+    "deny":  ["firecrawl_monitor_delete"],
+    "ask":   [],
+    "allow": ["*feedback"],
+    "default": "annotations"
+  }
+}
+```
+
+Entries are globs over tool names. They are checked in Claude Code's order:
+`deny`, then `ask`, then `allow`, then `default`. `default` is one of:
+
+- `"annotations"`, used when it is omitted: a tool runs only if the server marks
+  it `readOnlyHint: true`. Anything else, including a tool with no annotation at
+  all, needs approval.
+- `"allow"`: everything not listed runs. For servers that declare no annotations
+  but only read; a tool such a server adds later then runs too.
+- `"ask"`: everything not listed needs approval.
+
+`lmcps tools <server>` shows the result per tool. A malformed block stops every
+call to that server rather than guessing.
+
+Approvals come from the `lmcps-authorize` worker (`authorize-worker/` in the
+repo), named by a top-level `authorizeUrl` beside `catalogUrl`:
+
+```json
+"authorizeUrl": "https://lmcps-authorize.louietyj.me"
+```
+
+Without it, an `ask` tool cannot run at all.
+
 ## Several keys for one server
 
 For services whose free tier is too small to use alone, give the server a pool

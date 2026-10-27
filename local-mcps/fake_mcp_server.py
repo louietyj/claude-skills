@@ -12,6 +12,7 @@
     hang     writes a diagnostic to stderr and never answers, to hit the deadline
     eatstdin swallows the first request before serving, as a cold `npx` does
     echoenv  tools/call returns the value of $FAKE_TOKEN
+    annotated `add` declares readOnlyHint true, `boom` false
 """
 import base64
 import json
@@ -140,7 +141,11 @@ def main():
         elif method == "tools/list":
             if MODE == "noisy":
                 log("[debug] enumerating tools")
-            out(result(rid, {"tools": TOOLS}))
+            tools = TOOLS
+            if MODE == "annotated":
+                hints = {"add": True, "boom": False}
+                tools = [{**t, "annotations": {"readOnlyHint": hints[t["name"]]}} for t in TOOLS]
+            out(result(rid, {"tools": tools}))
         elif method == "tools/call":
             name = msg.get("params", {}).get("name")
             args = msg.get("params", {}).get("arguments", {})

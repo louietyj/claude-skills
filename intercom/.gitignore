@@ -10,6 +10,8 @@ config.json
 dev/soniox.key
 # Telnyx API key, for provisioning from a checkout; the Worker gets its own copy as a secret.
 dev/telnyx.key
+# Krisp API key, for voice-isolation probes.
+dev/krisp.key
 
 __pycache__/
 .wrangler/

@@ -197,7 +197,7 @@ PY
     note 'cloud browser' 'FAILED -- could not write its bridge config'
     return
   fi
-  note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; start it only when needed"
+  note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; use it only when pinchtab is blocked"
 }
 
 setup_windows() {
@@ -674,16 +674,34 @@ fi
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
 
 # A Browser Use cloud browser on a residential IP, through a bridge in this
-# sandbox. It bills by the minute and the megabyte until stopped or timed out,
-# and closing the connection does not stop it.
+# sandbox. Any command starts one when none is running. It ends itself
+# CLOUD_MINUTES after it started: Browser Use can't extend a browser, and a
+# timer here would not survive the sandbox being suspended between turns.
+# Idle time costs $0.02/hour; traffic is the real cost.
 if [ "$TIER" = cloud ]; then
   [ -s "$CLOUD_DIR/key" ] || { echo "$NAME: not set up -- the skill has no browser-use.key" >&2; exit 1; }
   export PINCHTAB_HINTS=off
   B=$CLOUD_DIR/browser.json
+  END=$CLOUD_DIR/ends-at
+  MINUTES=${PINCHTAB_CLOUD_MINUTES:-60}
   API=https://api.browser-use.com/api/v4/browsers
+  TOKEN=$(cat "$CLOUD_DIR/token")
   api() { curl -sS -m 60 -H "X-Browser-Use-API-Key: $(cat "$CLOUD_DIR/key")" -H 'Content-Type: application/json' "$@"; }
+  bridge_up() { curl -sf -m 5 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$CLOUD_PORT/health" >/dev/null; }
+  attach() {  # the bridge, to the browser in $B
+    for p in $(pgrep -f "^$REAL bridge --cdp-attach"); do kill "$p" 2>/dev/null; done
+    PINCHTAB_CONFIG=$CLOUD_DIR/config.json setsid nohup "$REAL" bridge --cdp-attach "$(json cdpUrl < "$B")" \
+      --port "$CLOUD_PORT" > "$CLOUD_DIR/bridge.log" 2>&1 < /dev/null &
+    i=0
+    until bridge_up; do
+      i=$((i + 1))
+      [ $i -ge 30 ] && return 1
+      sleep 1
+    done
+  }
   stop_cloud() {
     for p in $(pgrep -f "^$REAL bridge --cdp-attach"); do kill "$p" 2>/dev/null; done
+    rm -f "$END"
     [ -s "$B" ] || return 0
     api -X PATCH "$API/$(json id < "$B")" --data '{"action":"stop"}' | python3 -c '
 import json, sys
@@ -695,51 +713,49 @@ except Exception:
     print("Stop sent; Browser Use did not report the usage.")'
     rm -f "$B"
   }
+  start_cloud() {  # $1 country
+    stop_cloud > /dev/null
+    # 1440x900 like the local browser, so its shots stay under claude.ai's
+    # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
+    api -X POST "$API" --data "{\"proxyCountryCode\":\"$1\",\"timeout\":$MINUTES,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false}" > "$B"
+    if [ -z "$(json cdpUrl < "$B")" ]; then
+      echo "$NAME: Browser Use refused: $(cat "$B")" >&2
+      rm -f "$B"
+      return 1
+    fi
+    # A minute early, so a command never lands on a browser about to end.
+    echo $(( $(date +%s) + MINUTES * 60 - 60 )) > "$END"
+    printf '%s' "$1" > "$CLOUD_DIR/country"
+    if ! attach; then
+      echo "$NAME: the bridge never attached. Its log:" >&2
+      tail -5 "$CLOUD_DIR/bridge.log" >&2
+      stop_cloud >&2
+      return 1
+    fi
+    echo "$NAME: started a cloud browser on a $1 residential IP, ending by itself in $MINUTES minutes. A new browser has no page loaded: nav first." >&2
+  }
+  # A live browser whose bridge died with a suspended sandbox is re-attached,
+  # tabs and all; an ended or lost one is replaced.
+  ensure() {
+    if [ -s "$B" ] && [ "$(date +%s)" -lt "$(cat "$END" 2>/dev/null || echo 0)" ]; then
+      bridge_up || attach || start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
+    else
+      start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
+    fi
+  }
   case "${1:-}" in
     start)
-      country=us minutes=30
-      shift
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --country) country=$2; shift ;;
-          --minutes) minutes=$2; shift ;;
-          *) echo "usage: $NAME start [--country us] [--minutes 30]" >&2; exit 2 ;;
-        esac
-        shift
-      done
-      [ -s "$B" ] && { echo "$NAME: already running; \`$NAME stop\` first to start another" >&2; exit 1; }
-      # 1440x900 like the local browser, so its shots stay under claude.ai's
-      # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
-      api -X POST "$API" --data "{\"proxyCountryCode\":\"$country\",\"timeout\":$minutes,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false}" > "$B"
-      cdp=$(json cdpUrl < "$B")
-      if [ -z "$cdp" ]; then
-        echo "$NAME: Browser Use refused: $(cat "$B")" >&2
-        rm -f "$B"
-        exit 1
-      fi
-      PINCHTAB_CONFIG=$CLOUD_DIR/config.json setsid nohup "$REAL" bridge --cdp-attach "$cdp" --port "$CLOUD_PORT" \
-        > "$CLOUD_DIR/bridge.log" 2>&1 < /dev/null &
-      i=0
-      until curl -sf -m 5 -H "Authorization: Bearer $(cat "$CLOUD_DIR/token")" "http://127.0.0.1:$CLOUD_PORT/health" >/dev/null; do
-        i=$((i + 1))
-        if [ $i -ge 30 ]; then
-          echo "$NAME: the bridge never attached. Its log:" >&2
-          tail -5 "$CLOUD_DIR/bridge.log" >&2
-          stop_cloud >&2
-          exit 1
-        fi
-        sleep 1
-      done
-      echo "Started: a $country residential IP, stopping itself after $minutes minutes."
-      echo "Run \`$NAME stop\` as soon as you are done: it bills until then."
-      exit 0 ;;
+      country=us
+      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country us]}
+      if [ "$country" = "$(cat "$CLOUD_DIR/country" 2>/dev/null)" ]; then ensure; else start_cloud "$country"; fi
+      exit $? ;;
     stop)
       stop_cloud
       exit 0 ;;
   esac
-  [ -s "$B" ] || { echo "$NAME: not running. Run: $NAME start" >&2; exit 1; }
+  ensure || exit 1
   unset PINCHTAB_SESSION
-  PINCHTAB_SERVER=http://127.0.0.1:$CLOUD_PORT PINCHTAB_TOKEN=$(cat "$CLOUD_DIR/token")
+  PINCHTAB_SERVER=http://127.0.0.1:$CLOUD_PORT PINCHTAB_TOKEN=$TOKEN
   XDG_STATE_HOME=/tmp/pinchtab-cloud-state${A:+-$A}
   export PINCHTAB_SERVER PINCHTAB_TOKEN XDG_STATE_HOME
 fi

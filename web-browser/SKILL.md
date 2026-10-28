@@ -422,16 +422,17 @@ driven like `pinchtab`. It costs money ($5 per GB, $0.02 an hour), so use it
 only after `pinchtab` came back blocked, never as the default.
 
 ```bash
-pinchtab-cloud start                  # a US residential IP; --country gb, --minutes 30
-pinchtab-cloud nav <url> --block-images
+pinchtab-cloud nav <url> --block-images   # starts one if none is running (US IP)
 pinchtab-cloud text
-pinchtab-cloud stop                   # ALWAYS, as soon as you are done
 ```
 
-- **Stop it.** It bills until `stop` or its `--minutes` run out; closing the
-  tab or ending the task does not stop it. `stop` prints the cost so far.
+- **Leave it running between turns.** It ends by itself an hour after it
+  started, and idling costs next to nothing. A command after that starts a
+  fresh one, and says so: nav again. Run `pinchtab-cloud stop` only when you
+  know nothing follows, such as at the end of a scheduled task.
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
+- `pinchtab-cloud start --country gb` for another country.
 - **A first look may catch the bot check**: "Verifying the device..." on
   Yelp passes by itself in a few seconds. Look again before calling it blocked.
 - Captchas are solved by pinchtab as usual, and screenshots, `--unscale` and

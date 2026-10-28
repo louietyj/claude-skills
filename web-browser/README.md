@@ -25,14 +25,23 @@ crosses the tunnel.
 `pinchtab-cloud` is a [Browser Use](https://browser-use.com) cloud browser on a
 residential IP, for sites that ban the sandbox's datacenter IP whatever the
 fingerprint: Yelp's DataDome answers it with `'t':'bv'` (banned visitor, no
-captcha offered). The shim's `start` creates the browser (`POST /api/v4/browsers`,
-1440x900, its own captcha solver off so pinchtab's HINTs stay the only ones) and
-runs a `pinchtab bridge --cdp-attach` to it on port 9870, with a config of its own
-from setup.sh: its own state dir, `*.cdp.browser-use.com` allowed, and Browser
-Use's in-cluster proxy (`10.0.x.x`, which every page comes back from) trusted by
-the SSRF guard. `stop` kills the bridge and stops the browser, which closing the
-CDP connection does not. It needs fork build edge-1 or later (the fork now
-publishes an edge release on every push to its `main`): earlier builds pinned a `wss://` host to its IP (failing TLS), ignored `HTTPS_PROXY` on
+captcha offered). Any shim command starts a browser when none is running
+(`POST /api/v4/browsers`, 1440x900, its own captcha solver off so pinchtab's
+HINTs stay the only ones) and runs a `pinchtab bridge --cdp-attach` to it on port
+9870, with a config of its own from setup.sh: its own state dir,
+`*.cdp.browser-use.com` allowed, and Browser Use's in-cluster proxy (`10.0.x.x`,
+which every page comes back from) trusted by the SSRF guard.
+
+Its timeout is the one Browser Use enforces, 60 minutes from start
+(`PINCHTAB_CLOUD_MINUTES`). Their API can't extend a browser, and an idle timer
+in the sandbox would not survive it being suspended between turns, so agents
+leave the browser running across turns rather than closing it after each one;
+idling costs $0.02/hour. When the sandbox resumes with the bridge dead but the
+browser within its hour, the next command re-attaches to it, tabs intact. `stop`
+ends it early, which closing the CDP connection does not.
+
+It needs fork build edge-1 or later (the fork now publishes an edge release on
+every push to its `main`): earlier builds pinned a `wss://` host to its IP (failing TLS), ignored `HTTPS_PROXY` on
 the websocket, and never blocked images, which at $5/GB is the cost. Installed
 only when the zip carries `browser-use.key` (or `BROWSER_USE_API_KEY` is set).
 Measured 2026-10-27: Yelp loads where the sandbox gets the ban; ~6 page loads with

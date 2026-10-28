@@ -426,10 +426,12 @@ pinchtab-cloud nav <url> --block-images   # starts one if none is running (US IP
 pinchtab-cloud text
 ```
 
-- **Leave it running between turns.** It ends by itself an hour after it
-  started, and idling costs next to nothing. A command after that starts a
-  fresh one, and says so: nav again. Run `pinchtab-cloud stop` only when you
-  know nothing follows, such as at the end of a scheduled task.
+- **Don't stop it.** Not at the end of a task, not at the end of your turn:
+  the user's follow-up wants the same tabs. It ends by itself an hour after it
+  started, and idling costs next to nothing (about 2 cents an hour). A command
+  after that starts a fresh one, and says so: nav again. `pinchtab-cloud stop`
+  is only for when you are certain nothing follows, such as the last step of
+  an unattended scheduled task.
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
 - `pinchtab-cloud start --country gb` for another country.

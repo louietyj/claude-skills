@@ -180,7 +180,10 @@ let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
 // new socket can resend whatever the relay didn't get (README: "A dropped page").
 const KEEP_CHUNKS = 240;         // 60 s at 250 ms, the relay's grace
-const SOCKET_SILENT_MS = 6000;   // the relay pings every 2 s
+// The relay pings every 2 s. A cellular stall of 6-10 s recovers by itself; a
+// switch earlier than that bought nothing.
+const SOCKET_SILENT_MS = 12000;
+const GAP_REPORT_MS = 3000;
 let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
 let prevWs = null, switchWhy = null;
 let netType = navigator.connection?.type ?? null, voiceRetries = 0;
@@ -382,12 +385,17 @@ function connect() {
     // A screen that held the mic before the drop takes it back, if nothing else has.
     // With its recorder still running, the relay answers `resume`.
     send({ type: "hello", ui: UI, dev: DEV, holding, ...(holding && rec ? { rec: recId } : {}),
-           ...(switchWhy ? { why: switchWhy } : {}), ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+           ...(switchWhy ? { why: switchWhy, at: netState() } : {}),
+           ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
     switchWhy = null;
     if (holding && !rec) startAudio();
   };
   sock.onmessage = (m) => {
-    if (ws === sock) lastRx = Date.now();
+    if (ws === sock) {
+      const gap = Date.now() - lastRx;
+      lastRx = Date.now();
+      if (gap > GAP_REPORT_MS && sock.readyState === 1) send({ type: "gap", ms: gap, ...netState() });
+    }
     try { onMessage(JSON.parse(m.data)); } catch {}
   };
   sock.onclose = (e) => {
@@ -412,6 +420,13 @@ function checkSocket() {
 
 // The old socket keeps carrying chunks until the new one resumes; the relay
 // closes it once the new one says hello.
+// For the relay's log: what the network and page looked like when the socket went quiet.
+function netState() {
+  const c = navigator.connection;
+  return { net: c?.type ?? null, rtt: c?.rtt ?? null, down: c?.downlink ?? null,
+           vis: document.visibilityState, unsent: ws ? ws.bufferedAmount : null };
+}
+
 function reconnectNow(why) {
   if (prevWs && ws && ws.readyState === 0) return;     // a switch is already under way
   try { prevWs && prevWs.close(); } catch {}
@@ -449,9 +464,9 @@ function resume(have) {
   streaming = true;
   reportVis();
   if (!talk) return;
-  // The voice track may have outlived the socket.
-  if (voice && voice.connectionState === "connected" && voiceEl && !voiceEl.paused) send({ type: "voice_ready" });
-  else startVoice();
+  // The voice track usually outlives the socket; restarting it would cut Claude off.
+  if (!voice || ["failed", "closed"].includes(voice.connectionState)) startVoice();
+  else if (voice.connectionState === "connected") send({ type: "voice_ready" });
 }
 
 // A refused socket and a dropped network look alike, so after a few failures

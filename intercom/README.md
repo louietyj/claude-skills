@@ -449,8 +449,11 @@ through it at about real time, so after a 6s gap turns ran up to ~5s late for
 back after Wi-Fi went off: Louie would rather have late turns than lost ones.
 
 To notice a socket that died without closing (a network switch), the relay
-pings every screen every 2s, and the page opens a new socket after 6s without
-one, or at once when the browser reports a different kind of network. Until
+pings every screen every 2s, and the page opens a new socket after 12s without
+one (6s switched on stalls that recover by themselves, and the switch cut
+Claude's voice), or at once when the browser reports a different kind of
+network. Any gap over 3s is logged quietly with the page's network, visibility
+and unsent bytes, to tell Wi-Fi from phone from relay. Until
 the new one resumes, chunks still go out on the old one: a cellular link that
 lost 2-3s of pings stalled TCP for ~10s, and the first version, which went
 quiet on the old socket at once, turned each such stall into a gap. A device's

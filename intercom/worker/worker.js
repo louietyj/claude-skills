@@ -147,6 +147,13 @@ const json = (o, c = 200) =>
 const pad = (n) => String(n).padStart(6, "0");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// What a page saw when its socket went quiet: ", wifi rtt 50ms 10Mb/s hidden 12 KB unsent".
+function netNote(m) {
+  const parts = [m.net, m.rtt != null && `rtt ${m.rtt}ms`, m.down != null && `${m.down}Mb/s`,
+                 m.vis === "hidden" && "hidden", m.unsent && `${Math.round(m.unsent / 1024)} KB unsent`].filter(Boolean);
+  return parts.length ? `, ${parts.join(" ")}`.slice(0, 120) : "";
+}
+
 // A speak holds its request open for the whole utterance, and a proxy may drop
 // one that stays silent that long: spaces go out ahead of the JSON.
 function heldJson(promise) {
@@ -1217,7 +1224,8 @@ export class Session {
         delete this.meta.grace;
         this.holder = ws;
         // The page answers `resumed`, or a fresh `seg` if it no longer has the chunks.
-        this.resuming = { ui: g.ui, at: g.at, told: this.audioStalledAt != null, why: msg.why ?? null };
+        this.resuming = { ui: g.ui, at: g.at, told: this.audioStalledAt != null,
+                          why: msg.why ? `${String(msg.why).slice(0, 60)}${netNote(msg.at ?? {})}` : null };
         this.audioStalledAt = null;
         try { ws.send(JSON.stringify({ type: "resume", have: this.segChunks })); } catch {}
         return this.sendRoom();
@@ -1268,6 +1276,7 @@ export class Session {
       return;
     }
     if (msg.type === "hangup") return this.hangUp();
+    if (msg.type === "gap") return this.addEntry("net", { text: `${this.ui(ws)} heard nothing from the relay for ${(Number(msg.ms) / 1000).toFixed(1)}s${netNote(msg)}` });
     if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (ws !== this.holder) return;
@@ -1282,7 +1291,7 @@ export class Session {
       }
       if (r) {
         const s = Math.round((Date.now() - r.at) / 1000);
-        const why = r.why ? ` (${String(r.why).slice(0, 60)})` : "";
+        const why = r.why ? ` (${r.why})` : "";
         // A stall Claude was told about gets its answer as news; otherwise a blip stays quiet.
         await this.addEntry(started || r.told ? "event" : "net", { text: started
           ? `${r.ui} reconnected${why} after ${s}s, too late to resend: what was said in between is lost`

@@ -716,6 +716,18 @@ class Resume(unittest.TestCase):
         self.assertEqual(recv_until(ws, lambda m: m.get("type") == "resume")["have"], -1)
         ws.close()
 
+    def test_a_pages_gap_report_is_logged_quietly_with_its_network(self):
+        sid = create()
+        ws = screen(sid, "phone")
+        last = entries(sid)[-1]["n"] if entries(sid) else 0
+        ws.send(json.dumps({"type": "gap", "ms": 7400, "net": "wifi", "rtt": 50, "down": 10,
+                            "vis": "hidden", "unsent": 24576}))
+        es = wait_entries(sid, lambda es: texts(es, "net"))
+        self.assertEqual(texts(es, "net"),
+                         ["phone heard nothing from the relay for 7.4s, wifi rtt 50ms 10Mb/s hidden 24 KB unsent"])
+        self.assertEqual(http("/watch", id=sid, since=last, interval=0, wait=1)[1]["event"], "idle")
+        ws.close()
+
     def test_screens_are_pinged_so_a_dead_socket_shows(self):
         sid = create()
         ws = screen(sid, "phone")

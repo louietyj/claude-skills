@@ -822,7 +822,9 @@ export class Session {
   // hidden page with its socket still open and its mic still held.
   checkAudioStall() {
     if (this.audioStalledAt || !this.holder || this.grace || !this.live() || !this.lastAudioAt) return;
-    if (Date.now() - this.lastAudioAt < AUDIO_STALL_MS) return;
+    // A page that can resend what it recorded only matters once the grace is spent.
+    const after = this.segRec != null ? this.graceMs() : AUDIO_STALL_MS;
+    if (Date.now() - this.lastAudioAt < after) return;
     this.audioStalledAt = this.lastAudioAt;
     const who = this.ui(this.holder);
     this.addEntry("event", { text: `${who} stopped sending audio, with its socket still open: nothing is heard until it resumes` }).catch(() => {});

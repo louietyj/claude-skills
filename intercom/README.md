@@ -201,7 +201,7 @@ and the mic stayed held. Sound is the only exemption, so the page plays a
 19 kHz tone at -49 dBFS (Chrome counts above -72 as audible) for a second every
 20s, scheduled an hour ahead on the audio clock rather than by timers. Locked
 and silent for 6.5 minutes, the page kept streaming. The relay also logs a
-connected page that stops sending audio for 10s, which is what a frozen page
+connected page that stops sending audio for 10s (60s for a page that can resend, below), which is what a frozen page
 looks like from outside.
 
 **No browser audio processing in listen mode.** `noiseSuppression` and

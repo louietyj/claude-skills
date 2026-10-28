@@ -288,13 +288,10 @@ print_docs() {
   printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
   printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
   printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
-  printf '\n!!! NEVER THROW AWAY THE `screenshot: <path>` LINE !!!\n'
-  printf 'Every page-changing command has already saved one. When text or a snap\n'
-  printf 'looks wrong, VIEW THAT IMAGE before debugging in text. Filter all you\n'
-  printf 'like, but carry the line through (SKILL.md has more examples):\n'
-  printf "  instead of >/dev/null         | grep '^screenshot:'\n"
-  printf "  in a grep you already run     add |^screenshot: to the -E pattern\n"
-  printf '  tail, loops, scripts, $(...)  end the whole command with ; pinchtab shots\n'
+  printf '\nEvery page-changing command has already saved a screenshot at the fixed\n'
+  printf 'paths below. When text or a snap looks wrong, VIEW THAT IMAGE before\n'
+  printf 'debugging in text. Filter output all you like: `pinchtab shots` lists the\n'
+  printf 'numbered shots of earlier steps.\n'
   printf '\nThat file links a references/ directory. It is NOT printed here; read a\n'
   printf 'page from it only if you actually need it:\n'
   for f in "$PINCHTAB_DOCS"/references/*; do
@@ -656,8 +653,8 @@ D=$D0${A:+/$A}
 L=$L${A:+-$A}
 N=$N${A:+-$A}
 
-# The shim's own command, for batches that filtered out the `screenshot:` lines.
-# It can't tell which of those lines were seen, so it repeats them all.
+# The shim's own command: the numbered shots since it last ran, for looking back
+# past `latest` at an earlier step of a chain.
 if [ "${1:-}" = shots ]; then
   if [ ! -s "$L" ]; then
     echo "screenshots: none since the last \`$NAME shots\`"
@@ -885,15 +882,26 @@ if [ "$TIER" = local ]; then
   esac
 fi
 
-# `--x X --y Y --unscale S`: X,Y read off a screenshot of scale S, divided back to
-# CSS pixels here, because dividing by 0.4249 in an agent's head goes wrong.
-case " $* " in *" --unscale "*)
+# `--x X --y Y --unscale last-small|last-full|S`: X,Y read off the last small or
+# full shot (or one of scale S), divided back to CSS pixels here, because
+# dividing by 0.4249 in an agent's head goes wrong.
+case " $* " in *" --unscale "*|*" --unscale="*)
+  for a in "$@"; do
+    shift
+    case "$a" in --unscale=*) set -- "$@" --unscale "${a#--unscale=}" ;; *) set -- "$@" "$a" ;; esac
+  done
   unscale= x= y= prev=
   for a in "$@"; do
     case "$prev" in --unscale) unscale=$a ;; --x) x=$a ;; --y) y=$a ;; esac
     prev=$a
   done
-  case "$unscale" in ''|*[!0-9.]*|*.*.*|.) echo "$NAME: --unscale takes the scale from a screenshot: line, e.g. 0.4249" >&2; exit 2 ;; esac
+  case "$unscale" in
+    last-small|last-full)
+      size=${unscale#last-}
+      unscale=$(awk -v s="$size" '$1 == s { print $2 }' "$D/latest.scale" 2>/dev/null)
+      [ -n "$unscale" ] || { echo "$NAME: --unscale last-$size: no screenshot taken yet" >&2; exit 2; } ;;
+  esac
+  case "$unscale" in ''|*[!0-9.]*|*.*.*|.) echo "$NAME: --unscale takes last-small, last-full, or a scale such as 0.4249" >&2; exit 2 ;; esac
   [ -n "$x$y" ] || { echo "$NAME: --unscale needs --x and/or --y" >&2; exit 2; }
   prev=
   for a in "$@"; do
@@ -908,10 +916,9 @@ case " $* " in *" --unscale "*)
   done ;;
 esac
 
-# After anything that can change the page, save a screenshot and name it, so a
-# confusing snapshot is one image view away instead of a screenshot call first.
-# The command's output is held back until the path is printed: callers pipe
-# through `| head`, which would otherwise cut the path off.
+# After anything that can change the page, save a screenshot to the fixed
+# latest paths, so a confusing snapshot is one image view away instead of a
+# screenshot call first.
 O=
 shoot=
 case "${1:-}" in
@@ -946,9 +953,8 @@ fi
 [ -n "$O" ] || exit $rc
 tab=
 prev=
-json=
 for a in "$@"; do
-  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; --json) json=1 ;; esac
+  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; esac
   [ "$prev" = --tab ] && tab=$a
   prev=$a
 done
@@ -982,12 +988,10 @@ if [ -s "$shot" ]; then
   cp -f "$shot" "$D/latest.jpg"
   [ -s "$small" ] && cp -f "$small" "$D/latest-small.jpg"
   printf '%s\n' "$line" >> "$L"
-  # With --json, stdout is the JSON alone, so it can be piped into a parser.
-  if [ -n "$json" ]; then
-    printf 'screenshot: %s\n' "$line" >&2
-  else
-    printf 'screenshot: %s\n' "$line"
-  fi
+  # Read by --unscale last-small|last-full.
+  scale_of() { printf '%s' "$1" | sed -n 's/.*scale \([0-9.]*\).*/\1/p'; }
+  { printf 'full %s\n' "$(scale_of "$full_dims")"
+    [ -s "$small" ] && printf 'small %s\n' "$(scale_of "$small_dims")"; } > "$D/latest.scale"
   if [ -d $OUT ]; then
     cp -f "$shot" "$OUT/$NAME-shot-latest.jpg"
     # Append only what the zip lacks, so the cost doesn't grow with the session.

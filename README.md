@@ -16,6 +16,7 @@ Skills for Claude, one subdirectory each.
 - [`phomymo-link/`](phomymo-link/) — fills a label template with text and packs the whole design into a phomymo.louietyj.me link that opens ready to print on the M110.
 - [`calendar-commute/`](calendar-commute/) — adds a drive event before one calendar event, matching what Google Calendar's Maps panel writes: pessimistic traffic for the arrival, rounded up onto Maps' 1/2/5/10-minute grid, with the panel's title and description. Reverse-engineered from the panel's own RPC and client code.
 - [`risk-parity-rebalance/`](risk-parity-rebalance/) — `/risk-parity-rebalance`: plans a rebalance of the IBKR risk-parity portfolio from live positions, IBKR's published futures close-out table and 60-month vols via `local-mcps`, then stages the trades as IBKR instructions for approval.
+- [`gmail-unsub/`](gmail-unsub/) — weekly Gmail unsubscribe sweep: acts on the Unsubscribe/Keep choices Louie makes on a triage artifact with RFC 8058 one-click POSTs, sweeps Promotions and Social for new senders for Claude to sort into tiers, and keeps a dated state snapshot per run in the cfs store. Never sends mailto unsubscribes.
 
 Each subdirectory is self-contained: its own `SKILL.md`, setup script, and README/docs where applicable. `session-init/` is the exception — it orchestrates the other two and expects them installed alongside it, reporting them as missing rather than failing if they aren't.
 

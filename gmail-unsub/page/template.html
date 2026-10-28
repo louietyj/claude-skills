@@ -1,0 +1,250 @@
+<title>Inbox Unsubscribe Triage</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one sticky control bar (filters + tally), then a dense sender list; each row is a decision. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2230; --muted: #667085; --line: #e3e6ec;
+  --accent: #2f5bd3; --kill: #c2410c; --kill-bg: #fdebe2; --keep: #15803d; --keep-bg: #e3f4e8;
+  --chip: #eef1f6;
+  --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11151c; --surface: #181d26; --fg: #e6e9ef; --muted: #98a2b3; --line: #2a313d;
+  --accent: #7c9cf5; --kill: #fb8b5b; --kill-bg: #3a2218; --keep: #5fd38a; --keep-bg: #17331f; --chip: #222937;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11151c; --surface: #181d26; --fg: #e6e9ef; --muted: #98a2b3; --line: #2a313d;
+  --accent: #7c9cf5; --kill: #fb8b5b; --kill-bg: #3a2218; --keep: #5fd38a; --keep-bg: #17331f; --chip: #222937;
+  color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+.wrap { max-width: 980px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 48px; }
+header h1 { font-size: 22px; margin: 0 0 4px; text-wrap: balance; letter-spacing: -0.01em; }
+header p { margin: 0; color: var(--muted); max-width: 65ch; line-height: 1.5; }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-block: 16px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filters button { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); border-radius: 999px; padding: 5px 11px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.tally { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.tally b { color: var(--fg); font-weight: 500; }
+.tally .k b { color: var(--kill); } .tally .p b { color: var(--keep); }
+.bulk { font: inherit; font-size: 12px; border: 1px dashed var(--kill); color: var(--kill); background: transparent; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+.status { font-size: 12px; color: var(--muted); }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 22px 0 8px; font-weight: 600; }
+h2 span { font-family: var(--mono); letter-spacing: 0; }
+ul.list { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+li.row { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; padding: 11px 14px; border-top: 1px solid var(--line); align-items: center; }
+li.row:first-child { border-top: 0; }
+li.row.d-kill { background: var(--kill-bg); } li.row.d-keep { background: var(--keep-bg); }
+.who { min-width: 0; }
+.who .nm { font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.who .ad { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; font-weight: 400; }
+.who .why { font-size: 13px; margin-top: 3px; line-height: 1.4; }
+.ghead { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin: 22px 0 8px; }
+.ghead h2 { margin: 0; }
+.gacts { display: flex; gap: 6px; flex-wrap: wrap; }
+.gbtn { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; }
+.gbtn.kill { color: var(--kill); border-color: var(--kill); }
+.gbtn.keep { color: var(--keep); border-color: var(--keep); }
+.gbtn:hover:not(:disabled) { background: var(--chip); }
+.gbtn:disabled { opacity: .5; cursor: default; }
+p.blurb { margin: -4px 0 8px; color: var(--muted); font-size: 13px; }
+.who .sj { color: var(--muted); font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pill { font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 4px; background: var(--chip); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pill.m-one-click { color: var(--keep); }
+.pill.m-mailto, .pill.m-body-link, .pill.m-https-link { color: var(--accent); }
+.pill.m-none { color: var(--kill); }
+.pill.st-unsubscribed { background: var(--keep-bg); color: var(--keep); font-weight: 500; }
+.pill.st-failed, .pill.st-skipped { background: var(--kill-bg); color: var(--kill); white-space: normal; }
+.pill.vol { color: var(--fg); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; padding: 6px 12px; border: 0; background: var(--surface); color: var(--muted); cursor: pointer; min-width: 64px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.kill[aria-pressed="true"] { background: var(--kill); color: var(--surface); }
+.seg button.keep[aria-pressed="true"] { background: var(--keep); color: var(--surface); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.empty { padding: 18px 14px; color: var(--muted); }
+footer { margin-top: 24px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 70ch; }
+footer code { font-family: var(--mono); font-size: 11.5px; }
+@media (max-width: 560px) { li.row { grid-template-columns: 1fr; } .seg { justify-self: start; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Inbox Unsubscribe Triage</h1>
+    <p id="intro"></p>
+  </header>
+
+  <div class="bar">
+    <div class="filters" role="group" aria-label="Filter senders">
+      <button id="f-all" data-f="all" aria-pressed="true">All</button>
+      <button id="f-open" data-f="open" aria-pressed="false">Undecided</button>
+      <button id="f-kill" data-f="kill" aria-pressed="false">Unsubscribe</button>
+      <button id="f-keep" data-f="keep" aria-pressed="false">Keep</button>
+    </div>
+    <div class="tally">
+      <span class="k">unsub <b id="t-kill">0</b></span>
+      <span class="p">keep <b id="t-keep">0</b></span>
+      <span>open <b id="t-open">0</b></span>
+      <span class="status" id="status">Connecting…</span>
+    </div>
+  </div>
+
+  <div id="groups"></div>
+
+  <footer>
+    <p><b>How this runs.</b> Your choices save as you tap them. Every Monday Claude acts on them, sweeps the past week, and republishes this page with what’s new. Unsubscribed senders drop off; one that keeps mailing more than 14 days later comes back under “Still mailing”. Senders delivered through an email alias are often easier to stop by disabling the alias.</p>
+    <p>Method key: <code>one-click</code> RFC 8058 POST · <code>https-link</code> a page visit, counted only if the page confirms without a form. Senders that only offer mailto, or no header at all, are never listed, and recruiters are left out entirely.</p>
+  </footer>
+</div>
+
+<script>
+const SWEEP = __DATA__;
+const GROUPS = [
+  ["junk", "Confident junk", "Promos, surveys, drips and win-backs with no account role."],
+  ["maybe", "Maybe", "Depends on whether you use the product, hold the account or want the content."],
+  ["keep", "Likely keep", "Transactional, security or account mail that happens to land in Promotions."],
+  ["prevkept", "Previously kept", "You kept these before and they mailed again. Flip any that annoy you."],
+  ["ignoring", "Still mailing", "Unsubscribed more than 14 days ago and still sending. Claude retries once with the newest link."]
+];
+const state = { filter: "all", dec: {}, db: null, canWrite: true };
+const ST_LABEL = { unsubscribed: "Unsubscribed", failed: "Unsubscribe failed", skipped: "Skipped" };
+
+document.getElementById("intro").textContent = SWEEP.senders.length
+  ? `${SWEEP.senders.length} senders from your Promotions and Social tabs, ${SWEEP.range} (${SWEEP.threads} threads swept). `
+    + `Mark each one Unsubscribe or Keep; anything left undecided comes back if it mails again.`
+  : `Nothing to decide from ${SWEEP.range}: every sender in that window is already handled.`;
+
+function decisionOf(s) { return state.dec[s.k] || null; }
+
+function render() {
+  const g = document.getElementById("groups");
+  g.textContent = "";
+  let tk = 0, tp = 0, to = 0;
+  for (const s of SWEEP.senders) { const d = decisionOf(s); d === "kill" ? tk++ : d === "keep" ? tp++ : to++; }
+  document.getElementById("t-kill").textContent = tk;
+  document.getElementById("t-keep").textContent = tp;
+  document.getElementById("t-open").textContent = to;
+  for (const [key, title, blurb] of GROUPS) {
+    if (!SWEEP.senders.some(s => s.sug === key)) continue;
+    const rows = SWEEP.senders.filter(s => s.sug === key).filter(s => {
+      const d = decisionOf(s);
+      return state.filter === "all" || (state.filter === "open" ? !d : d === state.filter);
+    });
+    const h = document.createElement("h2");
+    h.textContent = title + " ";
+    const c = document.createElement("span"); c.textContent = `· ${rows.length}`; h.append(c);
+    h.title = blurb;
+    const bl = document.createElement("p"); bl.className = "blurb"; bl.textContent = blurb;
+    const ul = document.createElement("ul"); ul.className = "list";
+    if (!rows.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = "Nothing here under this filter."; ul.append(li); }
+    for (const s of rows) ul.append(rowEl(s));
+    const all = SWEEP.senders.filter(s => s.sug === key);
+    const head = document.createElement("div"); head.className = "ghead";
+    const acts = document.createElement("div"); acts.className = "gacts";
+    for (const [v, label, cls] of [["kill", "Unsub all", "kill"], ["keep", "Keep all", "keep"], [null, "Clear", ""]]) {
+      const b = document.createElement("button");
+      b.id = `bulk-${key}-${v || "clear"}`; b.className = "gbtn " + cls; b.textContent = label;
+      b.disabled = !state.canWrite;
+      b.title = `${label}: applies to all ${all.length} senders in ${title}`;
+      b.addEventListener("click", () => bulk(all, v));
+      acts.append(b);
+    }
+    head.append(h, acts);
+    g.append(head, bl, ul);
+  }
+}
+
+function rowEl(s) {
+  const d = decisionOf(s);
+  const li = document.createElement("li");
+  li.className = "row" + (d ? " d-" + d : "");
+  const who = document.createElement("div"); who.className = "who";
+  const nm = document.createElement("div"); nm.className = "nm";
+  const n = document.createElement("span"); n.textContent = s.name;
+  const a = document.createElement("span"); a.className = "ad"; a.textContent = s.addr;
+  nm.append(n, a);
+  const why = document.createElement("div"); why.className = "why"; why.textContent = s.why || "";
+  const sj = document.createElement("div"); sj.className = "sj"; sj.textContent = s.subj[0] || ""; sj.title = s.subj.join("\n");
+  const meta = document.createElement("div"); meta.className = "meta";
+  const pills = [
+    ["vol", `${s.n} email${s.n > 1 ? "s" : ""}`],
+    ["", s.n > 1 ? `${s.first} → ${s.last}` : s.last],
+    ["m-" + s.m, s.m],
+    ["", s.cat === "social" ? "Social" : "Promotions"]
+  ];
+  if (s.alias) pills.push(["", "via alias"]);
+  const st = s.st;
+  if (st) pills.unshift(["st-" + st.status, ST_LABEL[st.status] + " " + (st.actedAt || "").slice(0, 10) + (st.reason ? " · " + st.reason : "")]);
+  for (const [cls, t] of pills) { const p = document.createElement("span"); p.className = "pill " + cls; p.textContent = t; meta.append(p); }
+  who.append(nm, why, sj, meta);
+  const seg = document.createElement("div"); seg.className = "seg";
+  for (const [v, label] of [["kill", "Unsub"], ["keep", "Keep"]]) {
+    const b = document.createElement("button");
+    b.className = v; b.textContent = label; b.setAttribute("aria-pressed", d === v ? "true" : "false");
+    b.disabled = !state.canWrite || (st && st.status === "unsubscribed");
+    b.addEventListener("click", () => decide(s, d === v ? null : v));
+    seg.append(b);
+  }
+  li.append(who, seg);
+  return li;
+}
+
+const queue = new Map(); let flushing = false;
+function decide(s, v) {
+  if (v) state.dec[s.k] = v; else delete state.dec[s.k];
+  render();
+  queue.set(s.k, v); flush();
+}
+async function flush() {
+  if (flushing || !state.db) return;
+  flushing = true;
+  try {
+    while (queue.size) {
+      const [k, v] = queue.entries().next().value; queue.delete(k);
+      const ref = state.db.collection("decisions").doc(k);
+      try {
+        if (v) await ref.set({ d: v, at: new Date().toISOString(), sweep: SWEEP.id });
+        else await ref.delete();
+        setStatus("Saved");
+      } catch (e) {
+        if (e && e.code === "invalid_argument") { state.canWrite = false; setStatus("Read-only for you"); render(); queue.clear(); }
+        else setStatus("Couldn’t save — try again");
+      }
+    }
+  } finally { flushing = false; }
+}
+function setStatus(t) { document.getElementById("status").textContent = t; }
+
+document.querySelectorAll(".filters button").forEach(b => b.addEventListener("click", () => {
+  state.filter = b.dataset.f;
+  document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
+  render();
+}));
+function bulk(list, v) {
+  for (const s of list) {
+    if ((state.dec[s.k] || null) === v) continue;
+    if (v) state.dec[s.k] = v; else delete state.dec[s.k];
+    queue.set(s.k, v);
+  }
+  render(); flush();
+}
+
+render();
+(async () => {
+  const db = window.claude ? await window.claude.use("db") : null;
+  if (!db) { state.canWrite = false; setStatus("Saving unavailable here"); render(); return; }
+  state.db = db;
+  db.collection("decisions").onSnapshot(snap => {
+    const next = {};
+    for (const doc of snap.docs) { const v = doc.data(); if (v && v.d) next[doc.id] = v.d; }
+    for (const [k, v] of queue) { if (v) next[k] = v; else delete next[k]; }
+    state.dec = next; setStatus(snap.size ? `${snap.size} saved` : "Ready"); render();
+  }, () => setStatus("Lost connection — reload to keep saving"));
+  flush();
+})();
+</script>

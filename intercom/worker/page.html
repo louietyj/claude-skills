@@ -180,12 +180,14 @@ let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
 // new socket can resend whatever the relay didn't get (README: "A dropped page").
 const KEEP_CHUNKS = 240;         // 60 s at 250 ms, the relay's grace
-// The relay pings every 2 s. A cellular stall of 6-10 s recovers by itself; a
-// switch earlier than that bought nothing.
-const SOCKET_SILENT_MS = 12000;
+// The relay pings every 2 s. A quiet socket is often just TCP backing off its
+// retries, which a fresh socket skips: past one missed ping, new ones race it,
+// each given 2 s to open (README: "Racing a quiet socket").
+const RACE_AFTER_MS = 3000;
+const RACE_EVERY_MS = 2000;
 const GAP_REPORT_MS = 3000;
 let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
-let prevWs = null, switchWhy = null;
+let prevWs = null, switchWhy = null, racer = null;
 let netType = navigator.connection?.type ?? null, voiceRetries = 0;
 
 function tick() {
@@ -371,14 +373,15 @@ function deviceUrl() {
   return `${proto}//${location.host}/device?k=${encodeURIComponent(K)}&id=${sid}`;
 }
 
-function connect() {
+// `opened`: a socket that won a race, already open.
+function connect(opened) {
   clearTimeout(retryTimer);
   if (mode !== "live") return;
-  status("Connecting…", "amber");
-  const sock = new WebSocket(deviceUrl());
+  if (!opened) status("Connecting…", "amber");
+  const sock = opened || new WebSocket(deviceUrl());
   ws = sock;
   streaming = false;
-  sock.onopen = () => {
+  const onopen = () => {
     backoff = 250; failures = 0;
     lastRx = Date.now();
     status("");
@@ -395,12 +398,14 @@ function connect() {
       const gap = Date.now() - lastRx;
       lastRx = Date.now();
       if (gap > GAP_REPORT_MS && sock.readyState === 1) send({ type: "gap", ms: gap, ...netState() });
+      stopRace();                       // this one came back first
     }
     try { onMessage(JSON.parse(m.data)); } catch {}
   };
   sock.onclose = (e) => {
     if (ws !== sock || mode !== "live") return;
     if (e.code === 4001) return finish("Open in another tab");
+    if (racer) return;                  // a race is already finding the next socket
     streaming = false;
     switchWhy = `closed ${e.code}`;
     failures++;
@@ -409,17 +414,15 @@ function connect() {
     retryTimer = setTimeout(connect, backoff);
     backoff = Math.min(backoff * 4, 5000);
   };
+  if (opened) onopen(); else sock.onopen = onopen;
 }
 
-// A socket can die without closing (a network switch): no ping for a while
-// means a new one. Also checked on recorder chunks, which hidden-page throttling doesn't slow.
+// Checked on recorder chunks too, which hidden-page throttling doesn't slow.
 function checkSocket() {
-  if (mode !== "live" || !ws || ws.readyState !== 1 || Date.now() - lastRx < SOCKET_SILENT_MS) return;
+  if (mode !== "live" || !ws || ws.readyState !== 1 || Date.now() - lastRx < RACE_AFTER_MS) return;
   reconnectNow(`no ping for ${Math.round((Date.now() - lastRx) / 1000)}s`);
 }
 
-// The old socket keeps carrying chunks until the new one resumes; the relay
-// closes it once the new one says hello.
 // For the relay's log: what the network and page looked like when the socket went quiet.
 function netState() {
   const c = navigator.connection;
@@ -427,13 +430,39 @@ function netState() {
            vis: document.visibilityState, unsent: ws ? ws.bufferedAmount : null };
 }
 
+// Fresh sockets race the quiet one, which keeps carrying chunks: the first to
+// open takes over (the relay closes the old one at its hello), and the old one
+// hearing from the relay first calls the race off.
 function reconnectNow(why) {
-  if (prevWs && ws && ws.readyState === 0) return;     // a switch is already under way
-  try { prevWs && prevWs.close(); } catch {}
-  prevWs = ws && ws.readyState === 1 ? ws : null;
+  if (racer || mode !== "live") return;
   switchWhy = why;
-  backoff = 250;
-  connect();
+  const attempt = () => {
+    if (mode !== "live") return stopRace();
+    const s = racer = new WebSocket(deviceUrl());
+    const next = setTimeout(() => {
+      if (racer !== s) return;
+      s.onopen = s.onclose = null;
+      try { s.close(); } catch {}
+      attempt();
+    }, RACE_EVERY_MS);
+    s.onopen = () => {
+      clearTimeout(next);
+      if (racer !== s) return s.close();
+      racer = null;
+      try { prevWs && prevWs !== ws && prevWs.close(); } catch {}
+      prevWs = ws && ws.readyState === 1 ? ws : null;
+      connect(s);
+    };
+    // Refused at once (offline): the next try waits for its turn.
+    s.onclose = () => { if (racer === s) { clearTimeout(next); setTimeout(() => racer === s && attempt(), RACE_EVERY_MS); } };
+  };
+  attempt();
+}
+
+function stopRace() {
+  const s = racer;
+  racer = null;
+  if (s) { s.onopen = s.onclose = null; try { s.close(); } catch {} }
 }
 
 function dropPrev() {
@@ -939,6 +968,7 @@ function releaseAudio() {
 // Audio and socket off; the mode is set first, so the close isn't retried.
 function release() {
   clearTimeout(retryTimer);
+  stopRace();
   releaseAudio();
   const sock = ws; ws = null;
   try { sock && sock.close(1000); } catch {}

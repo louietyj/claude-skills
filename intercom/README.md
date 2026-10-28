@@ -449,11 +449,15 @@ through it at about real time, so after a 6s gap turns ran up to ~5s late for
 back after Wi-Fi went off: Louie would rather have late turns than lost ones.
 
 To notice a socket that died without closing (a network switch), the relay
-pings every screen every 2s, and the page opens a new socket after 12s without
-one (6s switched on stalls that recover by themselves, and the switch cut
-Claude's voice), or at once when the browser reports a different kind of
-network. Any gap over 3s is logged quietly with the page's network, visibility
-and unsent bytes, to tell Wi-Fi from phone from relay. Until
+pings every screen every 2s. **Racing a quiet socket:** past one missed ping
+(3s), or at once when the browser reports a different kind of network, the page
+opens fresh sockets alongside the quiet one, each given 2s to open (a TCP+TLS+
+WebSocket handshake on poor cellular can take a second), until one opens or the
+old one is heard from again. A quiet socket is often TCP backing off its
+retransmissions (the timeout doubles from a few hundred ms per miss, so a 3s
+blackout stalled sockets for 7-10s on cellular); a fresh one has no backoff and
+gets through as soon as the network does. Any gap over 3s is logged quietly
+with the page's network, visibility and unsent bytes. Until
 the new one resumes, chunks still go out on the old one: a cellular link that
 lost 2-3s of pings stalled TCP for ~10s, and the first version, which went
 quiet on the old socket at once, turned each such stall into a gap. A device's

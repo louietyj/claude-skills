@@ -67,11 +67,23 @@ def main():
             page.evaluate("lastRx = 0")                    # a socket that died without closing
             time.sleep(3)
             check(ts.stream_count() == n + 1, "after a silent socket: the same transcriber stream")
+
+            # Every racing socket fails while offline. Chromium's emulation spares the open
+            # socket, so its next ping calls the race off: the old socket came back first.
+            page.context.set_offline(True)
+            page.evaluate("lastRx = 0")
+            time.sleep(5)
+            page.context.set_offline(False)
+            time.sleep(4)
+            check(ts.stream_count() == n + 1 and page.evaluate("racer === null"),
+                  "a race run offline ends once a socket is heard, on the same stream")
             ran = time.time() - t0
             got = decoded_s(stream["audio"])
             check(abs(got - ran) < 1.0, f"transcriber got {got:.1f}s of audio in {ran:.1f}s: nothing lost")
             es = ts.entries(sid)
-            check(len(ts.texts(es, "net")) == 2, f"both blips logged quietly: {ts.texts(es, 'net')}")
+            # Coming back online can start one more race, which either side may win.
+            check(len([t for t in ts.texts(es, "net") if "reconnected" in t]) >= 2,
+                  f"the switches logged quietly: {ts.texts(es, 'net')}")
             check(not any("disconnected" in t for t in ts.texts(es, "event")), "no drop reported to Claude")
 
             page.evaluate("window._connect = connect; connect = () => {}; ws.close()")   # away past the grace

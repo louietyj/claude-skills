@@ -102,6 +102,8 @@ I have a private filesystem that persists across conversations, at `/memory` and
 
 **Never use the Dropbox connector for this.** It sees the same files, but it's for reading my personal Dropbox: every write through it raises a permission dialog I'll almost certainly deny, wasting a turn and leaving the job half-done. The skill needs no approval.
 
+**One exception: getting a binary into my Dropbox.** The connector can't upload binaries, but it can move files, and the store is a folder in that same Dropbox. So `cfs upload` the file into the store, then use the connector's `move` to take it from `/Apps/louietyj-claude-ai/<path>` to where it belongs. That `move` is a write, so it raises the approval dialog; here that's expected, since you're placing a file in my own Dropbox.
+
 Put anything that should outlive this chat there — drafts, notes, logs, working state — rather than asking me to copy it out.
 
 **⛔ THE REV RULE IS ABSOLUTE. NEVER SCRIPT AROUND IT TO GET A REV. ⛔**

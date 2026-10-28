@@ -31,9 +31,10 @@ WATCH_BUDGET = 90
 WATCH_INTERVAL = 10
 NOTE_MAX = 120
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
+SPEAK_RETRY_S = 1         # after a lost connection; doubles
 HOLD_RANGE = "0-10"       # the relay's bounds on the turn wait
 IN_PROGRESS = "  [...still speaking]"
-NOT_NEWS = {"note", "said", "setting"}   # as the relay's: logged, but wake nobody
+NOT_NEWS = {"note", "said", "setting", "net"}   # as the relay's: logged, but wake nobody
 
 # The gate (listen mode under Monitor): `follow` decides when the main agent wakes,
 # and a cheap gate agent says which batches are worth waking it for.
@@ -219,6 +220,9 @@ def describe_device(d, state):
         if why == "call ended":
             return f"the PHONE LINE ENDED{ago}: no audio until a screen takes it or he is called again"
         return f"Louie is in the room on the {', '.join(screens)} but hasn't turned audio on"
+    if d.get("reconnecting_s") is not None:
+        return (f"{who} reconnecting for {d['reconnecting_s']}s: it keeps recording and resends what was "
+                f"missed, so nothing is lost if it is back within 15s")
     if d.get("mic_silent_s") is not None:
         where = " with its page off screen" if d.get("hidden_s") is not None else ""
         return f"{who} mic SILENT for {d['mic_silent_s']}s{where}: nothing is being heard"
@@ -391,12 +395,22 @@ def cmd_speak(cfg, args):
     text = read_text(args, "speak", "Okay, the tests are back and two failed.")
     # Monitor users pass the last event's n; watch users have it in the saved cursor.
     since = args.since if args.since is not None else (read_state(f"cursor-{sid}.json") or {}).get("since")
-    status, body = relay(cfg, "/speak", method="POST", id=sid,
-                         body={"text": text, "barge_in": not args.no_barge_in,
-                               **({"since": since} if since is not None else {})},
-                         timeout=speak_timeout(text))
-    if status != 200 or not isinstance(body, dict):
+    # A lost reply is asked for again under the call id; the relay never says it twice.
+    req = {"text": text, "barge_in": not args.no_barge_in, "rid": os.urandom(8).hex(),
+           **({"since": since} if since is not None else {})}
+    deadline = time.time() + speak_timeout(text)
+    pause = SPEAK_RETRY_S
+    while True:
+        status, body = relay(cfg, "/speak", method="POST", id=sid, body=req, timeout=speak_timeout(text))
+        if status != 0 or time.time() + pause > deadline:
+            break
+        time.sleep(pause)
+        pause = min(pause * 2, 8)
+    if status != 200 or not isinstance(body, dict) or ("error" in body and "status" not in body):
         die(f"not spoken: {status} {error_text(body)}")
+    if body.get("status") == "done":
+        emit({"status": "done", "audio_s": body.get("audio_s")})
+        return
     out = dict(body)
     if body.get("status") == "interrupted" and "audio moved" in (body.get("reason") or ""):
         out["hint"] = ("the audio moved to another device mid-sentence: Louie heard only `spoken`. Say "
@@ -404,6 +418,9 @@ def cmd_speak(cfg, args):
     elif body.get("status") == "interrupted" and "phone line ended" in (body.get("reason") or ""):
         out["hint"] = ("the call ended mid-sentence: Louie heard only `spoken`. Nothing redials; call again "
                        "only if he asks.")
+    elif body.get("status") == "interrupted" and "disconnected" in (body.get("reason") or ""):
+        out["hint"] = ("Louie's page dropped mid-sentence and heard only `spoken`. Say `unspoken` again now: "
+                       "speak waits for the page to reconnect.")
     elif body.get("status") == "interrupted" and "left audio" in (body.get("reason") or ""):
         out["hint"] = ("Louie left audio mid-sentence and heard only `spoken`. When he turns it back on, "
                        "pick up from there if it still matters.")

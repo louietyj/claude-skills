@@ -42,6 +42,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
+                 "--var RESUME_GRACE_MS:2000 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
@@ -146,8 +147,9 @@ def setUpModule():
         return
     persist = tempfile.mkdtemp(prefix="intercom-test-")
     cmd = f"npx wrangler dev --port {PORT} --persist-to {persist} {WRANGLER_VARS}"
+    # Its own process group: terminating the shell alone leaves wrangler serving the port.
     WRANGLER = subprocess.Popen(cmd, cwd=HERE, shell=True, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.DEVNULL, start_new_session=os.name != "nt")
     end = time.time() + 90
     while time.time() < end:
         try:
@@ -165,7 +167,7 @@ def tearDownModule():
             subprocess.run(f"taskkill /F /T /PID {WRANGLER.pid}", shell=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            WRANGLER.terminate()
+            os.killpg(WRANGLER.pid, 15)
 
 
 class Gates(unittest.TestCase):
@@ -624,17 +626,100 @@ class Device(unittest.TestCase):
         ws.close()
 
 
+def recording(sid, rec="r1", dev="p1", **hello):
+    """A page holding the audio with its recorder run `rec` started: the transcriber stream it feeds."""
+    n = stream_count()
+    ws = screen(sid, "phone", dev=dev, holding=True, **hello)
+    wait_entries(sid, lambda es: es)
+    ws.send(json.dumps({"type": "seg", "rec": rec}))
+    return ws, wait_streams(n + 1)
+
+
+def wait_audio(stream, n, timeout=8):
+    end = time.time() + timeout
+    while time.time() < end and len(stream["audio"]) < n:
+        time.sleep(0.05)
+    return stream["audio"]
+
+
+class Resume(unittest.TestCase):
+    def test_a_dropped_page_resends_what_was_missed_on_the_same_stream_quietly(self):
+        sid = create()
+        ws, stream = recording(sid)
+        for i in range(3):
+            ws.send(f"chunk-{i}".encode())
+        wait_audio(stream, 3)
+        last = entries(sid)[-1]["n"]
+        n = stream_count()
+        ws.close()
+        time.sleep(0.5)
+        self.assertIsNotNone(http("/status", id=sid)[1]["device"]["reconnecting_s"])
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        self.assertEqual(recv_until(ws, lambda m: m.get("type") == "resume")["have"], 3)
+        for i in range(3, 5):
+            ws.send(f"chunk-{i}".encode())
+        self.assertEqual(wait_audio(stream, 5), [f"chunk-{i}".encode() for i in range(5)])
+        self.assertEqual(stream_count(), n, "a resumed page must not start a new transcriber stream")
+        es = entries(sid)
+        self.assertTrue(any("reconnected after" in t for t in texts(es, "net")), es)
+        self.assertFalse(any("disconnected" in t for t in texts(es, "event")), es)
+        self.assertEqual(http("/watch", id=sid, since=last, interval=0, wait=1)[1]["event"], "idle")
+        ws.close()
+
+    def test_a_grace_that_runs_out_is_news_and_a_late_page_starts_afresh(self):
+        sid = create()
+        ws, _ = recording(sid)
+        ws.send(b"chunk-0")
+        ws.close()
+        wait_entries(sid, lambda es: any(re.search(r"holding the audio disconnected \d+s ago", t)
+                                         for t in texts(es, "event")))
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        self.assertEqual(recv_until(ws, lambda m: m.get("type") == "resume")["have"], -1)
+        wait_entries(sid, lambda es: any("phone reconnected after" in t for t in texts(es, "event")))
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "phone")
+        ws.close()
+
+    def test_a_newer_socket_takes_over_without_a_drop(self):
+        sid = create()
+        old, stream = recording(sid)
+        old.send(b"chunk-0")
+        wait_audio(stream, 1)
+        new = screen(sid, "phone", dev="p1", holding=True, rec="r1")    # the network changed; old never closed
+        self.assertEqual(recv_until(new, lambda m: m.get("type") == "resume")["have"], 1)
+        with self.assertRaises(ConnectionClosed):
+            while True:
+                old.recv(timeout=5)
+        new.send(b"chunk-1")
+        self.assertEqual(wait_audio(stream, 2), [b"chunk-0", b"chunk-1"])
+        new.close()
+
+    def test_another_recorder_run_or_device_cannot_resume(self):
+        sid = create()
+        ws, _ = recording(sid)
+        ws.close()
+        time.sleep(0.3)
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="other")
+        self.assertEqual(recv_until(ws, lambda m: m.get("type") == "resume")["have"], -1)
+        ws.close()
+
+    def test_screens_are_pinged_so_a_dead_socket_shows(self):
+        sid = create()
+        ws = screen(sid, "phone")
+        recv_until(ws, lambda m: m.get("type") == "ping", timeout=4)
+        ws.close()
+
+
 def create_talk(**body):
     status, out = http("/session", "POST", {"label": "test", "mode": "talk", **body})
     assert status == 200, out
     return out["id"], out["event_key"]
 
 
-def speak_in_background(sid, text):
+def speak_in_background(sid, text, **body):
     """speak blocks until the device reports playback, so the test plays the device meanwhile."""
     got = {}
     th = threading.Thread(target=lambda: got.update(zip(("status", "out"), http(
-        "/speak", "POST", {"text": text}, id=sid, timeout=60))))
+        "/speak", "POST", {"text": text, **body}, id=sid, timeout=60))))
     th.start()
     return th, got
 
@@ -767,6 +852,46 @@ class Speak(unittest.TestCase):
         self.assertIn("The tests are back.", texts(entries(sid), "said"))
         out = http("/watch", id=sid, since=last, interval=0, wait=2)[1]
         self.assertEqual(out["event"], "idle", "Claude's own speech must not wake its watch")
+        ws.close()
+
+    def test_asking_again_under_the_same_id_waits_for_the_same_speech(self):
+        sid, _, ws = live_talk()
+        before = len(FAKE.speeches)
+        first, got1 = speak_in_background(sid, "The tests are back.", rid="call-1")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        again, got2 = speak_in_background(sid, "The tests are back.", rid="call-1")   # the first reply was lost
+        first.join(20), again.join(20)
+        self.assertEqual((got1["out"]["status"], got2["out"]["status"]), ("done", "done"), (got1, got2))
+        self.assertEqual(len(FAKE.speeches), before + 1, "the same call must never be spoken twice")
+        # Finished: the answer is kept.
+        t0 = time.time()
+        self.assertEqual(http("/speak", "POST", {"text": "The tests are back.", "rid": "call-1"}, id=sid)[1]["status"],
+                         "done")
+        self.assertLess(time.time() - t0, 1)
+        self.assertEqual(texts(entries(sid), "said").count("The tests are back."), 1)
+        ws.close()
+
+    def test_long_speech_trickles_keepalives_ahead_of_its_answer(self):
+        sid, _, ws = live_talk()
+        url = f"{BASE}/speak?{urllib.parse.urlencode({'token': CLI, 'id': sid})}"
+        body = json.dumps({"text": " ".join(["word"] * 14), "rid": "call-2"}).encode()
+        raw = urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=30).read()
+        self.assertTrue(raw.startswith(b" "), raw[:40])
+        self.assertEqual(json.loads(raw)["status"], "done")
+        ws.close()
+
+    def test_speech_waits_for_a_page_that_is_reconnecting(self):
+        sid, _ = create_talk()
+        ws, _ = recording(sid)
+        connect_voice(ws)
+        ws.close()
+        th, got = speak_in_background(sid, "Still there?", rid="call-3")
+        time.sleep(0.5)
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        recv_until(ws, lambda m: m.get("type") == "resume")
+        ws.send(json.dumps({"type": "voice_ready"}))                 # its voice track survived
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", got)
         ws.close()
 
     def test_louie_cutting_in_mutes_the_page_and_stops_feeding_the_track(self):

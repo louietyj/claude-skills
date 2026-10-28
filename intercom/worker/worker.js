@@ -52,6 +52,8 @@ const ID_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679";  // no 0/O, 1/I, 2/Z, 5/S, 8/B
 const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
 const ARMED_TTL_MS = 15 * 60_000;
 const DEVICE_GONE_MS = 5 * 60_000;
+const RESUME_GRACE_MS = 15_000;          // the page buffers this much of its recording
+const SCREEN_PING_MS = 2000;             // a page that hears nothing for 6s assumes its socket is dead
 const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const NO_AUDIO_MAX_MS = 60 * 60_000;
 // Why speech stopped, as `speak` reports it, when the audio left its holder.
@@ -121,6 +123,8 @@ const VOICE_PLAYOUT_MS = 700;
 const VOICE_READY_WAIT_MS = 10_000;
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
+const SPEAK_KEEPALIVE_MS = 5000;
+const SPEAK_KEPT = 20;                   // results kept for a CLI whose reply was lost
 const MODES = new Set(["listen", "talk"]);
 // While Claude speaks, a word counts only if the page's sustained-energy gate
 // was open when it was said: echo residue comes in brief spikes, Louie's
@@ -132,7 +136,7 @@ const GATE_MARGIN_S = 0.3;
 const ECHO_TAIL_S = 1.5;
 const SPANS_MAX = 50;
 // Claude's own notes and speech, and Louie's settings, are logged but are not news.
-const NOT_NEWS = new Set(["note", "said", "setting"]);
+const NOT_NEWS = new Set(["note", "said", "setting", "net"]);
 const BATCH_PARAMS = {
   model: "nova-3", diarize: "true", smart_format: "true", punctuate: "true",
   mip_opt_out: "true",
@@ -142,6 +146,18 @@ const json = (o, c = 200) =>
   new Response(JSON.stringify(o), { status: c, headers: { "content-type": "application/json" } });
 const pad = (n) => String(n).padStart(6, "0");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A speak holds its request open for the whole utterance, and a proxy may drop
+// one that stays silent that long: spaces go out ahead of the JSON.
+function heldJson(promise) {
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const tick = setInterval(() => w.write(enc.encode(" ")).catch(() => {}), SPEAK_KEEPALIVE_MS);
+  promise.catch((e) => ({ status: "error", error: String(e?.message ?? e) }))
+    .then((out) => w.write(enc.encode(JSON.stringify(out))))
+    .finally(() => { clearInterval(tick); w.close().catch(() => {}); });
+  return new Response(readable, { headers: { "content-type": "application/json" } });
+}
 
 function deepgramUrl(base, params, keyterms) {
   const u = new URL(base);
@@ -433,6 +449,11 @@ export class Session {
     this.keepalive = null;
     this.events = new Set();     // Monitor sockets
     this.speaking = null;        // the speak call in flight
+    this.speakCalls = new Map(); // call id -> its outcome, for a CLI that lost the reply and asks again
+    this.grace = null;           // a holding page that dropped and may resume: {ws, dev, ui, at, timer}
+    this.segRec = null;          // the holding page's recorder run, and how many of its chunks arrived
+    this.segChunks = 0;
+    this.pinger = null;
     this.voiceOut = null;        // the SFU adapter's socket: PCM in, Claude's voice track out
     this.voicePending = null;
     this.voiceSub = null;        // the page's SFU session, awaiting its answer
@@ -447,6 +468,16 @@ export class Session {
   async load() {
     if (this.meta) return this.meta;
     this.meta = (await this.ctx.storage.get("meta")) ?? null;
+    // A page that dropped just before a restart can't resume: the stream died with the object.
+    const g = this.meta?.state === "live" && this.meta.grace;
+    if (g) {
+      delete this.meta.grace;
+      Object.assign(this.meta, { no_audio_since: g.at, no_audio_why: "dropped", no_audio_from: g.ui,
+                                 audio_since: null });
+      const s = Math.round((Date.now() - g.at) / 1000);
+      await this.addEntry("event", { text: `${g.ui} holding the audio disconnected ${s}s ago; no audio until it reconnects` });
+      await this.armTimer();
+    }
     // A fresh instance with a live session means the object restarted (a
     // deploy, or Cloudflare moving it): the screens' sockets died with the old
     // one and no close handler ran to say so.
@@ -789,7 +820,7 @@ export class Session {
   // A connected page that stops sending is otherwise silent news: Chrome froze a
   // hidden page with its socket still open and its mic still held.
   checkAudioStall() {
-    if (this.audioStalledAt || !this.holder || !this.live() || !this.lastAudioAt) return;
+    if (this.audioStalledAt || !this.holder || this.grace || !this.live() || !this.lastAudioAt) return;
     if (Date.now() - this.lastAudioAt < AUDIO_STALL_MS) return;
     this.audioStalledAt = this.lastAudioAt;
     const who = this.ui(this.holder);
@@ -846,6 +877,7 @@ export class Session {
 
   async end(reason) {
     if (!this.meta || this.meta.state === "ended") return;
+    if (this.grace) { clearTimeout(this.grace.timer); this.grace = null; }
     if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", `session ended: ${reason}`);
     await this.closeVoice();
     await this.closeTranscriber();          // its last finals land before the end entry
@@ -865,6 +897,7 @@ export class Session {
   async alarm() {
     if (!(await this.load())) return;
     const now = Date.now();
+    if (this.grace && now >= this.grace.at + this.graceMs()) await this.expireGrace();
     if (this.meta.state === "armed" && now - this.meta.created_at >= ARMED_TTL_MS) {
       this.meta.state = "expired";
       await this.saveMeta();
@@ -887,7 +920,8 @@ export class Session {
   // (he left it, or the screen holding it dropped) gets an hour.
   async armTimer() {
     const due = [this.meta.absent_since && this.meta.absent_since + DEVICE_GONE_MS,
-                 this.meta.no_audio_since && this.meta.no_audio_since + NO_AUDIO_MAX_MS].filter(Boolean);
+                 this.meta.no_audio_since && this.meta.no_audio_since + NO_AUDIO_MAX_MS,
+                 this.meta.grace && this.meta.grace.at + this.graceMs()].filter(Boolean);
     if (due.length) await this.ctx.storage.setAlarm(Math.min(...due));
   }
 
@@ -900,6 +934,10 @@ export class Session {
   async setHolder(ws, why) {
     const old = this.holder;
     if (old === ws) return;
+    if (this.grace) { clearTimeout(this.grace.timer); this.grace = null; }
+    delete this.meta.grace;
+    this.segRec = null;
+    this.segChunks = 0;
     let closing = null;
     if (old) {
       this.holder = null;            // nothing more of its audio is taken
@@ -1086,9 +1124,19 @@ export class Session {
     await this.saveMeta();
     await this.armTimer();
 
+    // A socket that died without closing looks open to the page too: it reconnects when these stop.
+    this.pinger ??= setInterval(() => {
+      if (!this.screens.size) { clearInterval(this.pinger); this.pinger = null; return; }
+      this.toScreens({ type: "ping" });
+    }, SCREEN_PING_MS);
+
     server.addEventListener("message", (m) => {
       if (!this.screens.has(server)) return;
-      if (typeof m.data !== "string") return server === this.holder ? this.onAudio(m.data) : undefined;
+      if (typeof m.data !== "string") {
+        if (server !== this.holder) return;
+        this.segChunks++;
+        return this.onAudio(m.data);
+      }
       let msg;
       try { msg = JSON.parse(m.data); } catch { return; }
       return this.onDeviceMessage(server, msg);
@@ -1104,8 +1152,11 @@ export class Session {
     const who = this.ui(server);
     // The page closes soon after a stop, often before ending is done: not a drop.
     if (this.live() && !this.stopping && server === this.holder) {
-      await this.setHolder(null, "dropped");        // while it still has a name
-      await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
+      if (this.segRec != null && this.screens.get(server)?.dev) await this.beginGrace(server);
+      else {
+        await this.setHolder(null, "dropped");        // while it still has a name
+        await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
+      }
     }
     this.screens.delete(server);
     if (this.live() && !this.stopping && !this.screens.size && !this.meta.call) {
@@ -1113,6 +1164,69 @@ export class Session {
       await this.saveMeta();
       await this.armTimer();
     }
+  }
+
+  // A page that drops while holding the audio keeps recording, and its next
+  // socket can resume the transcriber's stream (rejoin). Claude hears of the
+  // drop only if the grace runs out; speech is cut, as the voice track rarely
+  // survives what killed the socket. In meta too: after a restart, load() reports it.
+  async beginGrace(server) {
+    const g = { ws: server, dev: this.screens.get(server).dev, ui: this.ui(server), at: Date.now() };
+    g.timer = setTimeout(() => this.expireGrace().catch(() => {}), this.graceMs());
+    this.grace = g;
+    this.meta.grace = { at: g.at, ui: g.ui };
+    this.voiceReady = false;
+    await this.saveMeta();
+    await this.armTimer();
+    if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY.dropped);
+  }
+
+  graceMs() { return Number(this.env.RESUME_GRACE_MS ?? RESUME_GRACE_MS); }
+
+  async expireGrace(quiet = false) {
+    const g = this.grace;
+    if (!g) return;
+    clearTimeout(g.timer);
+    this.grace = null;
+    delete this.meta.grace;
+    if (this.holder !== g.ws) return this.saveMeta();
+    await this.setHolder(null, "dropped");
+    // The dead socket has left the room, so its name comes from the grace; takeAudio reports the whole gap.
+    Object.assign(this.meta, { no_audio_since: g.at, no_audio_from: g.ui });
+    await this.saveMeta();
+    await this.armTimer();
+    if (!quiet) {
+      const s = Math.round((Date.now() - g.at) / 1000);
+      await this.addEntry("event", { text: `${g.ui} holding the audio disconnected ${s}s ago; no audio until it reconnects` });
+    }
+  }
+
+  // A holding page's new socket, naming the recorder run it kept going.
+  async rejoin(ws, msg) {
+    const g = this.grace;
+    if (g && g.dev === msg.dev) {
+      if (msg.rec === this.segRec && (this.stt || this.sttOpening)) {
+        clearTimeout(g.timer);
+        this.grace = null;
+        delete this.meta.grace;
+        this.holder = ws;
+        const s = ((Date.now() - g.at) / 1000).toFixed(1);
+        try { ws.send(JSON.stringify({ type: "resume", have: this.segChunks })); } catch {}
+        // A stall Claude was told about gets its answer as news; otherwise the blip stays quiet.
+        const told = this.audioStalledAt != null;
+        this.audioStalledAt = null;
+        await this.addEntry(told ? "event" : "net", {
+          text: `${g.ui} reconnected after ${s}s and resent what it recorded meanwhile: nothing was lost` });
+        return this.sendRoom();
+      }
+      await this.expireGrace(true);
+    }
+    if (this.holder) {
+      try { ws.send(JSON.stringify({ type: "release" })); } catch {}
+      return this.sendRoom();
+    }
+    await this.takeAudio(ws);
+    try { ws.send(JSON.stringify({ type: "resume", have: -1 })); } catch {}   // a fresh segment
   }
 
   // Room controls come from any screen; audio plumbing only from the holder.
@@ -1124,7 +1238,7 @@ export class Session {
       for (const [other, info] of this.screens) {
         if (other === ws || !msg.dev || info.dev !== msg.dev) continue;
         try { other.close(4001, "replaced by this device's newer page"); } catch {}
-        await this.dropScreen(other);
+        await this.dropScreen(other);              // a holder's starts a grace this page can resume
       }
       if (this.talk()) {
         // The device's remembered wait seeds a session nobody has set yet, so a
@@ -1137,6 +1251,7 @@ export class Session {
       // The latest note, without the buzz: it was news when it was sent.
       const last = this.meta.last_note;
       if (last) { try { ws.send(JSON.stringify({ type: "note", text: last.text, age_ms: Date.now() - last.at })); } catch {} }
+      if (msg.holding && msg.rec != null) return this.rejoin(ws, msg);
       // A screen that held the mic before a drop takes it back, unless another has it now.
       if (msg.holding && !this.holder) return this.takeAudio(ws);
       if (msg.holding) { try { ws.send(JSON.stringify({ type: "release" })); } catch {} }
@@ -1153,7 +1268,11 @@ export class Session {
     if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (ws !== this.holder) return;
-    if (msg.type === "seg") return this.startSegment();
+    if (msg.type === "seg") {
+      this.segRec = msg.rec ?? null;
+      this.segChunks = 0;
+      return this.startSegment();
+    }
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
     if (msg.type === "voice_ready") { this.voiceReady = true; return; }
@@ -1227,6 +1346,7 @@ export class Session {
     return {
       screens: [...this.screens.values()].map((v) => v.ui ?? "device"),
       audio: this.holder ? this.ui(this.holder) : null,
+      reconnecting_s: this.grace ? s(this.grace.at) : null,
       no_audio_s: s(this.meta.no_audio_since),
       no_audio_why: this.meta.no_audio_why ?? null,
       absent_s: s(this.meta.absent_since),
@@ -1402,58 +1522,94 @@ export class Session {
   // got: elapsed time since the first frame, less the delay through the SFU
   // and the page's jitter buffer. The timestamps turn that into words.
 
+  // A CLI whose reply was lost asks again under the same call id and gets that
+  // call's outcome, waiting if it is still speaking: never a second utterance.
   async speak(body) {
+    const rid = typeof body?.rid === "string" && body.rid ? body.rid.slice(0, 64) : null;
+    if (rid && this.speakCalls.has(rid)) return heldJson(this.speakCalls.get(rid));
+    if (rid) {
+      const kept = await this.ctx.storage.get(`speak:${rid}`);
+      if (kept?.status === "started") {
+        return json({ status: "interrupted", reason: "the relay restarted while speaking", spoken: "",
+                      unspoken: String(body?.text ?? "").trim() });
+      }
+      if (kept) return json(kept);
+    }
+    const call = this.speakOutcome(body, rid);
+    if (!rid) return call.then(([out, code]) => json(out, code));
+    const outcome = call.then(([out]) => out);
+    this.speakCalls.set(rid, outcome);
+    call.finally(() => this.speakCalls.delete(rid)).catch(() => {});
+    // A refusal answers at once with its own status; speech is held open with keepalives.
+    const quick = await Promise.race([call, sleep(1000).then(() => null)]);
+    return quick ? json(...quick) : heldJson(outcome);
+  }
+
+  async rememberSpeak(rid, out) {
+    await this.ctx.storage.put(`speak:${rid}`, out);
+    if (out.status !== "started") return;
+    const kept = this.meta.speak_ids ??= [];
+    kept.push(rid);
+    if (kept.length > SPEAK_KEPT) await this.ctx.storage.delete(`speak:${kept.shift()}`);
+    await this.saveMeta();
+  }
+
+  // [result, HTTP status]
+  async speakOutcome(body, rid) {
     const text = String(body?.text ?? "").trim();
-    if (!this.talk()) return json({ ok: false, error: "this is a listen session: Claude has no voice in it" }, 409);
-    if (!text) return json({ ok: false, error: "nothing to say" }, 400);
-    if (!this.live()) return json({ ok: false, error: `session is ${this.meta.state}` }, 409);
-    if (this.speaking) return json({ ok: false, error: "already speaking" }, 409);
+    if (!this.talk()) return [{ ok: false, error: "this is a listen session: Claude has no voice in it" }, 409];
+    if (!text) return [{ ok: false, error: "nothing to say" }, 400];
+    if (!this.live()) return [{ ok: false, error: `session is ${this.meta.state}` }, 409];
+    if (this.speaking) return [{ ok: false, error: "already speaking" }, 409];
     if (!this.holder) {
-      return json({ status: "not_delivered", reason: SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio",
-                    spoken: "", unspoken: text });
+      return [{ status: "not_delivered", reason: SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio",
+                spoken: "", unspoken: text }, 200];
     }
     // A call plays whatever reaches it; a page needs its voice track up first.
+    // A page reconnecting after a blip still holds the audio, so this waits for it too.
     const onPhone = this.holder === this.phone;
     if (!onPhone) {
       if (!this.voiceOut) {
-        try { await this.ensureVoice(); } catch (e) { return json({ status: "error", error: e.message }, 502); }
-        if (!this.voiceOut) return json({ status: "error", error: "the voice track is not connected" }, 502);
+        try { await this.ensureVoice(); } catch (e) { return [{ status: "error", error: e.message }, 502]; }
+        if (!this.voiceOut) return [{ status: "error", error: "the voice track is not connected" }, 502];
       }
       const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
       while (!this.voiceReady && this.holder && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
       if (!this.voiceReady) {
-        return json({ status: "not_delivered", reason: "Claude's voice is not connected on the device", spoken: "",
-                      unspoken: text });
+        return [{ status: "not_delivered", reason: this.holder ? "Claude's voice is not connected on the device"
+                  : SPEAK_CUT_BY[this.meta.no_audio_why] ?? "nothing in the room has audio", spoken: "", unspoken: text }, 200];
       }
     }
+    if (this.speaking) return [{ ok: false, error: "already speaking" }, 409];
 
     // Claude says which entry it last read; a turn after that means it would be
     // answering a moment that has passed, so hand the turn back instead.
     if (Number.isInteger(body?.since)) {
       const unseen = (await this.entriesAfter(body.since)).filter((e) => e.kind === "turn");
       if (unseen.length) {
-        return json({ status: "not_spoken", reason: "Louie said something you haven't read", spoken: "",
-                      unspoken: text, turns: unseen.map((e) => ({ n: e.n, text: e.text })) });
+        return [{ status: "not_spoken", reason: "Louie said something you haven't read", spoken: "",
+                  unspoken: text, turns: unseen.map((e) => ({ n: e.n, text: e.text })) }, 200];
       }
     }
     // Never talk over Louie: his turn arrives as an event, and Claude may want to say something else.
     const open = this.tail();
-    if (open) return json({ status: "not_spoken", reason: "Louie is talking", spoken: "", unspoken: text,
-                            heard_so_far: open.text });
+    if (open) return [{ status: "not_spoken", reason: "Louie is talking", spoken: "", unspoken: text,
+                        heard_so_far: open.text }, 200];
 
     let ws;
     try {
       const resp = await fetch(this.env.SONIOX_TTS_URL, { headers: this.sonioxHeaders() });
       ws = resp.webSocket;
-      if (!ws) return json({ status: "error", error: `TTS refused the connection (HTTP ${resp.status})` }, 502);
+      if (!ws) return [{ status: "error", error: `TTS refused the connection (HTTP ${resp.status})` }, 502];
     } catch (e) {
-      return json({ status: "error", error: `TTS unreachable (${e})` }, 502);
+      return [{ status: "error", error: `TTS unreachable (${e})` }, 502];
     }
     ws.accept();
+    if (this.speaking) { try { ws.close(1000); } catch {} return [{ ok: false, error: "already speaking" }, 409]; }
     const sid = crypto.randomUUID().slice(0, 8);
     const rate = onPhone ? this.phoneFormat?.sample_rate ?? 8000 : TTS_CONFIG.sample_rate;
     const sp = this.speaking = {
-      sid, ws, text, chars: [], ends: [], queue: [], sentBytes: 0, firstAt: null,
+      sid, rid, ws, text, chars: [], ends: [], queue: [], sentBytes: 0, firstAt: null,
       genEnded: false, genDone: false, stopping: null, guard: null, pump: null, resolve: null,
       bargeIn: body?.barge_in !== false,
       // A call reports, by marks, how much of the audio has played. Chunks are
@@ -1471,7 +1627,8 @@ export class Session {
     if (this.speechSpans.length > SPANS_MAX) this.speechSpans.shift();
     sp.pump = setInterval(() => this.pumpVoice(sp), PUMP_MS);
     sp.guard = setTimeout(() => this.finishSpeak(sp, "error", "TTS produced no end of audio"), SPEAK_GEN_TIMEOUT_MS);
-    return json(await done);
+    if (rid) await this.rememberSpeak(rid, { status: "started" });
+    return [await done, 200];
   }
 
   onTts(sp, raw) {
@@ -1597,12 +1754,14 @@ export class Session {
     const { spoken, unspoken } = status === "done" ? { spoken: sp.text, unspoken: "" }
       : status === "error" ? { spoken: "", unspoken: sp.text } : this.splitSpoken(sp, played);
     if (spoken) await this.addEntry("said", { text: spoken, interrupted: status !== "done" });
-    sp.resolve({
+    const out = {
       status, spoken, unspoken,
       ...(reason ? { reason } : {}),
       ...(status === "interrupted" ? { heard_so_far: this.tail()?.text ?? "" } : {}),
       audio_s: Math.round((sp.sentBytes / sp.bps) * 10) / 10,
-    });
+    };
+    if (sp.rid) await this.rememberSpeak(sp.rid, out).catch(() => {});
+    sp.resolve(out);
   }
 
   async batch() {

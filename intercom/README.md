@@ -46,6 +46,7 @@ video call to join.
 | `dev/make_sample.ps1` | two Windows voices act out a consultation -> `dev/sample.webm` |
 | `dev/watch_shot.py` | adb screenshot of the watch with its round face drawn on, or of the phone |
 | `dev/page_shot.py` | headless-Chrome screenshots of the page at watch and phone sizes, live and with settings open |
+| `dev/page_resume.py` | drops the real page's socket in headless Chromium (closed, silent, too long) and checks no audio is lost |
 
 ## Setup
 
@@ -105,6 +106,7 @@ token reads any live conversation's transcript.
 ```bash
 python test_intercom.py                 # offline, instant
 python worker/test_session.py         # starts wrangler dev + fakes, ~2 min
+python dev/page_resume.py             # the page itself, headless; CHROME=<path> for a preinstalled one
 ```
 
 End to end against the real providers, no phone:
@@ -417,9 +419,41 @@ hour, well inside the free plan.
 turn from Louie, or one still in progress, means nothing is played and the
 turn comes back instead, so Claude never answers a moment that has passed.
 
+**`speak` survives a lost reply.** It blocks for the whole utterance, often
+30s or more with nothing on the wire, and claude.ai's sandbox proxy
+sometimes closed such a request: the speech played in full, Cloudflare logged
+the client leaving after 31s, and the CLI said `not spoken`. Other calls as
+long went through, so it is no fixed timeout. Now each call carries an id: a
+CLI that loses the connection asks again under it, and the relay hands back
+the same call's outcome, waiting on one still speaking or reading one that
+finished (kept in storage, the last 20), so nothing is said twice. While it
+speaks, the relay sends a space every 5s ahead of the JSON, in case quiet is
+what the proxy objects to. A `done` comes back as just its status and length:
+the text was Claude's own.
+
+**A dropped page resumes.** A socket drop (home Wi-Fi blipped twice in an hour,
+2s each; walking means switching networks) used to cost the audio in the gap,
+a new transcriber stream, and Claude being told. Now the page keeps
+recording through it and keeps its last 15s of chunks; the relay keeps the
+transcriber's stream open for 15s and counts the chunks it got. When the
+page's new socket names the same recorder run, the relay says how many
+arrived, the page resends the rest, and the stream carries on, its clock
+intact, since the recorder never stopped. Claude isn't told (a quiet `net`
+entry), and a `speak` meanwhile waits for the page. Past the grace, or after an
+object restart, it's a drop as before. Measured on the providers: Krisp
+returned a 30s burst in about a second; Soniox takes a backlog but works
+through it at about real time, so after a 6s gap turns ran up to ~5s late for
+~30s. Hence a short grace rather than a long one. To notice a socket that died
+without closing (a network switch), the relay pings every screen every 2s
+and the page opens a new socket after 6s without one, or at once when the
+browser reports a different kind of network; a device's newer socket replaces
+its older one, so the swap needs no drop. Claude's voice is asked for again if
+its connection fails, three times.
+
 **One recorder run = one webm header = one transcriber stream** (a "segment").
 A stream that resumes mid-container is not reliably decodable, so every
-reconnect, on either side, starts a new segment: the relay tells the page to
+reconnect, on either side, starts a new segment unless the page resumes (above):
+the relay tells the page to
 `restart`, and the page answers with a fresh recorder. `startSegment` is
 synchronous up to its first await, because the chunk carrying the header
 arrives right behind the `seg` message. A transcriber that fails within 5s

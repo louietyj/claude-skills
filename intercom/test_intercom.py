@@ -443,6 +443,8 @@ class Watch(Base):
         self.assertIn("has not opened the room", intercom.describe_device({"screens": []}, "armed"))
         quiet = {"screens": ["watch"], "audio": "watch", "hidden_s": None, "last_audio_s": 12, "transcriber": "open"}
         self.assertIn("no audio for 12s", intercom.describe_device(quiet, "live"))
+        blip = dict(quiet, screens=[], audio="phone", reconnecting_s=3)
+        self.assertIn("phone reconnecting for 3s", intercom.describe_device(blip, "live"))
 
     def test_events_and_notes_render_distinctly_from_speech(self):
         _, out, _ = self.watch_json(body=watch_body(last=3, entries=[
@@ -623,6 +625,12 @@ class Talk(Base):
         _, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("Yes, I can see that."))
         self.assertIn("Say `unspoken` again now", json.loads(out)["hint"])
 
+    def test_speech_cut_by_a_dropped_page_says_to_say_the_rest_again(self):
+        relay = Relay({"/speak": (200, {"status": "interrupted", "spoken": "Yes", "unspoken": "I can.",
+                                        "reason": "the screen holding the audio disconnected"})})
+        _, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("Yes I can."))
+        self.assertIn("Say `unspoken` again now", json.loads(out)["hint"])
+
     def test_refused_turn_wait_shows_the_relays_reason(self):
         relay = Relay({"/set": (400, {"ok": False, "error": "the turn wait must be 0-10s"})})
         code, _, err = self.run_cli(["set", "--hold", "30"], relay)
@@ -633,6 +641,43 @@ class Talk(Base):
         relay = Relay({"/speak": (200, {"status": "done", "spoken": "", "unspoken": ""})})
         self.run_cli(["speak"], relay, stdin=io.StringIO("word " * 300))
         self.assertEqual(relay.calls[-1]["body"]["text"], ("word " * 300).strip())
+
+    def test_speech_heard_in_full_comes_back_without_the_text(self):
+        relay = Relay({"/speak": (200, {"status": "done", "spoken": "a long answer", "unspoken": "",
+                                        "audio_s": 12.3})})
+        _, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("a long answer"))
+        self.assertEqual(json.loads(out), {"status": "done", "audio_s": 12.3})
+
+    def test_a_lost_reply_is_asked_for_again_under_the_same_call_id(self):
+        answers = [(0, {"error": "RemoteDisconnected: Remote end closed connection without response"}),
+                   (200, {"status": "done", "spoken": "hi", "unspoken": "", "audio_s": 1.0})]
+        relay = Relay({"/speak": lambda params, body: answers.pop(0)})
+        with mock.patch.object(intercom, "SPEAK_RETRY_S", 0):
+            code, out, _ = self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["status"], "done")
+        self.assertEqual(len(relay.calls), 2)
+        self.assertEqual(relay.calls[0]["body"]["rid"], relay.calls[1]["body"]["rid"])
+
+    def test_each_speak_gets_its_own_call_id(self):
+        relay = Relay({"/speak": (200, {"status": "done", "audio_s": 1.0})})
+        for _ in range(2):
+            self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertNotEqual(relay.calls[0]["body"]["rid"], relay.calls[1]["body"]["rid"])
+
+    def test_a_relay_that_stays_unreachable_still_fails(self):
+        relay = Relay({"/speak": (0, {"error": "URLError: offline"})})
+        with mock.patch.object(intercom, "SPEAK_RETRY_S", 0), \
+             mock.patch.object(intercom, "speak_timeout", lambda text: 0):
+            code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertEqual(code, 1)
+        self.assertIn("offline", err)
+
+    def test_a_refusal_held_open_with_keepalives_is_still_a_refusal(self):
+        relay = Relay({"/speak": (200, {"ok": False, "error": "already speaking"})})
+        code, _, err = self.run_cli(["speak"], relay, stdin=io.StringIO("hi"))
+        self.assertEqual(code, 1)
+        self.assertIn("already speaking", err)
 
     def test_speech_as_an_argument_is_refused(self):
         code, _, err = self.run_cli(["speak", "it costs $50"], Relay({}), stdin=io.StringIO(""))

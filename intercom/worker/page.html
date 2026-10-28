@@ -176,7 +176,13 @@ let sendStream = null, muted = false, raw = null, aec = null;
 let holding = false, roomAudio, roomCall = null, roomSince = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
-let backoff = 1000, retryTimer = null, failures = 0, noteTimer = null;
+let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
+// The recorder runs through a dropped socket. Its recent chunks are kept, so a
+// new socket can resend whatever the relay didn't get (README: "A dropped page").
+const KEEP_CHUNKS = 60;          // 15 s at 250 ms, the relay's grace
+const SOCKET_SILENT_MS = 6000;   // the relay pings every 2 s
+let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
+let netType = navigator.connection?.type ?? null, voiceRetries = 0;
 
 function tick() {
   const d = new Date();
@@ -214,7 +220,9 @@ function renderRoom() {
 function elapsed(since) {
   if (since == null) return "0:00";
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const two = (n) => String(n).padStart(2, "0");
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`;
 }
 // Only trouble and pauses: an empty status leaves the room to the steer note.
 function status(text, cls) {
@@ -365,24 +373,70 @@ function connect() {
   status("Connecting…", "amber");
   const sock = new WebSocket(deviceUrl());
   ws = sock;
+  streaming = false;
   sock.onopen = () => {
-    backoff = 1000; failures = 0;
+    backoff = 250; failures = 0;
+    lastRx = Date.now();
     status("");
     // A screen that held the mic before the drop takes it back, if nothing else has.
-    send({ type: "hello", ui: UI, dev: DEV, holding, ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
-    if (holding) startAudio();
+    // With its recorder still running, the relay answers `resume`.
+    send({ type: "hello", ui: UI, dev: DEV, holding, ...(holding && rec ? { rec: recId } : {}),
+           ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+    if (holding && !rec) startAudio();
   };
-  sock.onmessage = (m) => { try { onMessage(JSON.parse(m.data)); } catch {} };
+  sock.onmessage = (m) => {
+    if (ws === sock) lastRx = Date.now();
+    try { onMessage(JSON.parse(m.data)); } catch {}
+  };
   sock.onclose = (e) => {
     if (ws !== sock || mode !== "live") return;
-    stopRecorder();
     if (e.code === 4001) return finish("Open in another tab");
+    streaming = false;
     failures++;
     if (failures >= 4) return checkStillLive();
     status("Reconnecting…", "amber");
     retryTimer = setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 2, 10000);
+    backoff = Math.min(backoff * 4, 5000);
   };
+}
+
+// A socket can die without closing (a network switch): no ping for a while
+// means a new one. Also checked on recorder chunks, which hidden-page throttling doesn't slow.
+function checkSocket() {
+  if (mode !== "live" || !ws || ws.readyState !== 1 || Date.now() - lastRx < SOCKET_SILENT_MS) return;
+  reconnectNow();
+}
+
+function reconnectNow() {
+  const old = ws;
+  backoff = 250;
+  connect();
+  try { old && old.close(); } catch {}
+}
+setInterval(checkSocket, 1000);
+
+// A new network has probably killed the socket. `change` also fires on
+// bandwidth estimates, so only a different kind of network counts.
+addEventListener("online", () => { if (mode === "live") reconnectNow(); });
+navigator.connection?.addEventListener?.("change", () => {
+  const type = navigator.connection.type ?? null;
+  if (type === netType) return;
+  netType = type;
+  if (mode === "live") reconnectNow();
+});
+
+// The relay has `have` of this run's chunks (-1: it lost the stream): resend the rest, or start afresh.
+function resume(have) {
+  if (!holding) return;
+  const first = recKept.length ? recKept[0].i : recN;
+  if (!rec || have < first || have > recN) return startAudio();
+  for (const c of recKept) if (c.i >= have) ws.send(c.data);
+  streaming = true;
+  reportVis();
+  if (!talk) return;
+  // The voice track may have outlived the socket.
+  if (voice && voice.connectionState === "connected" && voiceEl && !voiceEl.paused) send({ type: "voice_ready" });
+  else startVoice();
 }
 
 // A refused socket and a dropped network look alike, so after a few failures
@@ -402,11 +456,20 @@ async function checkStillLive() {
 // Blobs are sent synchronously, so chunk order cannot race.
 function segment() {
   stopRecorder();
-  send({ type: "seg" });
+  recId = Math.random().toString(36).slice(2, 10);
+  recN = 0;
+  recKept = [];
+  send({ type: "seg", rec: recId });
+  streaming = true;
   rec = new MediaRecorder(sendStream, { mimeType: MIME, audioBitsPerSecond: 64000 });
   rec.ondataavailable = (e) => {
-    if (e.data.size && ws && ws.readyState === 1) ws.send(e.data);
+    if (e.data.size) {
+      recKept.push({ i: recN++, data: e.data });
+      if (recKept.length > KEEP_CHUNKS) recKept.shift();
+      if (streaming && ws && ws.readyState === 1) ws.send(e.data);
+    }
     probeTick();
+    checkSocket();
   };
   rec.onerror = () => status("Recorder error", "red");
   rec.start(250);
@@ -417,10 +480,13 @@ function stopRecorder() {
   rec.ondataavailable = null;   // its final chunk must not land in the next segment
   try { rec.stop(); } catch {}
   rec = null;
+  recKept = [];
 }
 
 function onMessage(m) {
+  if (m.type === "ping") return;
   if (m.type === "restart") segment();
+  else if (m.type === "resume") resume(m.have);
   else if (m.type === "note") showNote(m.text, m.age_ms);
   else if (m.type === "ended") finish("Session ended");
   else if (m.type === "tts_start") { claudeTalking = true; if (voiceEl) voiceEl.muted = false; syncReference(); }
@@ -752,8 +818,13 @@ function startVoice() {
     aecReference();
     voiceEl.play().then(() => { playing = true; ready(); }, (err) => voiceFailed(`won't play (${err.name})`));
   };
+  // A network switch fails the voice's connection too: ask for the track again, a few times.
   pc.onconnectionstatechange = () => {
-    if (voice === pc && pc.connectionState === "failed") voiceFailed("connection failed");
+    if (voice === pc && pc.connectionState === "connected") voiceRetries = 0;
+    if (voice === pc && pc.connectionState === "failed") {
+      if (holding && voiceRetries++ < 3) startVoice();
+      else voiceFailed("connection failed");
+    }
     ready();
   };
   send({ type: "voice_request" });
@@ -949,7 +1020,7 @@ document.addEventListener("visibilitychange", () => {
   reportVis();
   if (document.visibilityState === "visible") {
     wake();
-    if (!ws || ws.readyState > 1) { backoff = 1000; connect(); }
+    if (!ws || ws.readyState > 1) { backoff = 250; connect(); }
   }
 });
 

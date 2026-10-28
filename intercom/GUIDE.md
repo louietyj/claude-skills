@@ -350,12 +350,12 @@ EOF
 - **Always pass `--since`** with the `n` of the last entry you read (with
   `watch`, the saved cursor does this for you). If he has said anything newer,
   nothing is played: you would be answering a moment that has passed.
-- **Speak in short paragraphs, each one making sense on its own**: you are
-  talking, not reading out a document. A longer answer can be several `speak`
-  calls chained in one command with the same `--since`: if he cuts in, the
-  rest are refused.
+- **One answer, one `speak`.** Write it in short paragraphs, each one making
+  sense on its own: you are talking, not reading out a document, and the
+  voice rules below still cap how much you say. If he cuts in, `interrupted`
+  says how far he got.
 - It blocks until he has heard it, then returns a `status`:
-  - `done`: he heard all of it.
+  - `done`: he heard all of it. Nothing else comes back but `audio_s`.
   - `not_spoken`: nothing was played, because he said something you hadn't
     read (`turns` has it) or is still mid-sentence (`heard_so_far`). Read his
     turn, then decide what to say now; your line may no longer fit.
@@ -369,6 +369,9 @@ EOF
     device.
   - `not_delivered`: nothing in the room holds the audio. If `reason` says he
     left audio, wait for him to turn it back on; otherwise tell him in chat.
+- A dropped connection doesn't lose the answer: `speak` asks the relay again
+  and reports what was really played. If his page is reconnecting, it waits
+  for it (up to 10s).
 - **Don't leave him hanging.** If what he asked will take more than a few
   seconds (lookups, edits, a build), acknowledge it in one line first ("Sure,
   checking the logs now"), then do the work. On a call, silence sounds like
@@ -434,7 +437,8 @@ exact text in chat, saying out loud that it's there.
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no fresh mic reading: a watch (crown press, its mic stops after ~5s), a frozen phone page (an event says "stopped sending audio"), or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
 | `Louie LEFT AUDIO Ns ago` | he tapped pause (leave audio): mic and your voice are off on purpose, his screen is still in the room | nothing; keep working, and save what you'd say for when he turns it back on |
 | `in the room ... but hasn't turned audio on` | he joined and hasn't tapped Web or Phone yet | if it lasts, remind him once |
-| `holding the audio DISCONNECTED Ns ago` | the screen with the mic lost its connection (network, or the page closed) | tell him in chat; it takes the audio back by itself when it reconnects |
+| `reconnecting for Ns` | the page holding the audio lost its connection a moment ago; it keeps recording and resends what was missed | nothing: a blip within 15s loses nothing, and you aren't told of it |
+| `holding the audio DISCONNECTED Ns ago` | the screen with the mic stayed off for over 15s (network, or the page closed): what was said meanwhile is lost | tell him in chat; it takes the audio back by itself when it reconnects |
 | `NO SCREEN OPEN` | no page is in the room: notes don't reach him | tell him in chat if it matters |
 | `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
 | `has not opened the room` | session armed, nobody joined | remind him of the id |

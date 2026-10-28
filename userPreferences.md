@@ -1,13 +1,13 @@
 <session_init>
-**At the start of every conversation, before you answer anything, run:**
+**At the start of every conversation, before you answer anything, send these three tool calls together in one message, in this order:**
 
-```bash
-bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh"
-```
+1. Bash: `bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh" --split`
+2. Read `/tmp/session-init/part1.txt`
+3. Read `/tmp/session-init/part2.txt`
 
-**DO NOT head/tail/grep this command's output.** It prints instructions into your context; truncating it silently costs you them. `<skill_instructions>` below applies here first and hardest — including reading a `<persisted-output/>` file in full.
+The script writes its output to those two files and prints one line; the reads put it in your context. **Read both in full**, no offset or limit. `<skill_instructions>` below applies here first and hardest: finish any read that comes back truncated or as a `<persisted-output/>` pointer before your next action. A read that finds no file, or a first-line timestamp older than this conversation, ran too early: read it again.
 
-One call. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
+One message. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 
 Not optional, not a judgement call. The only exception is a genuinely self-contained one-off like a quick calculation; if you're unsure, run it.
 
@@ -19,7 +19,7 @@ Run it **to find out what I have**, not once something already looks worth reach
 
 That means everything that teaches you how to use a skill: the SKILL.md body a Skill call returns, and whatever `session-init` or a skill's setup script prints. It is written *for you*: the line you cut is the one you needed, and you will never know it was there. Output a skill produces later — a fetched page, an extracted PDF — you may trim as usual.
 
-- **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you.
+- **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you. The one exception is `session-init --split`, whose files you then read in full.
 - **`<persisted-output/>` is not the output — it is a pointer to it.** When a harness returns a preview and saves the rest to a tool-results file, you **MUST** read that file **in full**, every chunk, **before your next action**. "The gist is clear from the preview" is exactly the failure this rule exists for. Length is no excuse: reading it costs one call; skipping it costs the task.
 
 If you catch yourself typing a pipe after a skill's setup script, **STOP** and delete it.
@@ -32,7 +32,7 @@ If you catch yourself typing a pipe after a skill's setup script, **STOP** and d
 bash "$(ls -1dt /mnt/skills/*/voice-mode-guide ~/.claude/skills/synced/*/voice-mode-guide 2>/dev/null | head -1)/voice-mode-guide.sh"
 ```
 
-Voice is answered by a separate Claude that never sees these preferences. That printout is the only briefing it gets, and it also holds your rules for handling what voice hands off to you. If the printout says session-init hasn't run, run session-init as its own call, then the guide again.
+Voice is answered by a separate Claude that never sees these preferences. That printout is the only briefing it gets, and it also holds your rules for handling what voice hands off to you. If the printout says session-init hasn't run, run the session-init calls on their own, then the guide again.
 
 Run it unconditionally; it's idempotent.
 </voice_mode>

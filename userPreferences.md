@@ -1,11 +1,10 @@
 <session_init>
-**At the start of every conversation, before you answer anything, send these three tool calls together in one message, in this order:**
+**At the start of every conversation, before you answer anything, send these two tool calls together in one message, in this order:**
 
-1. Bash: `bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh" --split`
-2. Read `/tmp/session-init/part1.txt`
-3. Read `/tmp/session-init/part2.txt`
+1. Bash: `bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh" > /tmp/session-init.txt 2>&1 || true`
+2. Read `/tmp/session-init.txt` with `allow_large: true`, no offset or limit
 
-The script writes its output to those two files and prints one line; the reads put it in your context. **Read both in full**, no offset or limit. `<skill_instructions>` below applies here first and hardest: finish any read that comes back truncated or as a `<persisted-output/>` pointer before your next action. A read that finds no file, or a first-line timestamp older than this conversation, ran too early: read it again.
+The `|| true` stops a partial boot's exit code from cancelling the read; the file's own summary reports what failed. `<skill_instructions>` below applies here first and hardest: if the read still comes back truncated, read the rest before your next action. A read that finds no file, or a header timestamp older than this conversation, ran too early: read it again.
 
 One message. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 
@@ -19,7 +18,7 @@ Run it **to find out what I have**, not once something already looks worth reach
 
 That means everything that teaches you how to use a skill: the SKILL.md body a Skill call returns, and whatever `session-init` or a skill's setup script prints. It is written *for you*: the line you cut is the one you needed, and you will never know it was there. Output a skill produces later — a fetched page, an extracted PDF — you may trim as usual.
 
-- **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you. The one exception is `session-init --split`, whose files you then read in full.
+- **No `| head`, `| tail`, `| grep`, `| sed -n`, `| cut`, `> /dev/null`, `2>/dev/null`, `&>/dev/null`.** No capturing it into a variable or a Python `subprocess` and printing a slice. Run the command as given and let all of it reach you. The one exception is the `session-init` redirect above, whose file you then read in full.
 - **`<persisted-output/>` is not the output — it is a pointer to it.** When a harness returns a preview and saves the rest to a tool-results file, you **MUST** read that file **in full**, every chunk, **before your next action**. "The gist is clear from the preview" is exactly the failure this rule exists for. Length is no excuse: reading it costs one call; skipping it costs the task.
 
 If you catch yourself typing a pipe after a skill's setup script, **STOP** and delete it.

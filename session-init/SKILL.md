@@ -14,9 +14,9 @@ bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-ini
 **DO NOT head/tail/grep this command's output.** It prints instructions into
 your context; truncating it silently costs you them.
 
-With `--split` it instead writes the transcript to `/tmp/session-init/part1.txt`
-and `part2.txt`, about equal halves, and prints one line. Send the script and
-reads of both files in one message, in that order, and read both in full.
+The user's preferences redirect it to `/tmp/session-init.txt` and read that
+file with `allow_large` in the same message; that one redirect is fine, because
+the whole file is then read.
 
 Run it once, before answering anything. It prints everything you would
 otherwise have gone to `durable-filesystem` and `local-mcps` for -- their setup

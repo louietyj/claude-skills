@@ -653,6 +653,17 @@ D=$D0${A:+/$A}
 L=$L${A:+-$A}
 N=$N${A:+-$A}
 
+# The scales of the shot that was newest when this Bash call began: the image
+# the agent looked at, where later steps of a chain take newer shots. Every
+# command in one call shares the calling shell, so key on it (and its start
+# time, against PID reuse). An empty file means no shot existed yet. The steps
+# of an execute-batch inherit the batch's file instead.
+CHAIN=${PINCHTAB_CHAIN_FILE:-/tmp/$NAME-chain${A:+-$A}-$PPID-$(awk '{ print $22 }' /proc/$PPID/stat 2>/dev/null)}
+if [ ! -e "$CHAIN" ]; then
+  cp "$D/latest.scale" "$CHAIN" 2>/dev/null || : > "$CHAIN"
+  find /tmp -maxdepth 1 -name "$NAME-chain*" -mmin +120 -delete 2>/dev/null
+fi
+
 # The shim's own command: the numbered shots since it last ran, for looking back
 # past `latest` at an earlier step of a chain.
 if [ "${1:-}" = shots ]; then
@@ -667,6 +678,67 @@ if [ "${1:-}" = shots ]; then
   : > "$L"
   exit 0
 fi
+
+# `execute-batch` (alias `batch`): commands on stdin, one per line, run in order
+# until one fails. Each step prints one status line instead of its usual output,
+# and `--unscale last-small|last-full` in any step means the shot that was newest
+# before the batch: the one the agent read its points off.
+case "${1:-}" in execute-batch|batch)
+  shift
+  want_snap= want_diff= want_text=
+  for a in "$@"; do
+    case "$a" in
+      --snap) want_snap=1 ;;
+      --snap-diff) want_diff=1 ;;
+      --text) want_text=1 ;;
+      *) echo "$NAME execute-batch: unknown flag $a (it takes --snap, --snap-diff and --text)" >&2; exit 2 ;;
+    esac
+  done
+  if [ -t 0 ]; then
+    echo "$NAME execute-batch: give the steps on stdin, one per line, e.g. in a <<'EOF' heredoc" >&2
+    exit 2
+  fi
+  PINCHTAB_CHAIN_FILE=$CHAIN; export PINCHTAB_CHAIN_FILE
+  first=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
+  i=0 rc=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "$line" in ''|'#'*) continue ;; esac
+    i=$((i + 1))
+    out=$(
+      eval "set -- $line" || exit 2
+      [ "${1:-}" = "$NAME" ] && shift
+      case "${1:-}" in execute-batch|batch) echo "a batch can't contain a batch"; exit 2 ;; esac
+      "$0" "$@" </dev/null 2>&1
+    ); rc=$?
+    # A bare OK, and the tab id nav prints, say nothing the status line doesn't.
+    shown=$(printf '%s\n' "$out" | grep -vxE 'OK|[0-9A-F]{32}|')
+    if [ $rc -eq 0 ]; then
+      printf '%d OK %.70s\n' "$i" "$line"
+      [ -n "$shown" ] && printf '%s\n' "$shown" | sed 's/^/    /'
+    else
+      printf '%d FAILED %.70s\n' "$i" "$line"
+      printf '%s\n' "$out" | sed 's/^/    /'
+      echo "stopped: the steps after $i did not run"
+      break
+    fi
+  done
+  if [ $i -eq 0 ]; then
+    echo "$NAME execute-batch: no steps on stdin; give one command per line, e.g. in a <<'EOF' heredoc" >&2
+    exit 2
+  fi
+  last=$(cat "$N" 2>/dev/null || echo 0)
+  if [ "$last" -gt "$first" ]; then
+    printf 'shots %04d-%04d in %s/; the last is latest-small.jpg\n' "$first" "$last" "$D"
+  elif [ "$last" -eq "$first" ]; then
+    printf 'shot %04d in %s/, also latest-small.jpg\n' "$first" "$D"
+  fi
+  # Where the batch ended, stopped or not.
+  [ -n "$want_text" ] && "$0" text </dev/null
+  [ -n "$want_diff" ] && "$0" snap --diff </dev/null
+  [ -n "$want_snap" ] && "$0" snap </dev/null
+  exit $rc ;;
+esac
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
 
@@ -882,9 +954,10 @@ if [ "$TIER" = local ]; then
   esac
 fi
 
-# `--x X --y Y --unscale last-small|last-full|S`: X,Y read off the last small or
-# full shot (or one of scale S), divided back to CSS pixels here, because
-# dividing by 0.4249 in an agent's head goes wrong.
+# `--x X --y Y --unscale last-small|last-full|S`: X,Y read off the small or full
+# image of the newest shot before this Bash call (or one of scale S), divided
+# back to CSS pixels here, because dividing by 0.4249 in an agent's head goes
+# wrong.
 case " $* " in *" --unscale "*|*" --unscale="*)
   for a in "$@"; do
     shift
@@ -898,8 +971,16 @@ case " $* " in *" --unscale "*|*" --unscale="*)
   case "$unscale" in
     last-small|last-full)
       size=${unscale#last-}
-      unscale=$(awk -v s="$size" '$1 == s { print $2 }' "$D/latest.scale" 2>/dev/null)
-      [ -n "$unscale" ] || { echo "$NAME: --unscale last-$size: no screenshot taken yet" >&2; exit 2; } ;;
+      unscale=$(awk -v s="$size" '$1 == s { print $2 }' "$CHAIN" 2>/dev/null)
+      [ -n "$unscale" ] || { echo "$NAME: --unscale last-$size: no screenshot existed before this call; view one first" >&2; exit 2; }
+      # A changed scale is a resized window: the point read off the old image
+      # no longer lands where it did, so refuse rather than click elsewhere.
+      now=$(awk -v s="$size" '$1 == s { print $2 }' "$D/latest.scale" 2>/dev/null)
+      if [ -n "$now" ] && [ "$now" != "$unscale" ]; then
+        img=latest.jpg; [ "$size" = small ] && img=latest-small.jpg
+        echo "$NAME: the window changed size since the screenshot you read (scale $unscale, now $now); view $img and read the point again" >&2
+        exit 2
+      fi ;;
   esac
   case "$unscale" in ''|*[!0-9.]*|*.*.*|.) echo "$NAME: --unscale takes last-small, last-full, or a scale such as 0.4249" >&2; exit 2 ;; esac
   [ -n "$x$y" ] || { echo "$NAME: --unscale needs --x and/or --y" >&2; exit 2; }

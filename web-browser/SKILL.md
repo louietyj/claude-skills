@@ -66,8 +66,8 @@ usually cost several times that, and they still hide things:
   listed".
 
 So view the small shot LIBERALLY at the end of every operation: after a
-`nav`, and after a click or a chain of steps that should have changed
-something. A chain is ONE operation -- look once at its end, not between its
+`nav`, and after a click or a batch of steps that should have changed
+something. A batch is ONE operation -- look once at its end, not between its
 steps. What to avoid is ending an operation on the accessibility tree alone:
 unless you are certain, the screenshot is what shows a popup, the wrong page or
 a click that did nothing. Before concluding something isn't on a page, look at
@@ -90,32 +90,32 @@ failed, the file is missing rather than stale.
 
 The small one is still readable. Open the full-size one for small print, or
 when a click has to be exact. Click what you see with `click --x --y` and
-`--unscale last-small` or `--unscale last-full`, naming which of the last
-shot's two images you read the point off. The shim divides by that image's
-scale; never do that arithmetic yourself:
+`--unscale last-small` or `--unscale last-full`, naming which of the two
+images you read the point off. The shim divides by that image's scale; never
+do that arithmetic yourself:
 
 ```bash
 pinchtab click --x 271 --y 130 --unscale last-small    # a point on latest-small.jpg
 ```
 
 `--unscale` works on every command that takes `--x`/`--y` (`click`, `hover`,
-`mouse down|move|up`, ...). It takes the scale of the newest shot. Inside a
-chain that is a step later than the one you looked at, which is the same scale
-unless the window was resized in between; in Louie's Chrome it follows his
-window size, so look again after he resizes.
+`mouse down|move|up`, ...). `last-*` means the newest shot before this Bash
+call -- the one you looked at -- even inside a batch whose earlier steps took
+newer ones. If the window has changed size since (in Louie's Chrome it follows
+his window), the click refuses and asks you to look again.
 
 ## Earlier shots
 
 `latest` is overwritten by the next command, but every shot is also kept,
 numbered. `pinchtab shots` lists those since it last ran (the last 10, newest
-last), so after a chain you can see what an earlier step saw. Filter, grep or
+last), so after a batch you can see what an earlier step saw. Filter, grep or
 discard command output freely; the shots don't depend on it.
 
 When text or a snap comes back empty, half-loaded, or doesn't add up -- a
 canvas, a map, refs pointing at the wrong thing -- VIEW THE IMAGE FIRST. One
 look answers what ten calls of debugging in text won't.
 
-## Chain what you can see
+## Batch what you can see
 
 Each tool call replays your whole context, so the number of calls is most of
 what a task costs. Your last screenshot is a list of targets, not only a
@@ -123,28 +123,49 @@ check: everything visible in it can be clicked by coordinates, whether or not
 your last snap lists it. A snap taken while a dialog is open lists only the
 dialog, but the screenshot still shows the page behind it.
 
-So chain every step whose target you can see right now in ONE Bash call
-joined with `&&` -- refs from your last snap, `text:` for a control you can
-see, coordinates for the rest -- and look again after anything that opens or
-moves things (a dropdown, a calendar, a dialog, a new page):
+So run every step whose target you can see right now as ONE `execute-batch`
+-- refs from your last snap, `text:` for a control you can see, coordinates
+for the rest -- and look again after anything that opens or moves things (a
+dropdown, a calendar, a dialog, a new page). One command per line, as you
+would type it after `pinchtab`:
 
 ```bash
 # The screenshot shows a cookie dialog over a search form; the snap lists only the dialog.
-pinchtab click e4 && pinchtab click --x 134 --y 74 --unscale last-small \
-  && pinchtab click --x 390 --y 107 --unscale last-small && pinchtab keyboard type "Glasg"
-# The suggestions are now open: view the screenshot, then chain the next visible steps.
+pinchtab execute-batch <<'EOF'
+click e4
+click --x 134 --y 74 --unscale last-small
+click --x 390 --y 107 --unscale last-small
+keyboard type "Glasg"
+EOF
 ```
 
-Don't chain into what you haven't seen: a dropdown's options or a calendar's
+```
+1 OK click e4
+2 OK click --x 134 --y 74 --unscale last-small
+3 OK click --x 390 --y 107 --unscale last-small
+4 OK keyboard type "Glasg"
+shots 0031-0034 in /home/claude/pinchtab-shots/; the last is latest-small.jpg
+```
+
+The suggestions are now open: view `latest-small.jpg` (in the same message, as
+always), then batch the next visible steps.
+
+Don't batch into what you haven't seen: a dropdown's options or a calendar's
 layout are unknown until you look. Inside one look, though, don't stop early:
 
-- `&&` stops at the first failure, so a chain never clicks on past a step
-  that did not happen. `pinchtab shots` lists every step's screenshot if you
-  need to see where it went wrong.
+- The batch stops at the first step that fails, prints that step's error, and
+  runs nothing after it; the failing step's screenshot is `latest`. The
+  numbered shots name what each earlier step saw.
+- `--unscale last-small|last-full` in a batch means the shot you looked at
+  before it, even after steps take newer ones. If the window has changed size
+  since, the step refuses rather than clicking the wrong place.
+- `--snap`, `--snap-diff` or `--text` on `execute-batch` itself describe where
+  it ended. A step that reads (`text`, `snap`, `url`) shows its output under
+  its status line.
 - `text:` REFUSES rather than guesses: two equally good matches fail
   `selector is ambiguous` (naming them); `nth:N:text:...` then picks one.
 - An action waits up to 3 s for its target to appear, so a control that is
-  still rendering in doesn't fail the chain.
+  still rendering in doesn't fail the batch.
 
 Also:
 
@@ -157,7 +178,7 @@ Also:
   (Google Flights' "Where to?"): type into the copy, by `text:` or a snap.
 - Coordinates hold only while the layout stays put, which is why the look
   comes after anything that opens or moves things.
-- End a chain before anything whose result you need to read (search results,
+- End a batch before anything whose result you need to read (search results,
   prices), and view its last screenshot.
 
 ## Subagents for involved navigation

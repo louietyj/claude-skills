@@ -141,6 +141,32 @@ for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; 
 newest last), however the rest of the command filtered its output. When in
 doubt, end with it: it costs a few lines.
 
+## Chain the steps you already know
+
+Each tool call is a round trip, and on a big page a re-snap per click is most
+of the cost. When the next few steps are already decided -- fill a form, pick
+a trip type and a date, open a filter and tick a box -- run them in ONE Bash
+call joined with `&&`, then look once at the end:
+
+```bash
+pinchtab click e18 && pinchtab click "text:One way" && pinchtab type e23 "San Francisco" --snap-diff
+pinchtab click "text:Stops" && pinchtab click "text:Nonstop only" && pinchtab press Escape; pinchtab shots
+```
+
+- Refs from your last snap stay valid while you work on the same page:
+  opening a dropdown or dialog, typing, or a click that only changes the URL
+  (`OK navigated` on a single-page app) keeps them. They die when a new page
+  loads, and using a dead one fails loudly (`ref eN not found`); snap then.
+- For what isn't on screen yet -- the options of a menu you are about to
+  open -- name it with `text:`. It means the button, link, tab or option
+  called that, and it refuses rather than guesses when two match
+  (`selector is ambiguous`, naming them); `nth:1:text:...` then picks one.
+- Coordinates (`--x --y --unscale`) are fine to chain only while the layout
+  stays put; after anything that opens or moves things, prefer refs or `text:`.
+- `&&` stops at the first failure, so a chain never clicks on past a step
+  that did not happen. End it before anything whose result you need to read
+  (search results, prices), and view the last screenshot.
+
 ## Subagents for involved navigation
 
 If you have a subagent tool, hand the navigation to a subagent. This is the

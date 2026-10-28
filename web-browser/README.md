@@ -31,8 +31,8 @@ runs a `pinchtab bridge --cdp-attach` to it on port 9870, with a config of its o
 from setup.sh: its own state dir, `*.cdp.browser-use.com` allowed, and Browser
 Use's in-cluster proxy (`10.0.x.x`, which every page comes back from) trusted by
 the SSRF guard. `stop` kills the bridge and stops the browser, which closing the
-CDP connection does not. It needs fork build capsolver.38 or later: earlier
-builds pinned a `wss://` host to its IP (failing TLS), ignored `HTTPS_PROXY` on
+CDP connection does not. It needs fork build edge-1 or later (the fork now
+publishes an edge release on every push to its `main`): earlier builds pinned a `wss://` host to its IP (failing TLS), ignored `HTTPS_PROXY` on
 the websocket, and never blocked images, which at $5/GB is the cost. Installed
 only when the zip carries `browser-use.key` (or `BROWSER_USE_API_KEY` is set).
 Measured 2026-10-27: Yelp loads where the sandbox gets the ban; ~6 page loads with

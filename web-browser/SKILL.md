@@ -65,9 +65,13 @@ usually cost several times that, and they still hide things:
   posted as a picture is invisible to both, and gets reported as "not
   listed".
 
-So view the small shot LIBERALLY while navigating: after EVERY `nav`,
-and after any click that should have changed something. Before concluding
-something isn't on a page, look at it.
+So view the small shot LIBERALLY at the end of every operation: after a
+`nav`, and after a click or a chain of steps that should have changed
+something. A chain is ONE operation -- look once at its end, not between its
+steps. What to avoid is ending an operation on the accessibility tree alone:
+unless you are certain, the screenshot is what shows a popup, the wrong page or
+a click that did nothing. Before concluding something isn't on a page, look at
+it.
 
 Every command that can change the page (`nav`, `click`, `fill`, `press`,
 `scroll`, ...) has ALREADY saved a screenshot at two sizes, and copied both
@@ -85,87 +89,76 @@ image is this command's shot and costs no extra round trip. If the shot
 failed, the file is missing rather than stale.
 
 The small one is still readable. Open the full-size one for small print, or
-when a click has to be exact. Click what you see with `click --x --y` plus
-`--unscale`, copying the scale of the image you read the point off from its
-`screenshot:` line. The shim divides; never do that arithmetic yourself:
+when a click has to be exact. Click what you see with `click --x --y` and
+`--unscale last-small` or `--unscale last-full`, naming which of the last
+shot's two images you read the point off. The shim divides by that image's
+scale; never do that arithmetic yourself:
 
 ```bash
-# screenshot: .../0003-nav.jpg (1100x1045, scale 0.8607), small: 0003-nav-small.jpg (543x516, scale 0.4249)
-pinchtab-windows click --x 271 --y 130 --unscale 0.4249    # a point on the small image
+pinchtab click --x 271 --y 130 --unscale last-small    # a point on latest-small.jpg
 ```
 
 `--unscale` works on every command that takes `--x`/`--y` (`click`, `hover`,
-`mouse down|move|up`, ...). Here the full-size scale is 1 and the small one
-0.5; in Louie's Chrome both vary with his window size.
+`mouse down|move|up`, ...). It takes the scale of the newest shot. Inside a
+chain that is a step later than the one you looked at, which is the same scale
+unless the window was resized in between; in Louie's Chrome it follows his
+window size, so look again after he resizes.
 
-## NEVER THROW AWAY THE `screenshot:` LINE
+## Earlier shots
 
-Each of those commands also prints one line naming its numbered shot:
+`latest` is overwritten by the next command, but every shot is also kept,
+numbered. `pinchtab shots` lists those since it last ran (the last 10, newest
+last), so after a chain you can see what an earlier step saw. Filter, grep or
+discard command output freely; the shots don't depend on it.
 
-```
-screenshot: /home/claude/pinchtab-shots/0017-reload.jpg (1440x779, scale 1), small: 0017-reload-small.jpg (720x389, scale 0.5)
-```
-
-The small file sits in the same directory. `latest` is overwritten by the
-next command, so this line is how you find a shot from earlier in a batch.
 When text or a snap comes back empty, half-loaded, or doesn't add up -- a
 canvas, a map, refs pointing at the wrong thing -- VIEW THE IMAGE FIRST. One
 look answers what ten calls of debugging in text won't.
 
-**If you discard the line, you won't know the image exists, and you will end up
-debugging the page blind.** So batch, loop, grep and save tokens as much as you
-like -- just carry that line through:
+## Chain what you can see
+
+Each tool call replays your whole context, so the number of calls is most of
+what a task costs. Your last screenshot is a list of targets, not only a
+check: everything visible in it can be clicked by coordinates, whether or not
+your last snap lists it. A snap taken while a dialog is open lists only the
+dialog, but the screenshot still shows the page behind it.
+
+So chain every step whose target you can see right now in ONE Bash call
+joined with `&&` -- refs from your last snap, `text:` for a control you can
+see, coordinates for the rest -- and look again after anything that opens or
+moves things (a dropdown, a calendar, a dialog, a new page):
 
 ```bash
-# NOT: pinchtab nav <url> >/dev/null
-pinchtab nav <url> | grep '^screenshot:'          # errors still reach you on stderr
-
-# NOT: pinchtab fill e83 0.1 >/dev/null; pinchtab click e84 >/dev/null
-pinchtab fill e83 0.1 | grep '^screenshot:'; pinchtab click e84 | grep '^screenshot:'
-
-# Already grepping? Add it to the pattern (-E, or \| in plain grep).
-pinchtab click e84 2>&1 | grep -iE 'error|hint|^screenshot:'
-
-# head keeps it: the line comes first. tail does NOT -- end with shots instead.
-pinchtab nav <url> | head -20
-pinchtab nav <url> | tail -5; pinchtab shots
-
-# --json puts the line on stderr, so jq leaves it alone. Don't add 2>/dev/null.
-pinchtab nav <url> --json | jq -r .autoSolve.hint
-
-# Loops, scripts, $(...), > file, anything else: end the WHOLE command with shots.
-for u in $URLS; do pinchtab nav "$u" >/dev/null; pinchtab text | grep -i price; done; pinchtab shots
+# The screenshot shows a cookie dialog over a search form; the snap lists only the dialog.
+pinchtab click e4 && pinchtab click --x 134 --y 74 --unscale last-small \
+  && pinchtab click --x 390 --y 107 --unscale last-small && pinchtab keyboard type "Glasg"
+# The suggestions are now open: view the screenshot, then chain the next visible steps.
 ```
 
-`pinchtab shots` lists every screenshot since the last `shots` (the last 10,
-newest last), however the rest of the command filtered its output. When in
-doubt, end with it: it costs a few lines.
+Don't chain into what you haven't seen: a dropdown's options or a calendar's
+layout are unknown until you look. Inside one look, though, don't stop early:
 
-## Chain the steps you already know
+- `&&` stops at the first failure, so a chain never clicks on past a step
+  that did not happen. `pinchtab shots` lists every step's screenshot if you
+  need to see where it went wrong.
+- `text:` REFUSES rather than guesses: two equally good matches fail
+  `selector is ambiguous` (naming them); `nth:N:text:...` then picks one.
+- An action waits up to 3 s for its target to appear, so a control that is
+  still rendering in doesn't fail the chain.
 
-Each tool call is a round trip, and on a big page a re-snap per click is most
-of the cost. When the next few steps are already decided -- fill a form, pick
-a trip type and a date, open a filter and tick a box -- run them in ONE Bash
-call joined with `&&`, then look once at the end:
-
-```bash
-pinchtab click e18 && pinchtab click "text:One way" && pinchtab type e23 "San Francisco" --snap-diff
-pinchtab click "text:Stops" && pinchtab click "text:Nonstop only" && pinchtab press Escape; pinchtab shots
-```
+Also:
 
 - Refs from your last snap stay valid while you work on the same page:
   opening a dropdown or dialog, typing, or a click that only changes the URL
   (`OK navigated` on a single-page app) keeps them. They die when a new page
   loads, and using a dead one fails loudly (`ref eN not found`); snap then.
-- For what isn't on screen yet -- the options of a menu you are about to
-  open -- name it with `text:`. It means the button, link, tab or option
-  called that, and it refuses rather than guesses when two match
-  (`selector is ambiguous`, naming them); `nth:1:text:...` then picks one.
-- Coordinates (`--x --y --unscale`) are fine to chain only while the layout
-  stays put; after anything that opens or moves things, prefer refs or `text:`.
-- `&&` stops at the first failure, so a chain never clicks on past a step
-  that did not happen. End it before anything whose result you need to read
-  (search results, prices), and view the last screenshot.
+- While a dialog is open, a ref outside it is refused (`outside the topmost
+  dialog`). Some sites open a dialog holding a copy of the field you clicked
+  (Google Flights' "Where to?"): type into the copy, by `text:` or a snap.
+- Coordinates hold only while the layout stays put, which is why the look
+  comes after anything that opens or moves things.
+- End a chain before anything whose result you need to read (search results,
+  prices), and view its last screenshot.
 
 ## Subagents for involved navigation
 

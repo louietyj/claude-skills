@@ -47,10 +47,11 @@ lmcps rotate <server> [LABEL]          # switch to the server's next API key, or
 lmcps refresh                          # re-fetch config after editing it
 ```
 
-The index under each server in `servers` is tool **names and one-line blurbs
-only**, rebuilt every few hours off-box. It tells you what exists; it does not
-tell you how to call anything, and it can lag a config change. `tools` is the
-live source and the only one that carries parameters.
+The index under each server in `servers` is tool **names only**, as Claude
+Code's own deferred-tool list is, rebuilt every few hours off-box. It tells you
+what exists; it does not tell you how to call anything, and it can lag a config
+change. `tools` is the live source and the only one that carries descriptions
+and parameters.
 
 Arguments are one JSON object, quoted. `--timeout SECS` (default 120) goes
 before the verb: `lmcps --timeout 240 call ...`.

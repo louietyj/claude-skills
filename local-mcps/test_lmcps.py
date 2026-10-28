@@ -810,8 +810,7 @@ class TestCatalogDisplay(Base):
         r = self.run_with(catalog({"adder": indexed("add", "boom")}))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"adder\s+stdio\s+adds numbers")
-        self.assertIn("  add -- does add", r.stdout)
-        self.assertIn("  boom -- does boom", r.stdout)
+        self.assertIn("  add, boom\n", r.stdout)
 
     def test_the_framing_says_parameters_are_not_known(self):
         r = self.run_with(catalog({"adder": indexed("add")}))
@@ -855,21 +854,21 @@ class TestCatalogDisplay(Base):
         r = self.run_with(catalog({"adder": indexed("add")}, built_at=now))
         self.assertNotIn("may be broken", r.stdout)
 
-    def test_blurbs_are_truncated_and_long_lists_are_capped(self):
+    def test_lists_every_name_and_no_descriptions(self):
         entry = {"builtAt": "2099-01-01T00:00:00Z", "error": None,
                  "tools": [{"name": f"t{i}", "description": "x " * 200} for i in range(45)]}
         r = self.run_with(catalog({"adder": entry}))
-        self.assertIn("... and 5 more, undescribed: t40, t41, t42, t43, t44", r.stdout)
-        self.assertNotIn("t40 --", r.stdout)
-        longest = max((l for l in r.stdout.splitlines() if l.startswith("  t")), key=len)
-        self.assertLessEqual(len(longest.split(" -- ", 1)[1]), 80)
+        listed = " ".join(l.strip() for l in r.stdout.splitlines() if l.startswith("  t"))
+        self.assertEqual(listed.split(", "), [f"t{i}" for i in range(45)])
+        self.assertNotIn("x x", r.stdout)
+        self.assertTrue(all(len(l) <= 100 for l in r.stdout.splitlines() if l.startswith("  t")))
 
     def test_servers_still_spawns_nothing_with_an_index(self):
         self.write_config({"adder": {"command": "definitely-not-a-real-binary",
                                      "description": "adds numbers"}})
         r = self.run_with(catalog({"adder": indexed("add")}))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("  add -- does add", r.stdout)
+        self.assertIn("  add\n", r.stdout)
 
 
 class TestIndexBuild(Base):
@@ -1153,11 +1152,10 @@ class TestPermissions(Base):
             {"name": "boom", "description": "does boom", "readOnly": None}]}
         path.write_text(json.dumps(catalog({"adder": hinted})))
         r = self.run_lmcps("servers", env={"LMCPS_CATALOG": str(path)})
-        self.assertIn("  add -- does add", r.stdout)
-        self.assertIn("  boom [ask] -- does boom", r.stdout)
+        self.assertIn("  add, boom [ask]\n", r.stdout)
         path.write_text(json.dumps(catalog({"adder": indexed("add", "boom")})))
         r = self.run_lmcps("servers", env={"LMCPS_CATALOG": str(path)})
-        self.assertIn("  boom -- does boom", r.stdout)
+        self.assertIn("  add, boom\n", r.stdout)
 
     def test_the_index_records_read_only_hints(self):
         self.configure(mode="annotated")

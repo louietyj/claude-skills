@@ -57,10 +57,10 @@ CLIENT_INFO = {"name": "lmcps", "version": "1"}
 
 # The tool index. Names and descriptions only -- never schemas, so a stale index
 # can mislead about what exists but never about how to call it. Descriptions are
-# stored whole; BLURB_WIDTH is a display budget, not a storage one.
+# stored whole for `lmcps tools`; `servers` prints names only, as Claude Code's
+# deferred-tool list does. BLURB_WIDTH is a display budget, not a storage one.
 CATALOG_VERSION = 1
 BLURB_WIDTH = 80
-MAX_INDEXED_TOOLS = 40
 STALE_AFTER = timedelta(hours=24)
 
 # The last handshake's result, carrying `serverInfo` and the server's own
@@ -824,16 +824,10 @@ def print_index(name, cfg, entry):
     def tag(t):
         return marker(name, cfg, t.get("name", ""), t.get("readOnly", UNKNOWN))
 
-    for t in tools[:MAX_INDEXED_TOOLS]:
-        name_, said = t.get("name", "") + tag(t), blurb(t.get("description"))
-        print(f"  {name_} -- {said}" if said else f"  {name_}")
-    rest = tools[MAX_INDEXED_TOOLS:]
-    if rest:
-        # Names cost a word each; dropping them would hide what exists.
-        names = ", ".join(t.get("name", "") + tag(t) for t in rest)
-        print(textwrap.fill(f"... and {len(rest)} more, undescribed: {names}",
-                            width=100, initial_indent="  ", subsequent_indent="    ",
-                            break_on_hyphens=False))
+    # Every name, uncapped: a name costs a word, and hiding one hides what exists.
+    names = ", ".join(t.get("name", "") + tag(t) for t in tools)
+    print(textwrap.fill(names, width=100, initial_indent="  ",
+                        subsequent_indent="  ", break_on_hyphens=False))
 
 
 def cmd_servers(args):
@@ -874,9 +868,10 @@ def cmd_servers(args):
             print(note)
         # The redundancy is deliberate. A catalog without it reads like enough to
         # call from, and a confabulated `lmcps call` costs a full spawn to find out.
-        print("The index above is tool names and one-line blurbs ONLY. You do NOT "
-              "know any\ntool's parameters. Run `lmcps tools <server> --schema "
-              "<tool>` before calling one,\nand do not guess.")
+        print("The index above is tool names ONLY. You do NOT know what any tool "
+              "does beyond\nits name, nor its parameters. Run `lmcps tools <server>` "
+              "for descriptions and\n`lmcps tools <server> --schema <tool>` before "
+              "calling one, and do not guess.")
     print(f"`lmcps tools <server>` for a tool list, "
           f"`lmcps call <server> <tool> '{{...}}'` to invoke one.")
 

@@ -1306,7 +1306,7 @@ class PhoneAudio(unittest.TestCase):
 
 class Isolation(unittest.TestCase):
     def setUp(self):
-        FAKE.krisp.update(refuse_token=False, close_after=None)
+        FAKE.krisp.update(refuse_token=False, close_after=None, scale=None)
 
     def page_audio(self, sid):
         """A page holding the audio sends one recorder run, split anywhere; returns the transcriber stream."""
@@ -1367,6 +1367,21 @@ class Isolation(unittest.TestCase):
         for _ in range(3):
             TELNYX.send_audio(ccid, b"\x01\x02" * 320)           # 20 ms frames, as Telnyx sends them
         self.assertEqual(self.heard(s, 1920), bytes([fake_stt.CLEANED]) * 1920)   # two of Krisp's 30 ms
+
+    def test_a_turn_says_how_sure_soniox_was_and_how_far_isolation_turned_it_down(self):
+        FAKE.krisp["scale"] = 0.01                                # Krisp takes it down 40 dB
+        sid = create(mode="talk", isolate=True)
+        ccid, s = PhoneAudio.answered(self, sid)
+        loud = (1000).to_bytes(2, "little", signed=True) * 320   # 20 ms of a steady level
+        for _ in range(15):
+            TELNYX.send_audio(ccid, loud)
+        self.heard(s, 9 * 960)
+        s["inject"].append(FAKE.tokens([("Last", 0), ("call.", 0)], end=True))   # 0-180 ms
+        for _ in range(3):                                         # enough for another 30 ms frame
+            TELNYX.send_audio(ccid, loud)
+        es = wait_entries(sid, lambda es: any(e["kind"] == "turn" for e in es))
+        turn = next(e for e in es if e["kind"] == "turn")
+        self.assertEqual((turn["text"], turn["conf"], turn["drop_db"]), ("Last call.", 0.9, 40))
 
     def test_listen_sessions_cannot_isolate_and_talk_sessions_need_not(self):
         status, out = http("/session", "POST", {"label": "t", "mode": "listen", "isolate": True})

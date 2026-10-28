@@ -222,6 +222,17 @@ phone leg alone, at $0.005/min. Listen mode never isolates: it would keep only
 the nearest voice of a conversation. Session tokens last 5 hours; whether an
 open stream outlives its token is untested.
 
+**A turn carries clues, not a verdict.** Isolation leaves leaks: a loud PA
+announcement while Louie is silent is the only voice there, so it comes
+through turned down but audible, and gets transcribed. Each turn therefore
+stores Soniox's mean token confidence and, on isolated audio, how far Krisp
+turned its words down: each frame's power before and after Krisp is logged,
+and the words' timestamps index it. On the first real test (a commute centre's
+PA), leaked announcement words dropped 17-70 dB while Louie's moved under
+±8 dB; a garbled leak dropped only 3-7 dB but came back at confidence
+0.16-0.46. Confidence alone misses a clear announcement (0.95+). Claude
+weighs both, with the content; the relay drops nothing.
+
 **Talk mode lets Soniox end turns, then can wait for silence.** Its semantic
 endpointing runs at its most patient (`max_endpoint_delay_ms` 3000,
 sensitivity -1), and a monologue is not split. Even so it closes turns while

@@ -9,6 +9,8 @@ scripts, and everything else is audio, only recorded.
                                         frame, as Soniox flushes its last finals then
 Text frames after the config (keepalives) are recorded. An empty frame ends the
 stream: the held messages go out, then {"finished": true}, then close 1000.
+Audio that can't carry a script (PCM after voice isolation) is scripted by
+appending messages to the stream's `inject`: each goes out after the next frame.
 
 Batch, Deepgram-shaped (`POST /v1/listen`): returns CANNED_BATCH and records the body.
 
@@ -25,11 +27,13 @@ Voice isolation, Krisp-shaped (`POST /v2/sdk/tokens/session`, `/voice-isolation`
 issues a session token, then answers the hello with `ready` and returns each
 frame as CLEANED bytes of the same length, so a test can tell what went through
 it. `krisp["refuse_token"]` refuses tokens; `krisp["close_after"]` = n drops
-the stream after n frames.
+the stream after n frames; `krisp["scale"]` returns each frame's samples
+scaled by it instead.
 
 Import it and call start() to run in a background thread with its state
 inspectable (test_session.py does), or run it directly to serve on :8798.
 """
+import array
 import asyncio
 import base64
 import json
@@ -59,7 +63,7 @@ class Fake:
         self.speeches = []     # one dict per TTS connection
         self.sfu = {"adapters": [], "packets": [], "sessions": 0, "subscribes": [],
                     "answers": [], "closed": []}
-        self.krisp = {"tokens": [], "streams": [], "refuse_token": False, "close_after": None}
+        self.krisp = {"tokens": [], "streams": [], "refuse_token": False, "close_after": None, "scale": None}
         self._client = None
 
     def tokens(self, words, *, final=True, end=False, lead=False):
@@ -82,7 +86,7 @@ class Fake:
     async def live(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        rec = {"config": None, "audio": [], "text": [], "closed": None, "on_close": [],
+        rec = {"config": None, "audio": [], "text": [], "closed": None, "on_close": [], "inject": [],
                "auth": request.headers.get("Authorization")}
         self.streams.append(rec)
 
@@ -111,6 +115,8 @@ class Fake:
                     script = json.loads(msg.data)
                 except ValueError:
                     rec["audio"].append(msg.data)
+                    while rec["inject"]:
+                        await ws.send_str(json.dumps(rec["inject"].pop(0)))
                     continue
                 for out in script.get("emit", []):
                     await ws.send_str(json.dumps(out))
@@ -243,7 +249,11 @@ class Fake:
                     rec["closed"] = 1011
                     await ws.close(code=1011)
                     break
-                await ws.send_bytes(bytes([CLEANED]) * len(msg.data))
+                if self.krisp["scale"] is None:
+                    await ws.send_bytes(bytes([CLEANED]) * len(msg.data))
+                else:
+                    pcm = array.array("h", msg.data)
+                    await ws.send_bytes(array.array("h", (round(s * self.krisp["scale"]) for s in pcm)).tobytes())
         return ws
 
 

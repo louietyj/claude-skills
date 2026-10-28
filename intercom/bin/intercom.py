@@ -142,10 +142,21 @@ def mmss(sec):
     return f"{h}:{m:02d}:{r:02d}" if h else f"{m:02d}:{r:02d}"
 
 
+def scores(e):
+    """` c.94 -41dB`: Soniox's confidence, and how far voice isolation turned the turn down."""
+    out = ""
+    if e.get("conf") is not None:
+        c = f"{e['conf']:.2f}"
+        out += " c" + (c[1:] if c.startswith("0") else c)
+    if e.get("drop_db") is not None:
+        out += f" {-e['drop_db']:+d}dB"
+    return out
+
+
 def render(e):
     at = mmss(e.get("t"))
     if e["kind"] == "turn":
-        return f"[{at} S{e.get('spk', 0)}] {e['text']}"
+        return f"[{at} S{e.get('spk', 0)}{scores(e)}] {e['text']}"
     if e["kind"] == "note":
         tail = "" if e.get("delivered", True) else "  (NOT delivered: no screen open)"
         return f"[{at} >>] note to device: {e['text']}{tail}"

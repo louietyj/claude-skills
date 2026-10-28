@@ -90,6 +90,7 @@ const ISO_RATE = 16000;             // a page's audio is decoded to this
 const ISO_FRAME_MS = 30;
 // A frame Krisp hasn't returned by then means it has stalled or never connected.
 const ISO_STALL_MS = 3000;
+const ISO_POWER_FRAMES = 4000;      // 2 minutes of power log: words are final within seconds
 
 const SONIOX_MODEL = "stt-rt-v5";
 // Talk mode: Soniox's semantic endpointing at its most patient decides when a turn is over.
@@ -196,10 +197,19 @@ function wav(raw, data) {
   return concat([new Uint8Array(head.buffer), data]);
 }
 
+function meanSquare(frame) {
+  const s = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength >> 1);
+  let sum = 0;
+  for (let i = 0; i < s.length; i++) sum += s[i] * s[i];
+  return s.length ? sum / s.length : 0;
+}
+
 // Krisp keeps the voice nearest the mic and drops music, chatter and noise.
 // Frames come back one for one and in order, so the transcriber's clock is
 // unchanged. Whatever Krisp can't take (no token, a dropped socket, a stall)
 // goes to the transcriber unfiltered instead: the transcript never stops.
+// Each frame's power before and after is logged, so a word's timestamps say
+// how much Krisp turned it down: the voice it keeps passes nearly unchanged.
 class Isolation {
   constructor({ url, token, rate, send, report }) {
     Object.assign(this, { rate, send, report });
@@ -209,6 +219,9 @@ class Isolation {
     this.ws = null;
     this.ready = false;
     this.off = false;
+    this.rawPower = [];          // per frame, from `base` on
+    this.isoPower = [];          // ...for the frames the transcriber has had
+    this.base = 0;
     this.connect(url, token).catch((e) => this.fail(e.message ?? String(e)));
   }
 
@@ -229,7 +242,7 @@ class Isolation {
   onMessage(data) {
     if (this.off) return;
     if (typeof data !== "string") {
-      if (this.waiting.shift()) this.send(new Uint8Array(data));
+      if (this.waiting.shift()) this.pass(new Uint8Array(data));
       return;
     }
     let m;
@@ -242,36 +255,63 @@ class Isolation {
     }
   }
 
+  // Still cut into frames once Krisp is off, so the power log keeps the transcriber's clock.
   push(pcm) {
-    if (this.off) { this.send(pcm); return; }
     const b = concat([this.carry, pcm]);
     let at = 0;
     for (; at + this.frameBytes <= b.length; at += this.frameBytes) {
       const frame = b.slice(at, at + this.frameBytes);
+      this.rawPower.push(meanSquare(frame));
+      if (this.off) { this.pass(frame); continue; }
       this.waiting.push({ frame, at: Date.now() });
       if (this.ready) this.ws.send(frame);
     }
     this.carry = b.slice(at);
+    if (this.rawPower.length > ISO_POWER_FRAMES * 2) {
+      this.rawPower.splice(0, ISO_POWER_FRAMES);
+      this.isoPower.splice(0, ISO_POWER_FRAMES);
+      this.base += ISO_POWER_FRAMES;
+    }
     if (this.waiting.length && Date.now() - this.waiting[0].at > ISO_STALL_MS) {
       this.fail(`Krisp returned nothing for ${ISO_STALL_MS / 1000}s`);
     }
   }
 
+  pass(frame) {
+    this.isoPower.push(meanSquare(frame));
+    this.send(frame);
+  }
+
+  // Summed power before and after Krisp over [startMs, endMs) of the transcriber's stream.
+  power(startMs, endMs) {
+    let raw = 0, iso = 0;
+    const last = Math.min(Math.ceil(endMs / ISO_FRAME_MS), this.base + this.isoPower.length);
+    for (let f = Math.max(Math.floor(startMs / ISO_FRAME_MS), this.base); f < last; f++) {
+      raw += this.rawPower[f - this.base];
+      iso += this.isoPower[f - this.base];
+    }
+    return { raw, iso };
+  }
+
   fail(why) {
     if (this.off) return;
-    this.close();
+    this.stop();
     this.report(why);
   }
 
-  // What Krisp still holds goes out as it was.
-  close() {
+  // Off from here on: what Krisp still holds goes out as it was.
+  stop() {
     if (this.off) return;
     this.off = true;
-    for (const w of this.waiting) this.send(w.frame);
-    if (this.carry.length) this.send(this.carry);
+    for (const w of this.waiting) this.pass(w.frame);
     this.waiting = [];
-    this.carry = new Uint8Array(0);
     try { this.ws?.close(1000); } catch {}
+  }
+
+  close() {
+    this.stop();
+    if (this.carry.length) this.send(this.carry);
+    this.carry = new Uint8Array(0);
   }
 }
 
@@ -508,7 +548,13 @@ export class Session {
     this.cur = null;
     const text = cur?.text.trim();
     // A lone "." from noise would read to Claude as Louie saying something.
-    if (text && /[\p{L}\p{N}]/u.test(text)) await this.addEntry("turn", { spk: cur.spk, t: Math.round(cur.t), text });
+    if (!text || !/[\p{L}\p{N}]/u.test(text)) return;
+    // Clues to whether this was Louie, for Claude to weigh: Soniox's mean confidence, and how
+    // far isolation turned the words down (near 0 for the voice it keeps).
+    const scores = {};
+    if (cur.toks) scores.conf = Math.round(cur.conf / cur.toks * 100) / 100;
+    if (cur.raw > 0) scores.drop_db = Math.min(99, Math.round(10 * Math.log10(cur.raw / Math.max(cur.iso, 1e-9))));
+    await this.addEntry("turn", { spk: cur.spk, t: Math.round(cur.t), text, ...scores });
   }
 
   // Soniox sends each final token once and every non-final token on every
@@ -542,11 +588,17 @@ export class Session {
       }
       const spk = Number(tok.speaker ?? 0) || 0;
       if (this.cur && this.cur.spk !== spk) await this.flushTurn();
-      if (!this.cur) this.cur = { spk, t: at, text: "" };
+      if (!this.cur) this.cur = { spk, t: at, text: "", conf: 0, toks: 0, raw: 0, iso: 0 };
       // Soniox spaces words within an utterance, not across one.
       if (this.cur.gap && !/^\s/.test(tok.text)) this.cur.text += " ";
       this.cur.gap = false;
       this.cur.text += tok.text;
+      if (tok.confidence != null) { this.cur.conf += tok.confidence; this.cur.toks++; }
+      if (conn.iso && tok.end_ms != null) {
+        const p = conn.iso.power(tok.start_ms ?? 0, tok.end_ms);
+        this.cur.raw += p.raw;
+        this.cur.iso += p.iso;
+      }
       if (!this.talk() && at - this.cur.t >= TURN_SPLIT_S && /[.?!]$/.test(tok.text)) await this.flushTurn();
     }
     this.pending = pending ? { spk: Number(pendingSpk ?? 0) || 0, text: pending } : null;
@@ -605,9 +657,10 @@ export class Session {
                   ...(format.audio_format !== "auto" ? { raw: format } : {}) };
     this.meta.segs.push(seg);
     const rate = this.isolationRate(format);
+    let iso = null;
     if (rate) {
       if (format.audio_format === "auto") this.decoder = new WebmOpusDecoder(OPUS_WASM, rate);
-      this.iso = new Isolation({
+      iso = this.iso = new Isolation({
         url: this.env.KRISP_URL ?? KRISP_URL, token: () => this.krispToken(), rate,
         send: (frame) => this.toTranscriber(frame),
         report: (why) => this.addEntry("event", {
@@ -632,7 +685,7 @@ export class Session {
       return;
     }
     ws.accept();
-    const conn = { ws, opened: Date.now(), error: null };
+    const conn = { ws, opened: Date.now(), error: null, iso };
     ws.send(JSON.stringify({
       model: SONIOX_MODEL, ...format, language_hints: ["en"],
       enable_speaker_diarization: !this.talk(), enable_endpoint_detection: true,

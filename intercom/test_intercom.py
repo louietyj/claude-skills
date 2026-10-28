@@ -454,6 +454,12 @@ class Watch(Base):
             "[00:30 >>] note to device: ask about fees  (NOT delivered: no screen open)",
             "[1:01:40 S0] Hi."])
 
+    def test_a_turn_carries_its_confidence_and_how_far_isolation_turned_it_down(self):
+        turn = {"n": 4, "kind": "turn", "t": 5, "spk": 0, "text": "Last call."}
+        self.assertEqual(intercom.render(dict(turn, conf=0.94, drop_db=41)), "[00:05 S0 c.94 -41dB] Last call.")
+        self.assertEqual(intercom.render(dict(turn, conf=1.0, drop_db=-2)), "[00:05 S0 c1.00 +2dB] Last call.")
+        self.assertEqual(intercom.render(dict(turn, conf=0.3)), "[00:05 S0 c.30] Last call.")
+
     def test_ended_session_says_to_wrap_up(self):
         _, out, _ = self.watch_json(body=watch_body(event="ended", state="ended",
                                                     end_reason="stopped on the device"))

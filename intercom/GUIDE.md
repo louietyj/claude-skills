@@ -402,6 +402,15 @@ exact text in chat, saying out loud that it's there.
 
 ## Reading the transcript
 
+- **A turn's bracket says how much to trust it**: `[07:20 S0 c.94 -41dB]`.
+  `c` is the transcriber's mean confidence: a garbled or misheard line runs
+  low (Louie's own speech mostly sits above .9; fillers like "uh" lower). The
+  dB figure, on isolated talk turns only, is how far voice isolation turned
+  the words down: Louie's voice passes at about 0, so -15dB or lower means
+  isolation judged it someone else, like a PA announcement leaking through
+  while he was quiet. Neither number is a rule: weigh them with what was
+  said. A clear announcement can come through confident, and only the dB
+  gives it away.
 - **Speakers are guesses.** `S0`/`S1` come from voice clustering. They can swap,
   merge, or renumber after a reconnect. Infer who is who from content. When it
   matters and you can't tell, ask Louie in chat. Never assert an attribution

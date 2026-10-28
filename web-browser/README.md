@@ -11,7 +11,7 @@ setup.sh    the whole boot: installs pinchtab, finds/downloads Chrome, opens cap
             pinchtab's own instructions in full
 ```
 
-## Two browsers
+## Three browsers
 
 `pinchtab` (alias `pinchtab-local`) is the sandbox's own browser, everything below.
 `pinchtab-windows` drives Louie's real Chrome on his laptop, through the pinchtab
@@ -21,6 +21,24 @@ zip carries `windows.json`: the host and that backend's gate key, from the gate'
 tray. Both are the same shim body with a different header (`shim_header` in
 setup.sh). The gate's README has the design, and why only pinchtab's HTTP API
 crosses the tunnel.
+
+`pinchtab-cloud` is a [Browser Use](https://browser-use.com) cloud browser on a
+residential IP, for sites that ban the sandbox's datacenter IP whatever the
+fingerprint: Yelp's DataDome answers it with `'t':'bv'` (banned visitor, no
+captcha offered). The shim's `start` creates the browser (`POST /api/v4/browsers`,
+1440x900, its own captcha solver off so pinchtab's HINTs stay the only ones) and
+runs a `pinchtab bridge --cdp-attach` to it on port 9870, with a config of its own
+from setup.sh: its own state dir, `*.cdp.browser-use.com` allowed, and Browser
+Use's in-cluster proxy (`10.0.x.x`, which every page comes back from) trusted by
+the SSRF guard. `stop` kills the bridge and stops the browser, which closing the
+CDP connection does not. It needs fork build capsolver.38 or later: earlier
+builds pinned a `wss://` host to its IP (failing TLS), ignored `HTTPS_PROXY` on
+the websocket, and never blocked images, which at $5/GB is the cost. Installed
+only when the zip carries `browser-use.key` (or `BROWSER_USE_API_KEY` is set).
+Measured 2026-10-27: Yelp loads where the sandbox gets the ban; ~6 page loads with
+images cost ~$0.10, `--block-images` cut a session to ~$0.03. Browser Use's own
+agent CLI was compared too and came out level on open-ended tasks, so pinchtab
+stays the interface and Browser Use only supplies the browser.
 
 `setup.sh` is deliberately one call that leaves nothing to read afterwards — same shape as `session-init/`. Claude runs it and its next tool call is a real browser command; it never has to `cat` pinchtab's bundled SKILL.md itself or be told separately which of that file's instructions to disregard. The script prints the file and the corrections to it in the same output.
 

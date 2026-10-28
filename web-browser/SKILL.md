@@ -41,7 +41,9 @@ pinchtab text
 `pinchtab` is this sandbox's own browser, also callable as `pinchtab-local`.
 If setup.sh's summary lists "Louie's Chrome", there is a second one,
 `pinchtab-windows`: his real Chrome on his laptop, logged in to his accounts.
-It takes the same commands; see "Louie's Chrome" below before touching it.
+If it lists "cloud browser", there is `pinchtab-cloud`: a hosted browser on a
+residential IP, for sites that ban this sandbox. All take the same commands;
+see their sections below before touching either.
 
 The session outlives the bash call, so multi-step flows work across calls --
 nav in one, click in the next, read state in a third. The tab, its DOM state
@@ -410,6 +412,31 @@ Screenshots work as for `pinchtab`, in their own directory (setup.sh names the
 `latest` paths). His window can be any size, so take every coordinate through
 `--unscale`. Subagents share the grant; give each a `PINCHTAB_AGENT` as usual
 and it gets its own tab here too.
+
+## Cloud browser (pinchtab-cloud)
+
+This sandbox browses from a datacenter IP, and some sites ban those outright
+whatever the fingerprint: Yelp (DataDome) and anything behind Akamai's "Access
+Denied". `pinchtab-cloud` is a Browser Use cloud browser on a residential IP,
+driven like `pinchtab`. It costs money ($5 per GB, $0.02 an hour), so use it
+only after `pinchtab` came back blocked, never as the default.
+
+```bash
+pinchtab-cloud start                  # a US residential IP; --country gb, --minutes 30
+pinchtab-cloud nav <url> --block-images
+pinchtab-cloud text
+pinchtab-cloud stop                   # ALWAYS, as soon as you are done
+```
+
+- **Stop it.** It bills until `stop` or its `--minutes` run out; closing the
+  tab or ending the task does not stop it. `stop` prints the cost so far.
+- **Keep `--block-images` on.** Traffic is the cost: a page with images is
+  several MB, a few cents each.
+- **A first look may catch the bot check**: "Verifying the device..." on
+  Yelp passes by itself in a few seconds. Look again before calling it blocked.
+- Captchas are solved by pinchtab as usual, and screenshots, `--unscale` and
+  subagents (`PINCHTAB_AGENT`, own tab with `nav --new-tab`) work as for
+  `pinchtab`. There is one cloud browser per sandbox.
 
 ## Logged-in accounts
 

@@ -5,4 +5,6 @@ capsolver.key
 !*.key.example
 # The gate key in front of Louie's Chrome.
 windows.json
+# Browser Use, behind pinchtab-cloud.
+browser-use.key
 *.zip

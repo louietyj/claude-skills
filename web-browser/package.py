@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the uploadable skill zip.
 
-The zip embeds capsolver.key, and 2captcha.key and windows.json when present, in
-plaintext. Treat the artefact as a secret: anyone holding it can spend both
-balances, and ask Louie's laptop for browser grants.
+The zip embeds capsolver.key, and 2captcha.key, windows.json and browser-use.key
+when present, in plaintext. Treat the artefact as a secret: anyone holding it can
+spend all three balances, and ask Louie's laptop for browser grants.
 """
 
 import json
@@ -22,6 +22,8 @@ PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
 TWOCAPTCHA_KEY = "2captcha.key"
 # Optional: the gate key for pinchtab-windows, Louie's Chrome.
 WINDOWS = "windows.json"
+# Optional: the Browser Use key behind pinchtab-cloud.
+BROWSER_USE_KEY = "browser-use.key"
 
 
 def read_key() -> str:
@@ -54,6 +56,17 @@ def read_twocaptcha_key() -> str:
     return key
 
 
+def read_browser_use_key() -> str:
+    path = os.path.join(HERE, BROWSER_USE_KEY)
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        key = fh.read().strip()
+    if not key.startswith("bu_"):
+        raise SystemExit(f"{BROWSER_USE_KEY} does not look like a Browser Use key (expected a bu_ prefix).")
+    return key
+
+
 def read_windows() -> dict:
     path = os.path.join(HERE, WINDOWS)
     if not os.path.exists(path):
@@ -83,9 +96,10 @@ def main() -> int:
         key = read_key()
         two_key = read_twocaptcha_key()
     windows = read_windows()
+    bu_key = read_browser_use_key()
 
     members = (list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
-               + ([WINDOWS] if windows else []))
+               + ([WINDOWS] if windows else []) + ([BROWSER_USE_KEY] if bu_key else []))
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for member in members:
@@ -107,6 +121,10 @@ def main() -> int:
         print(f"Contains {WINDOWS} (gate key for {windows['host']}) -- pinchtab-windows is on.")
     else:
         print(f"No {WINDOWS}: pinchtab-windows (Louie's Chrome) is off.")
+    if bu_key:
+        print(f"Contains {BROWSER_USE_KEY} in plaintext (ending ...{bu_key[-4:]}) -- pinchtab-cloud is on.")
+    else:
+        print(f"No {BROWSER_USE_KEY}: pinchtab-cloud is off.")
     return 0
 
 

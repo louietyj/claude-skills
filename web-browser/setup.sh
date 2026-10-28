@@ -78,6 +78,10 @@ finish() {
     printf '\nLouie'"'"'s own logged-in Chrome is `pinchtab-windows`, after he approves a\n'
     printf 'grant -- see "Louie'"'"'s Chrome" in SKILL.md before using it.\n'
   fi
+  if [ -x "$CLOUD_SHIM" ]; then
+    printf '\nA cloud browser on a residential IP is `pinchtab-cloud`, for a site that\n'
+    printf 'bans this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
+  fi
 
   if [ $failed -ne 0 ]; then
     printf '\nSome steps did not complete -- the summary above is the authority on\n'
@@ -156,6 +160,45 @@ WIN_HEADERS=/tmp/.pinchtab-windows-headers
 WIN_SHOT_BASE=$(dirname "$SHOT_BASE")/pinchtab-windows-shots
 WIN_SHOT_LEDGER=/tmp/pinchtab-windows-shots-unseen
 WIN_SHOT_DIR=$WIN_SHOT_BASE${AGENT:+/$AGENT}
+
+# A Browser Use cloud browser on a residential IP, for a site that bans this
+# sandbox's datacenter IP outright; installed only when there is a key.
+CLOUD_KEY=${BROWSER_USE_API_KEY:-$(cat "$SKILL_DIR/browser-use.key" 2>/dev/null | tr -d '\r\n')}
+CLOUD_SHIM=$BIN_DIR/pinchtab-cloud
+CLOUD_DIR=/tmp/.pinchtab-cloud
+CLOUD_PORT=9870
+CLOUD_SHOT_BASE=$(dirname "$SHOT_BASE")/pinchtab-cloud-shots
+CLOUD_SHOT_LEDGER=/tmp/pinchtab-cloud-shots-unseen
+CLOUD_SHOT_DIR=$CLOUD_SHOT_BASE${AGENT:+/$AGENT}
+
+setup_cloud() {
+  if [ -z "$CLOUD_KEY" ]; then
+    note 'cloud browser' 'not configured -- no browser-use.key in the skill'
+    return
+  fi
+  mkdir -p "$CLOUD_DIR" && chmod 700 "$CLOUD_DIR"
+  printf '%s' "$CLOUD_KEY" > "$CLOUD_DIR/key"
+  # The bridge gets its own config: its own state dir, so it never touches the
+  # local server's profile, and trust in Browser Use's in-cluster proxy, which
+  # every page of that browser comes back from (10.0.x.x).
+  if ! python3 - "$("$REAL" config path)" "$CLOUD_DIR" <<'PY'
+import json, sys
+src, d = sys.argv[1:]
+c = json.load(open(src))
+c.setdefault("server", {})["stateDir"] = d + "/state"
+sec = c.setdefault("security", {})
+sec["trustedProxyCIDRs"] = ["10.0.0.0/8"]
+sec["attach"] = {**sec.get("attach", {}), "enabled": True,
+                 "allowHosts": ["*.cdp.browser-use.com"], "allowSchemes": ["https", "wss"]}
+json.dump(c, open(d + "/config.json", "w"), indent=2)
+open(d + "/token", "w").write(c["server"]["token"])
+PY
+  then
+    note 'cloud browser' 'FAILED -- could not write its bridge config'
+    return
+  fi
+  note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; start it only when needed"
+}
 
 setup_windows() {
   if [ ! -f "$WINDOWS_JSON" ]; then
@@ -265,6 +308,11 @@ print_docs() {
     printf 'and for pinchtab-windows, Louie'"'"'s Chrome:\n'
     printf '  %s/latest-small.jpg\n' "$WIN_SHOT_DIR"
     printf '  %s/latest.jpg\n' "$WIN_SHOT_DIR"
+  fi
+  if [ -n "$CLOUD_KEY" ]; then
+    printf 'and for pinchtab-cloud:\n'
+    printf '  %s/latest-small.jpg\n' "$CLOUD_SHOT_DIR"
+    printf '  %s/latest.jpg\n' "$CLOUD_SHOT_DIR"
   fi
 
   # A subagent never loaded this skill, so it gets the skill's own SKILL.md too:
@@ -589,6 +637,8 @@ L=$4
 N=$5
 WIN_CONF=$WIN_CONF
 WIN_HEADERS=$WIN_HEADERS
+CLOUD_DIR=$CLOUD_DIR
+CLOUD_PORT=$CLOUD_PORT
 SHIM_EOF
 }
 SHIM_BODY=$(mktemp)
@@ -621,6 +671,79 @@ if [ "${1:-}" = shots ]; then
   exit 0
 fi
 
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
+
+# A Browser Use cloud browser on a residential IP, through a bridge in this
+# sandbox. It bills by the minute and the megabyte until stopped or timed out,
+# and closing the connection does not stop it.
+if [ "$TIER" = cloud ]; then
+  [ -s "$CLOUD_DIR/key" ] || { echo "$NAME: not set up -- the skill has no browser-use.key" >&2; exit 1; }
+  export PINCHTAB_HINTS=off
+  B=$CLOUD_DIR/browser.json
+  API=https://api.browser-use.com/api/v4/browsers
+  api() { curl -sS -m 60 -H "X-Browser-Use-API-Key: $(cat "$CLOUD_DIR/key")" -H 'Content-Type: application/json' "$@"; }
+  stop_cloud() {
+    for p in $(pgrep -f "^$REAL bridge --cdp-attach"); do kill "$p" 2>/dev/null; done
+    [ -s "$B" ] || return 0
+    api -X PATCH "$API/$(json id < "$B")" --data '{"action":"stop"}' | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    cost = float(d.get("proxyCost") or 0) + float(d.get("browserCost") or 0)
+    print("Stopped. Billed so far: %.1f MB of residential traffic, $%.3f in all (the meter lags; the dashboard has the final figure)." % (float(d.get("proxyUsedMb") or 0), cost))
+except Exception:
+    print("Stop sent; Browser Use did not report the usage.")'
+    rm -f "$B"
+  }
+  case "${1:-}" in
+    start)
+      country=us minutes=30
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --country) country=$2; shift ;;
+          --minutes) minutes=$2; shift ;;
+          *) echo "usage: $NAME start [--country us] [--minutes 30]" >&2; exit 2 ;;
+        esac
+        shift
+      done
+      [ -s "$B" ] && { echo "$NAME: already running; \`$NAME stop\` first to start another" >&2; exit 1; }
+      # 1440x900 like the local browser, so its shots stay under claude.ai's
+      # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
+      api -X POST "$API" --data "{\"proxyCountryCode\":\"$country\",\"timeout\":$minutes,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false}" > "$B"
+      cdp=$(json cdpUrl < "$B")
+      if [ -z "$cdp" ]; then
+        echo "$NAME: Browser Use refused: $(cat "$B")" >&2
+        rm -f "$B"
+        exit 1
+      fi
+      PINCHTAB_CONFIG=$CLOUD_DIR/config.json setsid nohup "$REAL" bridge --cdp-attach "$cdp" --port "$CLOUD_PORT" \
+        > "$CLOUD_DIR/bridge.log" 2>&1 < /dev/null &
+      i=0
+      until curl -sf -m 5 -H "Authorization: Bearer $(cat "$CLOUD_DIR/token")" "http://127.0.0.1:$CLOUD_PORT/health" >/dev/null; do
+        i=$((i + 1))
+        if [ $i -ge 30 ]; then
+          echo "$NAME: the bridge never attached. Its log:" >&2
+          tail -5 "$CLOUD_DIR/bridge.log" >&2
+          stop_cloud >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      echo "Started: a $country residential IP, stopping itself after $minutes minutes."
+      echo "Run \`$NAME stop\` as soon as you are done: it bills until then."
+      exit 0 ;;
+    stop)
+      stop_cloud
+      exit 0 ;;
+  esac
+  [ -s "$B" ] || { echo "$NAME: not running. Run: $NAME start" >&2; exit 1; }
+  unset PINCHTAB_SESSION
+  PINCHTAB_SERVER=http://127.0.0.1:$CLOUD_PORT PINCHTAB_TOKEN=$(cat "$CLOUD_DIR/token")
+  XDG_STATE_HOME=/tmp/pinchtab-cloud-state${A:+-$A}
+  export PINCHTAB_SERVER PINCHTAB_TOKEN XDG_STATE_HOME
+fi
+
 # Louie's Chrome: a bridge on his laptop behind a gate that wants a grant he
 # approved. Bridges have no sessions; the CLI's current-tab file tracks the tab.
 if [ "$TIER" = windows ]; then
@@ -631,7 +754,6 @@ if [ "$TIER" = windows ]; then
   export PINCHTAB_HINTS=off
   G=/tmp/.pinchtab-windows-grant
   RQ=/tmp/.pinchtab-windows-request
-  json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
   gate() { curl -sS -m 75 -H @"$WIN_HEADERS" "$@"; }
   case "${1:-}" in
     grant)
@@ -886,9 +1008,16 @@ if [ -f "$WINDOWS_JSON" ]; then
     cat "$SHIM_BODY"; } > "$WIN_SHIM"
   chmod +x "$WIN_SHIM"
 fi
+rm -f "$CLOUD_SHIM"
+if [ -n "$CLOUD_KEY" ]; then
+  { shim_header cloud pinchtab-cloud "$CLOUD_SHOT_BASE" "$CLOUD_SHOT_LEDGER" /tmp/pinchtab-cloud-shot-count
+    cat "$SHIM_BODY"; } > "$CLOUD_SHIM"
+  chmod +x "$CLOUD_SHIM"
+fi
 rm -f "$SHIM_BODY"
 
 open_session
 setup_windows
+setup_cloud
 print_docs
 finish

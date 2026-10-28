@@ -654,14 +654,15 @@ class Resume(unittest.TestCase):
         ws.close()
         time.sleep(0.5)
         self.assertIsNotNone(http("/status", id=sid)[1]["device"]["reconnecting_s"])
-        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1", why="no ping for 6s")
         self.assertEqual(recv_until(ws, lambda m: m.get("type") == "resume")["have"], 3)
+        ws.send(json.dumps({"type": "resumed"}))
         for i in range(3, 5):
             ws.send(f"chunk-{i}".encode())
         self.assertEqual(wait_audio(stream, 5), [f"chunk-{i}".encode() for i in range(5)])
         self.assertEqual(stream_count(), n, "a resumed page must not start a new transcriber stream")
         es = entries(sid)
-        self.assertTrue(any("reconnected after" in t for t in texts(es, "net")), es)
+        self.assertTrue(any("reconnected (no ping for 6s) after" in t for t in texts(es, "net")), es)
         self.assertFalse(any("disconnected" in t for t in texts(es, "event")), es)
         self.assertEqual(http("/watch", id=sid, since=last, interval=0, wait=1)[1]["event"], "idle")
         ws.close()
@@ -692,6 +693,19 @@ class Resume(unittest.TestCase):
         new.send(b"chunk-1")
         self.assertEqual(wait_audio(stream, 2), [b"chunk-0", b"chunk-1"])
         new.close()
+
+    def test_a_page_that_no_longer_has_the_chunks_says_so_and_the_gap_is_news(self):
+        sid = create()
+        ws, _ = recording(sid)
+        ws.close()
+        time.sleep(0.3)
+        n = stream_count()
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        recv_until(ws, lambda m: m.get("type") == "resume")
+        ws.send(json.dumps({"type": "seg", "rec": "r2"}))            # its kept chunks don't reach back far enough
+        wait_streams(n + 1)
+        wait_entries(sid, lambda es: any("too late to resend" in t for t in texts(es, "event")))
+        ws.close()
 
     def test_another_recorder_run_or_device_cannot_resume(self):
         sid = create()

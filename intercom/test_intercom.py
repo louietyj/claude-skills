@@ -5,6 +5,7 @@ process. Named for the symptom Claude or Louie would see, not the function.
     python test_intercom.py
 """
 import contextlib
+import http.client
 import importlib.util
 import io
 import json
@@ -658,6 +659,14 @@ class Talk(Base):
         self.assertEqual(json.loads(out)["status"], "done")
         self.assertEqual(len(relay.calls), 2)
         self.assertEqual(relay.calls[0]["body"]["rid"], relay.calls[1]["body"]["rid"])
+
+    def test_a_reply_cut_off_mid_stream_counts_as_a_lost_connection(self):
+        def cut(*a, **k):
+            raise http.client.IncompleteRead(b" ")
+        with mock.patch.object(intercom.urllib.request, "urlopen", cut):
+            status, body = intercom.request("https://relay.example/speak", method="POST", body={})
+        self.assertEqual(status, 0)
+        self.assertIn("IncompleteRead", body["error"])
 
     def test_each_speak_gets_its_own_call_id(self):
         relay = Relay({"/speak": (200, {"status": "done", "audio_s": 1.0})})

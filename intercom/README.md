@@ -428,27 +428,35 @@ CLI that loses the connection asks again under it, and the relay hands back
 the same call's outcome, waiting on one still speaking or reading one that
 finished (kept in storage, the last 20), so nothing is said twice. While it
 speaks, the relay sends a space every 5s ahead of the JSON, in case quiet is
-what the proxy objects to. A `done` comes back as just its status and length:
+what the proxy objects to. It isn't only quiet: a reply was cut after its
+first space too, so a stream cut short counts as a lost connection. A `done` comes back as just its status and length:
 the text was Claude's own.
 
 **A dropped page resumes.** A socket drop (home Wi-Fi blipped twice in an hour,
 2s each; walking means switching networks) used to cost the audio in the gap,
 a new transcriber stream, and Claude being told. Now the page keeps
-recording through it and keeps its last 15s of chunks; the relay keeps the
-transcriber's stream open for 15s and counts the chunks it got. When the
+recording through it and keeps its last 60s of chunks; the relay keeps the
+transcriber's stream open for 60s and counts the chunks it got. When the
 page's new socket names the same recorder run, the relay says how many
-arrived, the page resends the rest, and the stream carries on, its clock
-intact, since the recorder never stopped. Claude isn't told (a quiet `net`
-entry), and a `speak` meanwhile waits for the page. Past the grace, or after an
-object restart, it's a drop as before. Measured on the providers: Krisp
-returned a 30s burst in about a second; Soniox takes a backlog but works
+arrived, the page resends the rest (or says it can't, and the gap is news),
+and the stream carries on, its clock intact, since the recorder never
+stopped. Claude isn't told (a quiet `net` entry, with the page's reason for
+switching), and a `speak` meanwhile waits for the page. Past the grace, or
+after an object restart, it's a drop as before. Measured on the providers:
+Krisp returned a 30s burst in about a second; Soniox takes a backlog but works
 through it at about real time, so after a 6s gap turns ran up to ~5s late for
-~30s. Hence a short grace rather than a long one. To notice a socket that died
-without closing (a network switch), the relay pings every screen every 2s
-and the page opens a new socket after 6s without one, or at once when the
-browser reports a different kind of network; a device's newer socket replaces
-its older one, so the swap needs no drop. Claude's voice is asked for again if
-its connection fails, three times.
+~30s. The grace was 15s until a live test lost 20s while the phone's data came
+back after Wi-Fi went off: Louie would rather have late turns than lost ones.
+
+To notice a socket that died without closing (a network switch), the relay
+pings every screen every 2s, and the page opens a new socket after 6s without
+one, or at once when the browser reports a different kind of network. Until
+the new one resumes, chunks still go out on the old one: a cellular link that
+lost 2-3s of pings stalled TCP for ~10s, and the first version, which went
+quiet on the old socket at once, turned each such stall into a gap. A device's
+newer socket replaces its older one without cutting Claude's speech; a socket
+that died does cut it. Claude's voice is asked for again if its connection
+fails, three times.
 
 **One recorder run = one webm header = one transcriber stream** (a "segment").
 A stream that resumes mid-container is not reliably decodable, so every

@@ -437,8 +437,8 @@ exact text in chat, saying out loud that it's there.
 | `page OFF SCREEN for Ns: mic is off` | the page left the foreground with no fresh mic reading: a watch (crown press, its mic stops after ~5s), a frozen phone page (an event says "stopped sending audio"), or a stale cached page | tell him at once: "your watch page left the screen, I'm not hearing anything" |
 | `Louie LEFT AUDIO Ns ago` | he tapped pause (leave audio): mic and your voice are off on purpose, his screen is still in the room | nothing; keep working, and save what you'd say for when he turns it back on |
 | `in the room ... but hasn't turned audio on` | he joined and hasn't tapped Web or Phone yet | if it lasts, remind him once |
-| `reconnecting for Ns` | the page holding the audio lost its connection a moment ago; it keeps recording and resends what was missed | nothing: a blip within 15s loses nothing, and you aren't told of it |
-| `holding the audio DISCONNECTED Ns ago` | the screen with the mic stayed off for over 15s (network, or the page closed): what was said meanwhile is lost | tell him in chat; it takes the audio back by itself when it reconnects |
+| `reconnecting for Ns` | the page holding the audio lost its connection a moment ago; it keeps recording and resends what was missed | nothing: a blip within 60s loses nothing, and you aren't told of it; his turns then arrive late by about the gap for a while |
+| `holding the audio DISCONNECTED Ns ago` | the screen with the mic stayed off for over 60s (network, or the page closed): what was said meanwhile is lost | tell him in chat; it takes the audio back by itself when it reconnects |
 | `NO SCREEN OPEN` | no page is in the room: notes don't reach him | tell him in chat if it matters |
 | `connected but no audio for Ns` | the page stopped sending with its socket open | tell him in chat at once; unlocking the phone wakes a frozen page |
 | `has not opened the room` | session armed, nobody joined | remind him of the id |

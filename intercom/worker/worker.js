@@ -52,7 +52,7 @@ const ID_ALPHABET = "ACDEFGHJKLMNPQRTUVWXY34679";  // no 0/O, 1/I, 2/Z, 5/S, 8/B
 const ID_RE = /^[ACDEFGHJKLMNPQRTUVWXY34679]{4}$/;
 const ARMED_TTL_MS = 15 * 60_000;
 const DEVICE_GONE_MS = 5 * 60_000;
-const RESUME_GRACE_MS = 15_000;          // the page buffers this much of its recording
+const RESUME_GRACE_MS = 60_000;          // the page buffers this much of its recording
 const SCREEN_PING_MS = 2000;             // a page that hears nothing for 6s assumes its socket is dead
 const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const NO_AUDIO_MAX_MS = 60 * 60_000;
@@ -453,6 +453,7 @@ export class Session {
     this.grace = null;           // a holding page that dropped and may resume: {ws, dev, ui, at, timer}
     this.segRec = null;          // the holding page's recorder run, and how many of its chunks arrived
     this.segChunks = 0;
+    this.resuming = null;        // a rejoined page, until it says whether it could resend
     this.pinger = null;
     this.voiceOut = null;        // the SFU adapter's socket: PCM in, Claude's voice track out
     this.voicePending = null;
@@ -938,6 +939,7 @@ export class Session {
     delete this.meta.grace;
     this.segRec = null;
     this.segChunks = 0;
+    this.resuming = null;
     let closing = null;
     if (old) {
       this.holder = null;            // nothing more of its audio is taken
@@ -1147,12 +1149,12 @@ export class Session {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async dropScreen(server) {
+  async dropScreen(server, replaced = false) {
     if (!this.screens.has(server)) return;
     const who = this.ui(server);
     // The page closes soon after a stop, often before ending is done: not a drop.
     if (this.live() && !this.stopping && server === this.holder) {
-      if (this.segRec != null && this.screens.get(server)?.dev) await this.beginGrace(server);
+      if (this.segRec != null && this.screens.get(server)?.dev) await this.beginGrace(server, replaced);
       else {
         await this.setHolder(null, "dropped");        // while it still has a name
         await this.addEntry("event", { text: `${who} holding the audio disconnected; no audio until it reconnects` });
@@ -1168,16 +1170,18 @@ export class Session {
 
   // A page that drops while holding the audio keeps recording, and its next
   // socket can resume the transcriber's stream (rejoin). Claude hears of the
-  // drop only if the grace runs out; speech is cut, as the voice track rarely
-  // survives what killed the socket. In meta too: after a restart, load() reports it.
-  async beginGrace(server) {
+  // drop only if the grace runs out. Speech is cut when the socket died, as the
+  // voice track rarely survives that, but not when a newer socket replaced a
+  // live one. In meta too: after a restart, load() reports it.
+  async beginGrace(server, replaced = false) {
     const g = { ws: server, dev: this.screens.get(server).dev, ui: this.ui(server), at: Date.now() };
     g.timer = setTimeout(() => this.expireGrace().catch(() => {}), this.graceMs());
     this.grace = g;
     this.meta.grace = { at: g.at, ui: g.ui };
-    this.voiceReady = false;
     await this.saveMeta();
     await this.armTimer();
+    if (replaced) return;
+    this.voiceReady = false;
     if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY.dropped);
   }
 
@@ -1210,13 +1214,10 @@ export class Session {
         this.grace = null;
         delete this.meta.grace;
         this.holder = ws;
-        const s = ((Date.now() - g.at) / 1000).toFixed(1);
-        try { ws.send(JSON.stringify({ type: "resume", have: this.segChunks })); } catch {}
-        // A stall Claude was told about gets its answer as news; otherwise the blip stays quiet.
-        const told = this.audioStalledAt != null;
+        // The page answers `resumed`, or a fresh `seg` if it no longer has the chunks.
+        this.resuming = { ui: g.ui, at: g.at, told: this.audioStalledAt != null, why: msg.why ?? null };
         this.audioStalledAt = null;
-        await this.addEntry(told ? "event" : "net", {
-          text: `${g.ui} reconnected after ${s}s and resent what it recorded meanwhile: nothing was lost` });
+        try { ws.send(JSON.stringify({ type: "resume", have: this.segChunks })); } catch {}
         return this.sendRoom();
       }
       await this.expireGrace(true);
@@ -1238,7 +1239,7 @@ export class Session {
       for (const [other, info] of this.screens) {
         if (other === ws || !msg.dev || info.dev !== msg.dev) continue;
         try { other.close(4001, "replaced by this device's newer page"); } catch {}
-        await this.dropScreen(other);              // a holder's starts a grace this page can resume
+        await this.dropScreen(other, true);        // a holder's starts a grace this page can resume
       }
       if (this.talk()) {
         // The device's remembered wait seeds a session nobody has set yet, so a
@@ -1268,10 +1269,24 @@ export class Session {
     if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (ws !== this.holder) return;
-    if (msg.type === "seg") {
-      this.segRec = msg.rec ?? null;
-      this.segChunks = 0;
-      return this.startSegment();
+    if (msg.type === "resumed" || msg.type === "seg") {
+      const r = this.resuming;
+      this.resuming = null;
+      let started = null;
+      if (msg.type === "seg") {
+        this.segRec = msg.rec ?? null;
+        this.segChunks = 0;
+        started = this.startSegment();     // before any await: the header chunk is right behind
+      }
+      if (r) {
+        const s = Math.round((Date.now() - r.at) / 1000);
+        const why = r.why ? ` (${String(r.why).slice(0, 60)})` : "";
+        // A stall Claude was told about gets its answer as news; otherwise a blip stays quiet.
+        await this.addEntry(started || r.told ? "event" : "net", { text: started
+          ? `${r.ui} reconnected${why} after ${s}s, too late to resend: what was said in between is lost`
+          : `${r.ui} reconnected${why} after ${s}s and resent what it recorded meanwhile: nothing was lost` });
+      }
+      return started;
     }
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();

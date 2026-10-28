@@ -179,9 +179,10 @@ let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
 // new socket can resend whatever the relay didn't get (README: "A dropped page").
-const KEEP_CHUNKS = 60;          // 15 s at 250 ms, the relay's grace
+const KEEP_CHUNKS = 240;         // 60 s at 250 ms, the relay's grace
 const SOCKET_SILENT_MS = 6000;   // the relay pings every 2 s
 let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
+let prevWs = null, switchWhy = null;
 let netType = navigator.connection?.type ?? null, voiceRetries = 0;
 
 function tick() {
@@ -381,7 +382,8 @@ function connect() {
     // A screen that held the mic before the drop takes it back, if nothing else has.
     // With its recorder still running, the relay answers `resume`.
     send({ type: "hello", ui: UI, dev: DEV, holding, ...(holding && rec ? { rec: recId } : {}),
-           ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+           ...(switchWhy ? { why: switchWhy } : {}), ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
+    switchWhy = null;
     if (holding && !rec) startAudio();
   };
   sock.onmessage = (m) => {
@@ -392,6 +394,7 @@ function connect() {
     if (ws !== sock || mode !== "live") return;
     if (e.code === 4001) return finish("Open in another tab");
     streaming = false;
+    switchWhy = `closed ${e.code}`;
     failures++;
     if (failures >= 4) return checkStillLive();
     status("Reconnecting…", "amber");
@@ -404,32 +407,44 @@ function connect() {
 // means a new one. Also checked on recorder chunks, which hidden-page throttling doesn't slow.
 function checkSocket() {
   if (mode !== "live" || !ws || ws.readyState !== 1 || Date.now() - lastRx < SOCKET_SILENT_MS) return;
-  reconnectNow();
+  reconnectNow(`no ping for ${Math.round((Date.now() - lastRx) / 1000)}s`);
 }
 
-function reconnectNow() {
-  const old = ws;
+// The old socket keeps carrying chunks until the new one resumes; the relay
+// closes it once the new one says hello.
+function reconnectNow(why) {
+  if (prevWs && ws && ws.readyState === 0) return;     // a switch is already under way
+  try { prevWs && prevWs.close(); } catch {}
+  prevWs = ws && ws.readyState === 1 ? ws : null;
+  switchWhy = why;
   backoff = 250;
   connect();
-  try { old && old.close(); } catch {}
+}
+
+function dropPrev() {
+  try { prevWs && prevWs.close(); } catch {}
+  prevWs = null;
 }
 setInterval(checkSocket, 1000);
 
 // A new network has probably killed the socket. `change` also fires on
 // bandwidth estimates, so only a different kind of network counts.
-addEventListener("online", () => { if (mode === "live") reconnectNow(); });
+addEventListener("online", () => { if (mode === "live") reconnectNow("back online"); });
 navigator.connection?.addEventListener?.("change", () => {
   const type = navigator.connection.type ?? null;
   if (type === netType) return;
+  const was = netType;
   netType = type;
-  if (mode === "live") reconnectNow();
+  if (mode === "live") reconnectNow(`network ${was} to ${type}`);
 });
 
 // The relay has `have` of this run's chunks (-1: it lost the stream): resend the rest, or start afresh.
 function resume(have) {
   if (!holding) return;
   const first = recKept.length ? recKept[0].i : recN;
+  dropPrev();
   if (!rec || have < first || have > recN) return startAudio();
+  send({ type: "resumed" });
   for (const c of recKept) if (c.i >= have) ws.send(c.data);
   streaming = true;
   reportVis();
@@ -467,6 +482,7 @@ function segment() {
       recKept.push({ i: recN++, data: e.data });
       if (recKept.length > KEEP_CHUNKS) recKept.shift();
       if (streaming && ws && ws.readyState === 1) ws.send(e.data);
+      else if (prevWs && prevWs.readyState === 1) prevWs.send(e.data);
     }
     probeTick();
     checkSocket();

@@ -10,6 +10,7 @@ on disk. Stdlib only, so nothing needs installing mid-conversation.
 import argparse
 import datetime
 import glob
+import http.client
 import json
 import os
 import re
@@ -82,7 +83,7 @@ def request(url, *, method="GET", body=None, timeout=30):
             raw, status = resp.read().decode(), resp.status
     except urllib.error.HTTPError as e:
         raw, status = e.read().decode(), e.code
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
         return 0, {"error": f"{type(e).__name__}: {e}"}
     try:
         return status, json.loads(raw)
@@ -222,7 +223,7 @@ def describe_device(d, state):
         return f"Louie is in the room on the {', '.join(screens)} but hasn't turned audio on"
     if d.get("reconnecting_s") is not None:
         return (f"{who} reconnecting for {d['reconnecting_s']}s: it keeps recording and resends what was "
-                f"missed, so nothing is lost if it is back within 15s")
+                f"missed, so nothing is lost if it is back within 60s")
     if d.get("mic_silent_s") is not None:
         where = " with its page off screen" if d.get("hidden_s") is not None else ""
         return f"{who} mic SILENT for {d['mic_silent_s']}s{where}: nothing is being heard"

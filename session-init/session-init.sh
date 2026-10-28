@@ -9,6 +9,38 @@
 # being printed, and the caller has to be able to see which half worked. Each
 # stage records its own status and the summary at the end reports all of them.
 
+# --split writes the transcript to two files of about equal size and prints one
+# line, so the caller can read both in the same parallel batch as this call
+# rather than meeting a persisted-output pointer whose own read truncates.
+if [ "${1:-}" = --split ]; then
+  out=/tmp/session-init
+  rm -rf "$out" && mkdir -p "$out"
+  bash "$0" >"$out/all.txt" 2>&1
+  rc=$?
+  python3 -I - "$out" "$rc" <<'PY'
+import os, sys, time
+
+out, rc = sys.argv[1], sys.argv[2]
+with open(os.path.join(out, "all.txt"), "rb") as f:
+    lines = f.read().splitlines(keepends=True)
+half, size, cut = sum(map(len, lines)) / 2, 0, len(lines)
+for i, line in enumerate(lines):
+    size += len(line)
+    if size >= half:
+        cut = i + 1
+        break
+stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+for n, chunk in enumerate((lines[:cut], lines[cut:]), 1):
+    with open(os.path.join(out, f"part{n}.txt"), "wb") as f:
+        f.write(f"──────── session-init part {n} of 2, written {stamp} ────────\n".encode())
+        f.writelines(chunk)
+os.remove(os.path.join(out, "all.txt"))
+print(f"session-init finished (exit {rc}). Its transcript is in {out}/part1.txt and "
+      f"{out}/part2.txt; read both in full.")
+PY
+  exit "$rc"
+fi
+
 TOTAL=7
 step=0
 summary=()

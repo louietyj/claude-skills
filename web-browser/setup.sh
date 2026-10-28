@@ -69,9 +69,6 @@ finish() {
     printf '  %s/latest-small.jpg\n' "$SHOT_DIR"
     printf 'If you re-run setup.sh, pass --subagent %s again: without it, it\n' "$AGENT"
     printf 'takes over the tab of the agent that spawned you.\n'
-    printf '\nNext: export PINCHTAB_AGENT=%s; pinchtab nav <url> --block-images\n' "$AGENT"
-  else
-    printf '\nNext: pinchtab nav <url> --block-images\n'
   fi
 
   if [ -x "$WIN_SHIM" ]; then
@@ -82,6 +79,14 @@ finish() {
     printf '\nA cloud browser on a residential IP is `pinchtab-cloud`, for a site that\n'
     printf 'bans this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
   fi
+
+  # Last, because it is what an agent reads right before its first command.
+  prefix=${AGENT:+export PINCHTAB_AGENT=$AGENT; }
+  printf '\nNext: %spinchtab nav <url> --block-images\n' "$prefix"
+  printf 'Then, for every step you can see in that screenshot, ONE batch -- not\n'
+  printf '`&&` or `;` -- and view latest-small.jpg in the same message:\n\n'
+  printf "%spinchtab execute-batch <<'EOF'\n" "$prefix"
+  printf 'click e4\nclick --x 134 --y 74 --unscale last-small\nkeyboard type "Glasg"\nEOF\n'
 
   if [ $failed -ne 0 ]; then
     printf '\nSome steps did not complete -- the summary above is the authority on\n'
@@ -131,7 +136,11 @@ SHIM="$BIN_DIR/pinchtab"
 # Cloud Claude Code has no /home/claude.
 WORK_DIR=/home/claude; [ -d "$WORK_DIR" ] || WORK_DIR=$HOME
 SESSION_BASE="${PINCHTAB_SESSION_FILE:-$WORK_DIR/.pinchtab-session}"
+# The fork's own skill, from its release, written for this setup. The npm
+# package's upstream copy is the fallback, printed with corrections.
+FORK_DOCS="$NPM_ROOT/pinchtab/skills-fork/pinchtab"
 PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
+[ -f "$FORK_DOCS/SKILL.md" ] && PINCHTAB_DOCS=$FORK_DOCS
 READY_MARK=/tmp/.web-browser-ready
 # claude.ai shows the user everything under /mnt/user-data/outputs, so shots
 # live outside it there.
@@ -261,12 +270,18 @@ print_docs() {
     note 'pinchtab SKILL.md' 'FAILED -- read it yourself before using pinchtab'
   fi
 
-  # Corrections come after the file, not before it: they only make sense once its
-  # text is in context, and stating them first invites reading the file for the
-  # rule they already overrode.
+  # The fork's own docs are written for this setup. Only upstream's npm copy, the
+  # fallback when they could not be fetched, needs correcting. Corrections come
+  # after the file: they only make sense once its text is in context.
+  [ "$PINCHTAB_DOCS" = "$FORK_DOCS" ] || print_upstream_corrections
+  print_shared_notes
+}
+
+print_upstream_corrections() {
   printf '\n%s CORRECTIONS TO THE FILE ABOVE %s\n' "$RULE_H" "$RULE_H"
-  printf 'Five things in that file are wrong for this sandbox. Everything else in\n'
-  printf 'it applies exactly as written.\n'
+  printf 'The fork'"'"'s own docs could not be fetched, so that is upstream'"'"'s copy.\n'
+  printf 'Six things in it are wrong for this sandbox. Everything else in it\n'
+  printf 'applies exactly as written.\n'
   printf '\n1. Its Core Workflow opens with\n'
   printf '     export PINCHTAB_SESSION=$(pinchtab session create --agent-id ...)\n'
   printf '   DO NOT RUN THAT. The session above already exists and a shim attaches\n'
@@ -285,6 +300,13 @@ print_docs() {
   printf '   300ms with no DOM change, scrolling or spinner, 2s at most. Page-changing\n'
   printf '   commands already run it before their screenshot, and --snap, --snap-diff\n'
   printf '   and --text run it before reading.\n'
+  printf '6. Where it chains steps with `&&` or adds `--snap-diff` to every action,\n'
+  printf '   run the steps between two looks as ONE `pinchtab execute-batch` instead,\n'
+  printf '   not `&&` or `;` (see "Batch what you can see" below): it stops at the\n'
+  printf '   first failure and prints one line per step.\n'
+}
+
+print_shared_notes() {
   printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
   printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
   printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
@@ -399,8 +421,8 @@ fi
 # Swap in our fork's build over the one npm just fetched. Upstream ships the
 # capsolver solver as an unimplemented stub, so captcha pages get detected and
 # then abandoned; the fork implements it and fixes the detection and reporting
-# bugs around it. Only the binary is replaced -- the npm package's bundled docs
-# and layout, which later steps read, stay as they are.
+# bugs around it. Its skill files come from the same release (below); the rest
+# of the npm package's layout stays as it is.
 FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-amd64}
 FORK_NOTE='upstream npm build'
 if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
@@ -411,6 +433,7 @@ if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
        && [ -s /tmp/pinchtab-fork ]; then
     # Replace by rename so a half-written download can never become the binary.
     chmod +x /tmp/pinchtab-fork && mv -f /tmp/pinchtab-fork "$MANAGED"
+    fork_ok=1
     echo "fork build installed: $MANAGED"
     FORK_NOTE="fork build ($("$REAL" --version 2>/dev/null || echo unknown))"
   else
@@ -419,6 +442,22 @@ if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
     rm -f /tmp/pinchtab-fork
     failed=1
     FORK_NOTE='FORK DOWNLOAD FAILED -- no captcha solving'
+  fi
+  # The docs describe the fork's binary, so they come only with it.
+  FORK_SKILL_URL=${PINCHTAB_FORK_SKILL_URL:-${FORK_BIN_URL%/*}/pinchtab-skill.tar.gz}
+  rm -rf "${FORK_DOCS%/*}.new" && mkdir -p "${FORK_DOCS%/*}.new"
+  if [ -n "${fork_ok:-}" ] && curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" "$FORK_SKILL_URL" | tar xzf - -C "${FORK_DOCS%/*}.new" 2>/dev/null \
+     && [ -s "${FORK_DOCS%/*}.new/pinchtab/SKILL.md" ]; then
+    rm -rf "${FORK_DOCS%/*}" && mv "${FORK_DOCS%/*}.new" "${FORK_DOCS%/*}"
+    PINCHTAB_DOCS=$FORK_DOCS
+    FORK_NOTE="$FORK_NOTE, its own docs"
+  else
+    # A copy from an earlier run may describe another build; upstream's, with
+    # corrections, is the honest fallback.
+    rm -rf "${FORK_DOCS%/*}.new" "${FORK_DOCS%/*}"
+    PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
+    echo "fork docs download failed; printing the npm package's upstream docs with corrections" >&2
+    FORK_NOTE="$FORK_NOTE, upstream docs"
   fi
 fi
 note 'pinchtab install' "OK -- $FORK_NOTE"

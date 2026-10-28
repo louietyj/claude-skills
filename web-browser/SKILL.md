@@ -17,9 +17,9 @@ your context; truncating it silently costs you them.
 
 Run it, then use the browser. It installs pinchtab, sets up the browser, opens
 the capability gates, starts the server, creates the session, proves the chain
-works with a test nav -- and prints pinchtab's own bundled instructions in full,
-with the corrections that apply in this sandbox. Nothing to `cat` afterwards and
-no other skill to load. Idempotent -- re-run it rather than debugging whether it
+works with a test nav -- and prints pinchtab's own instructions in full (the
+fork's, written for this setup) followed by this file. Nothing to `cat`
+afterwards and no other skill to load. Idempotent -- re-run it rather than debugging whether it
 ran.
 
 Its output is a transcript of work already done. Do not re-run the commands it
@@ -126,8 +126,9 @@ dialog, but the screenshot still shows the page behind it.
 So run every step whose target you can see right now as ONE `execute-batch`
 -- refs from your last snap, `text:` for a control you can see, coordinates
 for the rest -- and look again after anything that opens or moves things (a
-dropdown, a calendar, a dialog, a new page). One command per line, as you
-would type it after `pinchtab`:
+dropdown, a calendar, a dialog, a new page). It is the one way to chain
+steps here: not `&&`, and never `;`, which clicks on past a step that
+failed. One command per line, as you would type it after `pinchtab`:
 
 ```bash
 # The screenshot shows a cookie dialog over a search form; the snap lists only the dialog.
@@ -503,10 +504,12 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
    request-credential run rt-... -- sh -c '
      # Screenshots cannot be redacted, and text fields echo val= in snaps.
      pinchtab attr "#password" type | grep -qw password || { echo "not a password field" >&2; exit 1; }
-     pinchtab fill "#email" "$CRED_USERNAME"
-     pinchtab fill "#password" "$CRED_PASSWORD"
-     pinchtab click "#sign-in"
-     pinchtab snap
+     # The batch expands $CRED_* itself; its status lines show each step as written.
+     pinchtab execute-batch --snap <<"EOF"
+fill "#email" "$CRED_USERNAME"
+fill "#password" "$CRED_PASSWORD"
+click "#sign-in"
+EOF
    '
    ```
    Before asking, find each step's selectors without the password (snap,
@@ -529,5 +532,8 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
 - Never run `pinchtab skill update` or `pinchtab skill sync` -- they write
   into other agent skill directories found on the machine. This skill is
   self-contained by design.
+- The browser, profile and security gates are settled by setup.sh. Do not
+  reconfigure `browser.binary`, `browsers.default` or the security gates
+  (`trustLoopbackProxy` included: it is set to match the egress proxy here).
 - Leave the server running when you're done. Follow-up questions often need
   the browser again, and the sandbox is disposable anyway.

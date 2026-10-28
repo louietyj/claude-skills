@@ -33,4 +33,4 @@ The encoder, serial and `tracking.dat` tests are self-contained. The PDF and tem
 
 `fonts/USPSIMBStandard.ttf` is redistributed under the [USPS IMb license](https://postalpro.usps.com/onecodesolution), which allows it provided the copyright notice, conditions and disclaimer travel with it (`fonts/USPS-IMb-LICENSE.txt`, included in the zip) and the font isn't sold on its own.
 
-The Dropbox connector can't upload binaries, so the skill hands over the files as downloads and he saves them to `Sent Mail` himself.
+The Dropbox connector can't upload binaries, so the skill uploads them to the durable filesystem's app folder with `cfs` and has the connector move them into `Sent Mail`.

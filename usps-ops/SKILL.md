@@ -45,7 +45,12 @@ Read through the Dropbox connector. For binaries, get a `download_link` and `cur
 - Finished mail: `/Sent Mail/`
 - Tracker: `/QuickLetterTracker/tracking.dat`. Never touch `prefs.dat` or `qlprefs` beside it.
 
-The connector cannot upload binaries. Deliver `.docx`/`.pdf` files as downloads (save them to `/mnt/user-data/outputs/`) and tell him to drop them in `Sent Mail`.
+The connector cannot upload binaries, but it can move them. Put each `.docx`/`.pdf` into `Sent Mail` in two steps:
+
+1. `cfs upload /outbox/<file> --from <local file> --new` (the durable filesystem; `session-init` sets it up).
+2. Connector `move` from `/Apps/louietyj-claude-ai/outbox/<file>` to `/Sent Mail/<file>`. He approves each move.
+
+If `cfs` isn't available or he declines a move, deliver those files as downloads (save them to `/mnt/user-data/outputs/`) and tell him to drop them in `Sent Mail`.
 
 ## Naming
 
@@ -135,7 +140,7 @@ Check:
 - the barcode renders as bars;
 - `imb.py decode <the bars you inserted>` equals our IMb.
 
-Then save the deliverables, including the renamed postage PDF, under their final names and list them for him.
+Then put the deliverables, including the renamed postage PDF, in `Sent Mail` under their final names (see Dropbox) and list them for him.
 
 **He does the final polish in Word.** Point out layout problems you can see, such as an address line that wraps or postcard text cut off at the bottom. Fix them only if he asks you to polish. If he does, the fixes are your call: a smaller `font_size` (his postcards have used 9pt text), shorter wording, or a wider text box.
 

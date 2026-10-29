@@ -278,7 +278,12 @@ open_session() {
   # creates it on first use) and its screenshot -- because a misconfigured
   # browser binary fails here or else on the caller's first real page. The title
   # too: a nav that lands on Chrome's own error page (a dead proxy) exits 0.
-  NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1); nav_rc=$?
+  # A cold browser can take more than the server's 10s to come up after a
+  # restart; that 503 means wait, not broken.
+  for _ in 1 2 3 4; do
+    NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1); nav_rc=$?
+    case "$NAV_OUT" in *'instance not ready'*) sleep 5 ;; *) break ;; esac
+  done
   NAV_TITLE=$("$SHIM" title 2>/dev/null)
   if [ $nav_rc -eq 0 ] && [ "$NAV_TITLE" = "Example Domain" ]; then
     rm -f "$SHOT_LEDGER"   # the caller's first `shots` shouldn't list example.com

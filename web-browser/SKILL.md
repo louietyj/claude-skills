@@ -16,16 +16,14 @@ bash "$(ls -1dt /mnt/skills/*/web-browser ~/.claude/skills/synced/*/web-browser 
 your context; truncating it silently costs you them.
 
 Run it, then use the browser. It installs pinchtab, sets up the browser, opens
-the capability gates, starts the server, creates the session, proves the chain
-works with a test nav -- and prints pinchtab's own bundled instructions in full,
-with the corrections that apply in this sandbox. Nothing to `cat` afterwards and
-no other skill to load. Idempotent -- re-run it rather than debugging whether it
-ran.
+the capability gates, starts the server, proves the chain works with a test
+nav -- and prints pinchtab's own instructions in full, written for this setup.
+Nothing to `cat` afterwards and no other skill to load. Idempotent -- re-run it
+rather than debugging whether it ran.
 
 Its output is a transcript of work already done. Do not re-run the commands it
-shows, do not re-read the files it prints, and do not create or export
-`PINCHTAB_SESSION` yourself no matter what pinchtab's own docs say -- setup.sh
-made one and a shim attaches every command to it.
+shows, do not re-read what it prints, and never create or export
+`PINCHTAB_SESSION`: pinchtab keeps one session per agent across bash calls.
 
 The lookup is deliberate: claude.ai chat puts skills under `/mnt/skills/user/`
 or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
@@ -34,131 +32,26 @@ or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
 ## Then
 
 ```bash
-pinchtab nav <url> --block-images
-pinchtab text
+pinchtab execute-batch <<'EOF'
+nav <url> --block-images
+EOF
 ```
+
+and view `latest-small.jpg` in the same message. Every browser step is a line
+of a batch, as pinchtab's instructions describe.
 
 `pinchtab` is this sandbox's own browser, also callable as `pinchtab-local`.
 If setup.sh's summary lists "Louie's Chrome", there is a second one,
 `pinchtab-windows`: his real Chrome on his laptop, logged in to his accounts.
 If it lists "cloud browser", there is `pinchtab-cloud`: a hosted browser on a
-residential IP, for sites that ban this sandbox. All take the same commands;
-see their sections below before touching either.
+residential IP, for sites that ban this sandbox. All take the same batches,
+with their own screenshot directories; see their sections below before
+touching either.
 
-The session outlives the bash call, so multi-step flows work across calls --
-nav in one, click in the next, read state in a third. The tab, its DOM state
-and typed form values all persist; you never replay earlier steps. If the
-session goes stale the shim recreates it, but that gives you a fresh tab with
-no page loaded, so re-`nav` after seeing `no_current_tab`.
-
-## Look at the page, not just its text
-
-A small screenshot costs ~370 tokens. `text` and `snap` on a real page
-usually cost several times that, and they still hide things:
-
-- `text` drops everything that isn't prose. A page whose text reads like the
-  answer often has the rest of it behind a tab, a "show more", an
-  accordion or a dropdown. `snap` lists those controls, but agents stop at
-  `text`, never notice them, and report as missing data that was one click
-  away.
-- Neither sees inside images. A restaurant menu, a price list or a timetable
-  posted as a picture is invisible to both, and gets reported as "not
-  listed".
-
-So view the small shot LIBERALLY at the end of every operation: after a
-`nav`, and after a click or a chain of steps that should have changed
-something. A chain is ONE operation -- look once at its end, not between its
-steps. What to avoid is ending an operation on the accessibility tree alone:
-unless you are certain, the screenshot is what shows a popup, the wrong page or
-a click that did nothing. Before concluding something isn't on a page, look at
-it.
-
-Every command that can change the page (`nav`, `click`, `fill`, `press`,
-`scroll`, ...) has ALREADY saved a screenshot at two sizes, and copied both
-to fixed paths, which setup.sh's output names:
-
-```
-<shot dir>/latest-small.jpg    small: view this by default
-<shot dir>/latest.jpg          full size
-```
-
-Because the path is known in advance, view it in the same message as the
-command: issue the Bash call and the image read as parallel tool calls.
-Claude Code and Cowork run the Bash call to completion before the read, so the
-image is this command's shot and costs no extra round trip. If the shot
-failed, the file is missing rather than stale.
-
-The small one is still readable. Open the full-size one for small print, or
-when a click has to be exact. Click what you see with `click --x --y` and
-`--unscale last-small` or `--unscale last-full`, naming which of the last
-shot's two images you read the point off. The shim divides by that image's
-scale; never do that arithmetic yourself:
-
-```bash
-pinchtab click --x 271 --y 130 --unscale last-small    # a point on latest-small.jpg
-```
-
-`--unscale` works on every command that takes `--x`/`--y` (`click`, `hover`,
-`mouse down|move|up`, ...). It takes the scale of the newest shot. Inside a
-chain that is a step later than the one you looked at, which is the same scale
-unless the window was resized in between; in Louie's Chrome it follows his
-window size, so look again after he resizes.
-
-## Earlier shots
-
-`latest` is overwritten by the next command, but every shot is also kept,
-numbered. `pinchtab shots` lists those since it last ran (the last 10, newest
-last), so after a chain you can see what an earlier step saw. Filter, grep or
-discard command output freely; the shots don't depend on it.
-
-When text or a snap comes back empty, half-loaded, or doesn't add up -- a
-canvas, a map, refs pointing at the wrong thing -- VIEW THE IMAGE FIRST. One
-look answers what ten calls of debugging in text won't.
-
-## Chain what you can see
-
-Each tool call replays your whole context, so the number of calls is most of
-what a task costs. Your last screenshot is a list of targets, not only a
-check: everything visible in it can be clicked by coordinates, whether or not
-your last snap lists it. A snap taken while a dialog is open lists only the
-dialog, but the screenshot still shows the page behind it.
-
-So chain every step whose target you can see right now in ONE Bash call
-joined with `&&` -- refs from your last snap, `text:` for a control you can
-see, coordinates for the rest -- and look again after anything that opens or
-moves things (a dropdown, a calendar, a dialog, a new page):
-
-```bash
-# The screenshot shows a cookie dialog over a search form; the snap lists only the dialog.
-pinchtab click e4 && pinchtab click --x 134 --y 74 --unscale last-small \
-  && pinchtab click --x 390 --y 107 --unscale last-small && pinchtab keyboard type "Glasg"
-# The suggestions are now open: view the screenshot, then chain the next visible steps.
-```
-
-Don't chain into what you haven't seen: a dropdown's options or a calendar's
-layout are unknown until you look. Inside one look, though, don't stop early:
-
-- `&&` stops at the first failure, so a chain never clicks on past a step
-  that did not happen. `pinchtab shots` lists every step's screenshot if you
-  need to see where it went wrong.
-- `text:` REFUSES rather than guesses: two equally good matches fail
-  `selector is ambiguous` (naming them); `nth:N:text:...` then picks one.
-- An action waits up to 3 s for its target to appear, so a control that is
-  still rendering in doesn't fail the chain.
-
-Also:
-
-- Refs from your last snap stay valid while you work on the same page:
-  opening a dropdown or dialog, typing, or a click that only changes the URL
-  (`OK navigated` on a single-page app) keeps them. They die when a new page
-  loads, and using a dead one fails loudly (`ref eN not found`); snap then.
-- While a dialog is open, a ref outside it is refused (`outside the topmost
-  dialog`). Some sites open a dialog holding a copy of the field you clicked
-  (Google Flights' "Where to?"): type into the copy, by `text:` or a snap.
-- Coordinates hold only while the layout stays put, which is why the look
-  comes after anything that opens or moves things.
-- End a chain before anything whose result you need to read (search results,
-  prices), and view its last screenshot.
+The tab outlives the bash call: its page, DOM state and typed form values
+persist, so you never replay earlier steps. If the session goes stale pinchtab
+makes a new one, but that is a fresh tab with no page loaded, so `nav` again
+after `no_current_tab`.
 
 ## Subagents for involved navigation
 
@@ -207,11 +100,11 @@ you how to drive it, including a prefix you must put on every Bash call:
 
 bash "$(ls -1dt /mnt/skills/*/web-browser ~/.claude/skills/synced/*/web-browser 2>/dev/null | head -1)/setup.sh" --subagent <name>
 
-Report what you saw on the page, not only what `pinchtab text` said.
+Report what you saw on the page, not only what `text` said.
 If the result is more than a few lines of data, don't copy it into your
-reply: write it to a file (on the page with the answer, `pinchtab text >
-/tmp/<name>-result.txt`; screenshots are fine too) and return the paths
-with a short summary.
+reply: write it to a file (on the page with the answer, the batch step
+`text > /tmp/<name>-result.txt`; screenshots are fine too) and return the
+paths with a short summary.
 ```
 
 Then one clear navigation task, and which of these to come back with:
@@ -235,36 +128,6 @@ in Claude Code) rather than browsing yourself or spawning a fresh one: it
 still has its tab, its page state and what it learned about the site. Take
 over directly only for short, precise finishing work (option 3).
 
-## Files
-
-A PDF, image or other file URL is not a page: `text` and `snap` see nothing
-of it, and `nav` says so in a HINT. Save it instead:
-
-```bash
-pinchtab download '<url>' -o /tmp/<name>
-```
-
-## Where things are on the page
-
-For layout questions (seat maps, charts, which tier or row a thing is in),
-ask the live page with `pinchtab eval` and `getBoundingClientRect()`. Don't
-parse coordinates out of HTML: SVG `cx`/`cy`, `x`/`y` and inline positions
-come before transforms are applied. In one run they put seats at negative y,
-stacked 82 placeholders at one point, and misplaced a whole tier boundary.
-
-But if you are several evals into reverse-engineering the DOM -- guessing
-class names, walking nesting, working out which element is which -- to answer
-something you could see, stop and look. A small shot costs ~370 tokens,
-less than most eval output. For detail, zoom in on one element:
-
-```bash
-pinchtab screenshot -s '<selector>' -o /tmp/crop.jpg   # full resolution
-pinchtab screenshot --annotate -o /tmp/refs.jpg          # numbered ref boxes
-```
-
-A crop's pixels are not click coordinates; the full-size shot's, divided by
-its scale, are.
-
 ## The browser
 
 The runtime is
@@ -287,100 +150,6 @@ The window is a fixed 1440x900 (a 1440x779 viewport). Do not enlarge it with
 you see them, and coordinates read off them land short of the target. (Louie's
 Chrome is whatever size he left it; its shots are shrunk to fit instead, and
 never resize or set the viewport of his browser.)
-
-## Captchas
-
-Nothing to call: `nav`, and any later action, solves a challenge on its own when
-it detects one (~$0.001, 20-60s), and says nothing on ordinary pages. When there
-is one, the HINT puts it in one of three states. Do what that state says:
-
-- **Still pinchtab's**: being solved, or to be retried by pinchtab itself at a
-  stated time. Don't touch the page and don't navigate away (a new navigation
-  loads a fresh challenge and cancels the retry). Run the check command the
-  HINT gives, when it says.
-- **Solved**: proceed. A token solve doesn't tick the box, so a solved page
-  still shows an unchecked "I'm not a robot", and `snap` still lists it.
-  Leave it alone -- clicking it discards the solve. Fill the form, press
-  submit, read the page.
-- **Given up** ("pinchtab has given up on it; it is yours to try"): the
-  challenge is yours now, with the tools below.
-- **Blocked outright** (a blank page, or "Sorry, there was a problem accessing
-  the page"): no solver passes it, but a fresh browser has. Run
-  `pinchtab server restart`, re-run setup.sh, and nav to the page again. Do
-  that once; if it's still blocked, go on without the page.
-
-`nav --json` carries the same HINT (`autoSolve.hint`) and each solver's attempt
-and why it failed (`autoSolve.history`).
-
-`nav` covers reCAPTCHA (v2, Enterprise, invisible), Turnstile, hCaptcha,
-Arkose FunCaptcha, GeeTest v4, MTCaptcha, AWS WAF, Tencent, NetEase Yidun,
-Yandex SmartCaptcha, Prosopo and Lemin. Tencent and Yidun are solved once their
-puzzle is showing: after the click that opens it, or once it is scrolled into
-view. reCAPTCHA, hCaptcha and Turnstile are also solved inside an embedded
-form's iframe, even one from another site. People solve hCaptcha, FunCaptcha
-and the 2Captcha-only vendors, so those take one to three minutes. A solve is
-paid for once, and acting on the solved page does not buy another.
-
-Invisible reCAPTCHA v3 is the exception: it shows nothing, it only scores the
-browser when a form is submitted, and this browser's own score usually passes.
-So `nav` leaves it alone and its HINT says so. If submitting then fails a
-security or robot check ("Security check didn't pass"), reload, fill the form
-again, and run `pinchtab solve` right before the click that submits. It buys a
-high-score token (~$0.003) for the page to send instead. Sites refuse some
-bought tokens as well, so if that fails too, one more try may pass.
-
-AliExpress's "Please drag the slider to verify" page and its "We need to check
-if you are a robot" overlay are covered too. From this sandbox they come back
-every 10-30 item pages. Their outright block has been cleared by a browser
-restart (above).
-
-GeeTest v3's slide puzzle is solved on its own too, by `nav` or the next
-action: the HINT says "solved by vision". Other puzzles without a sitekey (drag
-the piece into the gap, turn the image upright, pick the matching tiles, read a
-flickering GIF) are not. Look at the screenshot, name the parts with
-selectors, and hand them over:
-
-```bash
-pinchtab vision slider <piece> --background <bg> --handle <handle>
-pinchtab vision rotate <image> [--background <bg>] --handle <h> --track <t>
-pinchtab vision select <image> --question "all shoes" --click
-pinchtab vision ocr <gif>
-```
-
-It reads the images off the page, costs about $0.002, and drags with a human
-path. For a bare "slide to verify" bar with no picture, you need no answer,
-only a human-looking drag to the end:
-`pinchtab drag <handle> --drag-x <track width> --humanize`.
-
-Vision can be wrong. A puzzle with a decoy gap got a distance that left the
-piece near where it started. When a Vision drag fails, place the piece
-yourself: press, move, and look before letting go.
-
-```bash
-pinchtab mouse down --x <handle x> --y <y>
-pinchtab mouse move --x <x2> --y <y>    # repeat; its screenshot shows the piece
-pinchtab mouse up --x <x2> --y <y>      # once the piece sits in the gap
-```
-
-Keep the button down between calls. The page sees one continuous drag, and
-that passed a slider Vision had failed.
-
-A puzzle inside an iframe, even one from another site, is reachable with
-`pinchtab eval --frame <part of its URL> '<js>'`; `pinchtab eval` alone only
-sees the top page, whatever `pinchtab frame` says.
-
-Most pages never reach this. Cloudflare and DataDome mostly challenge only a
-visitor they score badly, and cloak's fingerprint scores fine; SteamDB, g2.com
-and scrapingcourse's own "Cloudflare challenge" all load untouched. Some sites
-put Cloudflare's "Just a moment..." page in front of every visitor --
-egov.uscis.gov does -- and cloak gets through it on its own in a few seconds;
-`nav` waits for that and reports it solved like any other. Paid solving is for
-sites that gate every visitor behind a real captcha -- archive.today and its
-mirrors (archive.ph, archive.is, archive.md) are the ones you will hit.
-
-This runs a [fork](https://github.com/louietyj/pinchtab) because upstream ships
-the solver as a stub. Without keys the solvers are absent and nothing else
-changes.
 
 ## Louie's Chrome (pinchtab-windows)
 
@@ -408,15 +177,19 @@ Denied, or left unanswered: stop and say so; don't ask again unless he tells
 you to. "Could not attach to Chrome" or "is Louie's laptop awake?": tell him
 what it said, and go on without his browser.
 
-**2. Work in your own tab.** Your first command is
-`pinchtab-windows nav <url> --new-tab`; later commands follow that tab. A
-bare `nav` without `--new-tab` drives the tab HE is looking at. When he points
-you at one of his ("this tab", "the tab I'm on"), take it:
+**2. Work in your own tab.** Your first step is `nav <url> --new-tab`; later
+steps follow that tab. A bare `nav` without `--new-tab` drives the tab HE is
+looking at. When he points you at one of his ("this tab", "the tab I'm on"),
+take it:
 
 ```bash
 pinchtab-windows active-tab            # his tabs, the one he's focused first
-pinchtab-windows snap --tab <id>       # pass --tab <id> on every command for his tab
+pinchtab-windows execute-batch <<'EOF'
+snap --tab <id>
+EOF
 ```
+
+and pass `--tab <id>` on every step for his tab.
 
 He watches it happen, and each screenshot brings your tab to the front. Never
 close or navigate a tab of his he didn't hand you, and close your own when
@@ -441,8 +214,11 @@ driven like `pinchtab`. It costs money ($5 per GB, $0.02 an hour), so use it
 only after `pinchtab` came back blocked, never as the default.
 
 ```bash
-pinchtab-cloud nav <url> --block-images   # starts one if none is running (US IP)
-pinchtab-cloud text
+# Starts one if none is running (US IP).
+pinchtab-cloud execute-batch <<'EOF'
+nav <url> --block-images
+text
+EOF
 ```
 
 - **Don't stop it.** Not at the end of a task, not at the end of your turn:
@@ -476,16 +252,18 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
 2. **Credentials: request-credential, the whole login in one `run`.** It gets
    the login from Louie's password manager and hands it to the script as
    `$CRED_USERNAME`/`$CRED_PASSWORD`, redacts the script's output, then deletes
-   the login. The session file keeps it on the same tab, and the cookies outlive
-   the run.
+   the login. pinchtab keeps it on the same tab, and the cookies outlive the
+   run.
    ```bash
    request-credential run rt-... -- sh -c '
      # Screenshots cannot be redacted, and text fields echo val= in snaps.
-     pinchtab attr "#password" type | grep -qw password || { echo "not a password field" >&2; exit 1; }
-     pinchtab fill "#email" "$CRED_USERNAME"
-     pinchtab fill "#password" "$CRED_PASSWORD"
-     pinchtab click "#sign-in"
-     pinchtab snap
+     # The batch expands $CRED_* itself; its status lines show each step as written.
+     pinchtab execute-batch --snap <<"EOF"
+   expect "#password[type=password]"
+   fill "#email" "$CRED_USERNAME"
+   fill "#password" "$CRED_PASSWORD"
+   click "#sign-in"
+   EOF
    '
    ```
    Before asking, find each step's selectors without the password (snap,
@@ -494,8 +272,10 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
    `run`: a snap in a later call is not redacted. A subagent exports
    `PINCHTAB_AGENT` before `run`; it is passed on.
    Only for a login his password manager does not have, fall back to
-   request-text: `pinchtab fill '#password' "$(request-text wait rt-... | jq -j .password)"`
-   after the same type check, then `request-text close`. Never to a file or the store.
+   request-text: `PW=$(request-text wait rt-... | jq -j .password)`, then a
+   batch with the same `expect` and `fill "#password" "$PW"` (export it, since
+   the batch reads the environment), then `request-text close`. Never to a file
+   or the store.
 3. **Email and SMS MFA: just do it.** Credentials imply permission to read
    the codes from Gmail, or from his text messages through mcp-android. For
    TOTP or push, ask the user.
@@ -505,8 +285,8 @@ own accounts. That overrides pinchtab's "never enter credentials" default.
 
 ## Notes
 
-- Never run `pinchtab skill update` or `pinchtab skill sync` -- they write
-  into other agent skill directories found on the machine. This skill is
-  self-contained by design.
+- The browser, profile and security gates are settled by setup.sh. Do not
+  reconfigure `browser.binary`, `browsers.default` or the security gates
+  (`trustLoopbackProxy` included: it is set to match the egress proxy here).
 - Leave the server running when you're done. Follow-up questions often need
   the browser again, and the sandbox is disposable anyway.

@@ -1,8 +1,12 @@
 #!/bin/bash
 # One-touch web-browser boot. Installs and configures pinchtab (real Chrome
-# via CLI/HTTP), starts the server, mints a session -- and then prints pinchtab's
-# own bundled instructions in full, so the caller's next tool call is a real
+# via CLI/HTTP), starts the server, proves a page loads -- and then prints
+# pinchtab's own instructions in full, so the caller's next tool call is a real
 # browser command rather than another `cat`. Idempotent.
+#
+# Screenshots, sessions, --unscale and execute-batch live in the fork's binary,
+# switched on by cli.json. What stays here is install and configuration, and
+# thin wrappers for the two remote tiers (Louie's Chrome, the cloud browser).
 #
 # Deliberately NOT `set -e`. The stages are independent and a partial boot is
 # useful: a failed cloak install must not cost the caller a working browser.
@@ -16,7 +20,6 @@ failed=0
 fatal=0
 docs_repeat=0
 DOCS_MARK=/tmp/.web-browser-docs-printed
-SHOT_LEDGER_BASE=/tmp/pinchtab-shots-unseen
 DOTS='.........................................'
 RULE_H='════════'
 RULE_S='────────'
@@ -54,10 +57,9 @@ finish() {
     printf 'is printed above IN FULL and is in your\ncontext now'
   fi
   printf ' -- for the rest of the conversation, not just this turn.\n'
-  printf 'Do not cat it again, do not load the pinchtab skill, and do not re-run\n'
-  printf 'any step above; this output is a transcript of work already done, not a\n'
-  printf 'plan. The session exists: never create or export PINCHTAB_SESSION\n'
-  printf 'yourself, whatever that SKILL.md says.\n'
+  printf 'Do not run `pinchtab docs` again, and do not re-run any step above; this\n'
+  printf 'output is a transcript of work already done, not a plan. Sessions are\n'
+  printf 'handled for you: never create or export PINCHTAB_SESSION yourself.\n'
 
   if [ -n "$AGENT" ]; then
     printf '\n%s YOU ARE BROWSER AGENT %s %s\n' "$RULE_H" "$AGENT" "$RULE_H"
@@ -69,19 +71,27 @@ finish() {
     printf '  %s/latest-small.jpg\n' "$SHOT_DIR"
     printf 'If you re-run setup.sh, pass --subagent %s again: without it, it\n' "$AGENT"
     printf 'takes over the tab of the agent that spawned you.\n'
-    printf '\nNext: export PINCHTAB_AGENT=%s; pinchtab nav <url> --block-images\n' "$AGENT"
   else
-    printf '\nNext: pinchtab nav <url> --block-images\n'
+    printf '\nYour latest screenshot is always %s/latest-small.jpg\n' "$SHOT_DIR"
   fi
 
   if [ -x "$WIN_SHIM" ]; then
     printf '\nLouie'"'"'s own logged-in Chrome is `pinchtab-windows`, after he approves a\n'
-    printf 'grant -- see "Louie'"'"'s Chrome" in SKILL.md before using it.\n'
+    printf 'grant -- see "Louie'"'"'s Chrome" in SKILL.md before using it. Its shots:\n'
+    printf '  %s/latest-small.jpg\n' "$WIN_SHOT_DIR"
   fi
   if [ -x "$CLOUD_SHIM" ]; then
     printf '\nA cloud browser on a residential IP is `pinchtab-cloud`, for a site that\n'
     printf 'bans this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
+    printf 'Its shots: %s/latest-small.jpg\n' "$CLOUD_SHOT_DIR"
   fi
+
+  # Last, because it is what an agent reads right before its first command.
+  prefix=${AGENT:+export PINCHTAB_AGENT=$AGENT; }
+  printf '\nNext -- every browser step is a line of a batch, even a single one, and\n'
+  printf 'you view latest-small.jpg in the same message:\n\n'
+  printf "%spinchtab execute-batch <<'EOF'\n" "$prefix"
+  printf 'nav <url> --block-images\nEOF\n'
 
   if [ $failed -ne 0 ]; then
     printf '\nSome steps did not complete -- the summary above is the authority on\n'
@@ -114,41 +124,32 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-# The test nav goes through the shim, which reads the name from the environment.
+# pinchtab reads the name from the environment for this agent's tab and shots.
 [ -n "${PINCHTAB_AGENT:-}" ] && export PINCHTAB_AGENT
 
 printf '%s WEB BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
 printf 'instructions. Read all of it -- this is the only place those instructions\n'
-printf 'get printed, and the corrections to them that follow the file matter.\n'
-printf 'Then use the browser.\n'
+printf 'get printed. Then use the browser.\n'
 
 SKILL_DIR=$(cd "$(dirname "$0")" && pwd)
 NPM_ROOT="$(npm root -g)"
 REAL="$NPM_ROOT/pinchtab/bin/pinchtab"
 BIN_DIR="$(dirname "$(dirname "$NPM_ROOT")")/bin"
 SHIM="$BIN_DIR/pinchtab"
-# Cloud Claude Code has no /home/claude.
-WORK_DIR=/home/claude; [ -d "$WORK_DIR" ] || WORK_DIR=$HOME
-SESSION_BASE="${PINCHTAB_SESSION_FILE:-$WORK_DIR/.pinchtab-session}"
 PINCHTAB_DOCS="$NPM_ROOT/pinchtab/skills/pinchtab"
 READY_MARK=/tmp/.web-browser-ready
-# claude.ai shows the user everything under /mnt/user-data/outputs, so shots
-# live outside it there.
-SHOT_BASE=$HOME/pinchtab-shots
-[ -d /mnt/user-data/outputs ] && SHOT_BASE=/home/claude/pinchtab-shots
-SHOT_BASE=${PINCHTAB_SHOT_DIR:-$SHOT_BASE}
 
 # Agents browsing side by side name themselves with PINCHTAB_AGENT, for a tab,
-# shot directory and ledger each. The shim derives the same paths.
+# session, shot directory and ledger each. pinchtab derives the same paths:
+# <name>-shots/<agent>/ and /tmp/<name>-shots-unseen-<agent> for each tier.
 AGENT=${PINCHTAB_AGENT:-}
 case "$AGENT" in
   *[!A-Za-z0-9_-]*) printf 'a subagent name may hold only letters, digits, - and _\n' >&2; exit 2 ;;
 esac
-SESSION_FILE=$SESSION_BASE${AGENT:+-$AGENT}
-SHOT_LEDGER=$SHOT_LEDGER_BASE${AGENT:+-$AGENT}
+SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-shots}${AGENT:+/$AGENT}
+SHOT_LEDGER=/tmp/pinchtab-shots-unseen${AGENT:+-$AGENT}
 DOCS_MARK=$DOCS_MARK${AGENT:+-$AGENT}
-SHOT_DIR=$SHOT_BASE${AGENT:+/$AGENT}
 
 # Louie's own Chrome, reached through his laptop's gate; installed only when the
 # skill ships windows.json (host and gate key).
@@ -157,9 +158,7 @@ WINDOWS_PROTOCOL=1   # PROTOCOL in windows-gate's pinchtab_windows.py
 WIN_SHIM=$BIN_DIR/pinchtab-windows
 WIN_CONF=/tmp/.pinchtab-windows.conf
 WIN_HEADERS=/tmp/.pinchtab-windows-headers
-WIN_SHOT_BASE=$(dirname "$SHOT_BASE")/pinchtab-windows-shots
-WIN_SHOT_LEDGER=/tmp/pinchtab-windows-shots-unseen
-WIN_SHOT_DIR=$WIN_SHOT_BASE${AGENT:+/$AGENT}
+WIN_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-windows-shots}${AGENT:+/$AGENT}
 
 # A Browser Use cloud browser on a residential IP, for a site that bans this
 # sandbox's datacenter IP outright; installed only when there is a key.
@@ -167,9 +166,7 @@ CLOUD_KEY=${BROWSER_USE_API_KEY:-$(cat "$SKILL_DIR/browser-use.key" 2>/dev/null 
 CLOUD_SHIM=$BIN_DIR/pinchtab-cloud
 CLOUD_DIR=/tmp/.pinchtab-cloud
 CLOUD_PORT=9870
-CLOUD_SHOT_BASE=$(dirname "$SHOT_BASE")/pinchtab-cloud-shots
-CLOUD_SHOT_LEDGER=/tmp/pinchtab-cloud-shots-unseen
-CLOUD_SHOT_DIR=$CLOUD_SHOT_BASE${AGENT:+/$AGENT}
+CLOUD_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-cloud-shots}${AGENT:+/$AGENT}
 
 setup_cloud() {
   if [ -z "$CLOUD_KEY" ]; then
@@ -234,7 +231,7 @@ PY
 
 # --- 4. pinchtab's own instructions, in full ---------------------------------
 print_docs() {
-  begin "cat $PINCHTAB_DOCS/SKILL.md"
+  begin 'pinchtab docs'
   if [ $fatal -ne 0 ]; then
     printf 'SKIPPED -- pinchtab does not work; its instructions would be unusable.\n'
     end 1
@@ -243,8 +240,8 @@ print_docs() {
   fi
 
   # The sandbox is per-conversation, so this marker means the file was printed to
-  # THIS caller. Escalating to --cloak is a second run, and ~20KB of instructions
-  # it already has is the most expensive thing the script could reprint.
+  # THIS caller. Escalating to --cloak is a second run, and instructions it
+  # already has are the most expensive thing the script could reprint.
   if [ -f "$DOCS_MARK" ]; then
     printf 'SKIPPED -- already printed in full on an earlier run in this\n'
     printf 'conversation. Scroll back for it. If it is genuinely gone from your\n'
@@ -252,64 +249,19 @@ print_docs() {
     docs_repeat=1
     end 0
     note 'pinchtab SKILL.md' 'OK -- printed on an earlier run'
-  elif cat "$PINCHTAB_DOCS/SKILL.md"; then
+  elif "$SHIM" docs 2>/dev/null; then
+    # The fork's own docs, from the binary that runs them.
     touch "$DOCS_MARK"
     end 0
     note 'pinchtab SKILL.md' 'OK -- printed in full above'
   else
+    # The npm build: no execute-batch, no screenshots. Its upstream docs at least
+    # describe the commands it does have.
+    cat "$PINCHTAB_DOCS/SKILL.md"
+    printf '\nThis is the upstream build: no execute-batch and no automatic\n'
+    printf 'screenshots. Run commands one at a time and take `screenshot` yourself.\n'
     end 1
-    note 'pinchtab SKILL.md' 'FAILED -- read it yourself before using pinchtab'
-  fi
-
-  # Corrections come after the file, not before it: they only make sense once its
-  # text is in context, and stating them first invites reading the file for the
-  # rule they already overrode.
-  printf '\n%s CORRECTIONS TO THE FILE ABOVE %s\n' "$RULE_H" "$RULE_H"
-  printf 'Five things in that file are wrong for this sandbox. Everything else in\n'
-  printf 'it applies exactly as written.\n'
-  printf '\n1. Its Core Workflow opens with\n'
-  printf '     export PINCHTAB_SESSION=$(pinchtab session create --agent-id ...)\n'
-  printf '   DO NOT RUN THAT. The session above already exists and a shim attaches\n'
-  printf '   every command to it, across separate bash calls. Creating one by hand\n'
-  printf '   gets a 403, captures an empty string, and silently drives a blank tab.\n'
-  printf '2. Never run `pinchtab skill update` or `pinchtab skill sync`. They write\n'
-  printf '   into other agent skill directories found on the machine.\n'
-  printf '3. Anything it says about picking a browser or profile is already settled\n'
-  printf '   by the steps above -- do not reconfigure `browser.binary`, the security\n'
-  printf '   gates (trustLoopbackProxy included: it is set to match the egress\n'
-  printf '   proxy here), or `browsers.default`.\n'
-  printf '4. Its Safety Defaults forbid entering credentials. For accounts the\n'
-  printf '   user owns, follow "Logged-in accounts" in SKILL.md instead.\n'
-  printf '5. Skip `wait --load network-idle`: analytics keep most sites from ever\n'
-  printf '   going idle, so it just times out. `pinchtab wait --dom-quiet` waits for\n'
-  printf '   300ms with no DOM change, scrolling or spinner, 2s at most. Page-changing\n'
-  printf '   commands already run it before their screenshot, and --snap, --snap-diff\n'
-  printf '   and --text run it before reading.\n'
-  printf '\nThe tab, its DOM and typed form values persist across bash calls, so a\n'
-  printf 'multi-step flow never replays earlier steps. If the shim has to remint a\n'
-  printf 'session you get a fresh empty tab: re-`nav` after seeing `no_current_tab`.\n'
-  printf '\nEvery page-changing command has already saved a screenshot at the fixed\n'
-  printf 'paths below. When text or a snap looks wrong, VIEW THAT IMAGE before\n'
-  printf 'debugging in text. Filter output all you like: `pinchtab shots` lists the\n'
-  printf 'numbered shots of earlier steps.\n'
-  printf '\nThat file links a references/ directory. It is NOT printed here; read a\n'
-  printf 'page from it only if you actually need it:\n'
-  for f in "$PINCHTAB_DOCS"/references/*; do
-    [ -f "$f" ] && printf '  %s\n' "$f"
-  done
-  printf '\nThe latest screenshot is also always at these fixed paths, so you can\n'
-  printf 'view it in the same message as the command that took it:\n'
-  printf '  %s/latest-small.jpg   (small)\n' "$SHOT_DIR"
-  printf '  %s/latest.jpg         (full size)\n' "$SHOT_DIR"
-  if [ -f "$WINDOWS_JSON" ]; then
-    printf 'and for pinchtab-windows, Louie'"'"'s Chrome:\n'
-    printf '  %s/latest-small.jpg\n' "$WIN_SHOT_DIR"
-    printf '  %s/latest.jpg\n' "$WIN_SHOT_DIR"
-  fi
-  if [ -n "$CLOUD_KEY" ]; then
-    printf 'and for pinchtab-cloud:\n'
-    printf '  %s/latest-small.jpg\n' "$CLOUD_SHOT_DIR"
-    printf '  %s/latest.jpg\n' "$CLOUD_SHOT_DIR"
+    note 'pinchtab SKILL.md' 'DEGRADED -- upstream docs; the fork did not install'
   fi
 
   # A subagent never loaded this skill, so it gets the skill's own SKILL.md too:
@@ -322,15 +274,8 @@ print_docs() {
 }
 
 open_session() {
-  # Create the session now: makes the notice below true, and warms the first nav.
-  SID=$("$REAL" session create --agent-id "${AGENT:-claude}" 2>/dev/null | tr -d '\n' || true)
-  case "$SID" in
-    ses_*) printf '%s' "$SID" > "$SESSION_FILE" ;;
-    *)     rm -f "$SESSION_FILE" ;;   # shim will create one lazily on first use
-  esac
-
-  # Through the shim, not $REAL: this is the only thing that exercises the whole
-  # chain -- server, browser launch, session resolution -- and a misconfigured
+  # The whole chain -- server, browser launch, the agent's session (pinchtab
+  # creates it on first use) and its screenshot -- because a misconfigured
   # browser binary fails here or else on the caller's first real page. The title
   # too: a nav that lands on Chrome's own error page (a dead proxy) exits 0.
   NAV_OUT=$("$SHIM" nav https://example.com --block-images 2>&1); nav_rc=$?
@@ -338,11 +283,11 @@ open_session() {
   if [ $nav_rc -eq 0 ] && [ "$NAV_TITLE" = "Example Domain" ]; then
     rm -f "$SHOT_LEDGER"   # the caller's first `shots` shouldn't list example.com
     touch "$READY_MARK"
-    echo "server up, session ${SID:-<lazy>}, test nav OK"
+    echo "server up, session ready, test nav OK"
     end 0
     note 'server + session' 'OK -- session is already initialized'
   else
-    echo "server up, session ${SID:-<lazy>}, but the test nav FAILED:" >&2
+    echo "server up, but the test nav FAILED:" >&2
     grep '^Error' <<<"$NAV_OUT" >&2
     echo "page title: '$NAV_TITLE' (expected 'Example Domain')" >&2
     end 1
@@ -354,7 +299,9 @@ open_session() {
 # --- attach: joining a browser this sandbox already runs ----------------------
 # The full setup restarts the server, closing every other agent's tab mid-flow,
 # so once one has passed its test nav, later runs only open their own session.
-if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && grep -qs 'installed by web-browser' "$SHIM"; then
+# `docs` exists only in a fork build this script linked in, so an older install
+# (a shell shim, or npm's launcher) gets the full setup.
+if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && [ -L "$SHIM" ] && "$SHIM" docs >/dev/null 2>&1; then
   TOTAL=2
   begin "open a session${AGENT:+ for agent $AGENT} in the running browser"
   open_session
@@ -371,8 +318,9 @@ rm -f "$READY_MARK"
 # --- 1. the package ----------------------------------------------------------
 begin 'install pinchtab'
 
-# A shim from a previous run would open a session before the server exists, so
-# drop it and drive setup through $REAL directly. It is reinstalled at the end.
+# A shell shim from an older run of this script would open a session before the
+# server exists, so drop it and drive setup through $REAL directly. `pinchtab` is
+# linked to the binary at the end.
 [ -f "$SHIM" ] && [ ! -L "$SHIM" ] && rm -f "$SHIM" || true
 
 # Check the package, not `command -v pinchtab`: the shim satisfies that test
@@ -426,6 +374,9 @@ note 'pinchtab install' "OK -- $FORK_NOTE"
 # --- 2. a browser for it to drive --------------------------------------------
 begin 'find a browser runtime'
 BROWSER_NOTE=''
+# Step 3 restarts it anyway; stopped now, the config writes below don't each
+# print "restart it to apply".
+"$REAL" server stop >/dev/null 2>&1 || true
 
 # A patched Chromium that ordinary bot detection does not reject on
 # fingerprint. Default at 17.5s cold against 6.6s for plain Chrome, ~12s of
@@ -597,7 +548,7 @@ end 0
 note 'browser runtime' "$BROWSER_NOTE"
 note 'captcha solver' "$SOLVER_NOTE"
 
-# --- 3. server, session shim, session ----------------------------------------
+# --- 3. server, the pinchtab link and the remote-tier wrappers --------------
 begin 'start server and mint a session'
 
 "$REAL" server stop >/dev/null 2>&1 || true
@@ -605,33 +556,37 @@ begin 'start server and mint a session'
 sleep 2
 
 # npm's bin/pinchtab is a Node launcher that exits 0 whatever the binary
-# returned, so the shim runs the binary itself and callers get real exit codes.
+# returned, so `pinchtab` is linked straight to the binary and callers get real
+# exit codes.
 GO_BIN=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
 [ -x "$GO_BIN" ] || GO_BIN=$REAL
 
-# Session shim. Callers never manage PINCHTAB_SESSION: the shim resolves one on
-# first use, reuses it across bash calls, and recreates it if it goes stale.
-#
-# Installed LAST and unconditionally, because `npm install -g` recreates the bin
+# Screenshots after every page-changing command, and one agent session per
+# PINCHTAB_AGENT kept across bash calls (recreated if it goes stale).
+python3 - "$(dirname "$("$REAL" config path)")/cli.json" <<'PY'
+import json, sys
+json.dump({"autoshot": True, "stickySession": True}, open(sys.argv[1], "w"))
+PY
+
+# Linked LAST and unconditionally, because `npm install -g` recreates the bin
 # symlink and would otherwise wipe it. The `rm -f` is load-bearing: that entry is
-# a SYMLINK into the package, so writing through it overwrites pinchtab's own
-# entry point and bricks the install with no backup.
-#
-# One body, two headers: `pinchtab` (alias `pinchtab-local`) and `pinchtab-windows`,
-# each with its own shot directory, ledger and counter.
-rm -f "$SHIM" "$SESSION_FILE"
-shim_header() {  # $1 tier, $2 command name, $3 shot dir, $4 ledger, $5 counter
+# a SYMLINK into the package, so writing through it would overwrite pinchtab's
+# own entry point and brick the install with no backup.
+rm -f "$SHIM"
+ln -s "$GO_BIN" "$SHIM"
+ln -sf "$GO_BIN" "$BIN_DIR/pinchtab-local"
+
+# The remote tiers, `pinchtab-windows` and `pinchtab-cloud`: one body, two
+# headers. Each reaches its browser through its own server and token, then runs
+# the same binary, which keeps its shots apart by PINCHTAB_NAME.
+wrapper_header() {  # $1 tier, $2 command name
   cat <<SHIM_EOF
 #!/bin/sh
-# $2 shim -- installed by web-browser/setup.sh. Do not edit in place;
+# $2 -- installed by web-browser/setup.sh. Do not edit in place;
 # setup.sh rewrites it on every run.
 REAL=$GO_BIN
 TIER=$1
 NAME=$2
-SESSION_BASE_DEFAULT=$SESSION_BASE
-SHOT_BASE_DEFAULT=$3
-L=$4
-N=$5
 WIN_CONF=$WIN_CONF
 WIN_HEADERS=$WIN_HEADERS
 CLOUD_DIR=$CLOUD_DIR
@@ -640,33 +595,8 @@ SHIM_EOF
 }
 SHIM_BODY=$(mktemp)
 cat > "$SHIM_BODY" <<'SHIM_EOF'
-SELF=$(readlink -f "$0" 2>/dev/null)
-if [ ! -x "$REAL" ] || [ "$(readlink -f "$REAL" 2>/dev/null)" = "$SELF" ]; then
-  echo "pinchtab: shim resolves to itself; run: npm install -g pinchtab --force" >&2
-  exit 70
-fi
-# Per-agent state; setup.sh derives the same paths.
 A=${PINCHTAB_AGENT:-}
-F=${PINCHTAB_SESSION_FILE:-$SESSION_BASE_DEFAULT}${A:+-$A}
-D0=${PINCHTAB_SHOT_DIR:-$SHOT_BASE_DEFAULT}
-D=$D0${A:+/$A}
-L=$L${A:+-$A}
-N=$N${A:+-$A}
-
-# The shim's own command: the numbered shots since it last ran, for looking back
-# past `latest` at an earlier step of a chain.
-if [ "${1:-}" = shots ]; then
-  if [ ! -s "$L" ]; then
-    echo "screenshots: none since the last \`$NAME shots\`"
-    exit 0
-  fi
-  n=$(wc -l < "$L")
-  echo "screenshots since the last \`$NAME shots\`, newest last:"
-  [ "$n" -gt 10 ] && echo "  ... $((n - 10)) older not shown, numbered just before the first below"
-  tail -n 10 "$L" | sed 's/^/  /'
-  : > "$L"
-  exit 0
-fi
+PINCHTAB_NAME=$NAME; export PINCHTAB_NAME
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
 
@@ -849,189 +779,27 @@ for t in d["tabs"]:
   export PINCHTAB_SERVER PINCHTAB_TOKEN PINCHTAB_HEADERS XDG_STATE_HOME
 fi
 
-resolve() {
-  unset PINCHTAB_SESSION            # a stale value makes `session create` fail
-  if [ ! -s "$F" ]; then
-    id=$("$REAL" session create --agent-id "${A:-claude}" 2>/dev/null | tr -d '\n')
-    case "$id" in
-      ses_*) printf '%s' "$id" > "$F" ;;
-      *)     rm -f "$F"; return 1 ;;
-    esac
-  fi
-  PINCHTAB_SESSION=$(cat "$F" 2>/dev/null); export PINCHTAB_SESSION
-}
-
-# `session create` must run unscoped -- a session-scoped caller gets 403, which
-# makes a hand-rolled `export PINCHTAB_SESSION=$(pinchtab session create ...)`
-# capture an empty string and silently look like it worked.
-if [ "$TIER" = local ]; then
-  case "${1:-}" in
-    session) unset PINCHTAB_SESSION ;;
-    *)       [ -n "${PINCHTAB_SESSION:-}" ] || resolve ;;
-  esac
-
-  # A caller may export a session by hand -- pinchtab's own bundled docs tell them
-  # to. Adopt it as the persistent one, so the NEXT bash call (which has no export)
-  # attaches to that same tab instead of minting a fresh, empty one. Without this,
-  # mixing the two styles silently queries a blank tab.
-  case "${PINCHTAB_SESSION:-}" in
-    ses_*)
-      [ "$(cat "$F" 2>/dev/null)" = "$PINCHTAB_SESSION" ] \
-        || printf '%s' "$PINCHTAB_SESSION" > "$F"
-      ;;
-  esac
-fi
-
-# `--x X --y Y --unscale last-small|last-full|S`: X,Y read off the last small or
-# full shot (or one of scale S), divided back to CSS pixels here, because
-# dividing by 0.4249 in an agent's head goes wrong.
-case " $* " in *" --unscale "*|*" --unscale="*)
-  for a in "$@"; do
-    shift
-    case "$a" in --unscale=*) set -- "$@" --unscale "${a#--unscale=}" ;; *) set -- "$@" "$a" ;; esac
-  done
-  unscale= x= y= prev=
-  for a in "$@"; do
-    case "$prev" in --unscale) unscale=$a ;; --x) x=$a ;; --y) y=$a ;; esac
-    prev=$a
-  done
-  case "$unscale" in
-    last-small|last-full)
-      size=${unscale#last-}
-      unscale=$(awk -v s="$size" '$1 == s { print $2 }' "$D/latest.scale" 2>/dev/null)
-      [ -n "$unscale" ] || { echo "$NAME: --unscale last-$size: no screenshot taken yet" >&2; exit 2; } ;;
-  esac
-  case "$unscale" in ''|*[!0-9.]*|*.*.*|.) echo "$NAME: --unscale takes last-small, last-full, or a scale such as 0.4249" >&2; exit 2 ;; esac
-  [ -n "$x$y" ] || { echo "$NAME: --unscale needs --x and/or --y" >&2; exit 2; }
-  prev=
-  for a in "$@"; do
-    shift
-    case "$prev" in
-      --unscale) prev=; continue ;;
-      --x|--y)   a=$(awk -v v="$a" -v s="$unscale" 'BEGIN { printf "%d", v / s + 0.5 }') ;;
-    esac
-    prev=$a
-    [ "$a" = --unscale ] && continue
-    set -- "$@" "$a"
-  done ;;
-esac
-
-# After anything that can change the page, save a screenshot to the fixed
-# latest paths, so a confusing snapshot is one image view away instead of a
-# screenshot call first.
-O=
-shoot=
-case "${1:-}" in
-  nav|goto|navigate|open|quick|back|forward|reload|click|dblclick|hover|focus|mouse|drag|\
-  fill|type|press|keydown|keyup|keyboard|select|check|uncheck|upload|scroll|scrollintoview|\
-  dialog|vision)
-    shoot=1 ;;
-  # `tab` alone lists tabs; `tab <id>` switches to one.
-  tab|tabs) case "${2:--}" in -*|close|handoff|resume|handoff-status) ;; *) shoot=1 ;; esac ;;
-  clipboard) [ "${2:-}" = paste ] && shoot=1 ;;
-  set) case "${2:-}" in viewport|media) shoot=1 ;; esac ;;
-esac
-[ -n "$shoot" ] && [ "${PINCHTAB_AUTOSHOT:-1}" = 1 ] && O=$(mktemp)
-if [ -n "$O" ]; then exec 3>"$O"; else exec 3>&1; fi
-E=$(mktemp)
-trap '[ -n "$O" ] && cat "$O" && rm -f "$O"; cat "$E" >&2; rm -f "$E"' EXIT
-
-"$REAL" "$@" >&3 2>"$E"; rc=$?
-# Keyed on the message, not $rc: every failure exits 1, and only this one retries.
-if [ "$TIER" = local ] && grep -q 'bad_session' "$E"; then
-  rm -f "$F"; resolve
-  "$REAL" "$@" >&3 2>"$E"; rc=$?
-fi
-# The grant ran out, was released, or Louie revoked it: no screenshot to take.
-if [ "$TIER" = windows ] && grep -qE 'grant_(required|expired)' "$E"; then
+[ "$TIER" = windows ] || exec "$REAL" "$@"
+# The grant ran out, was released, or Louie revoked it. A batch reports a step's
+# error on stdout, so both streams are checked.
+O=$(mktemp) E=$(mktemp)
+trap 'rm -f "$O" "$E"' EXIT
+"$REAL" "$@" >"$O" 2>"$E"; rc=$?
+cat "$O"; cat "$E" >&2
+if grep -qE 'grant_(required|expired)' "$O" "$E"; then
   rm -f "$G"
-  echo "$NAME: the grant is gone (idle 30 min, released, or Louie revoked it). Ask again: $NAME grant \"<purpose>\"" >> "$E"
-  exit $rc
-fi
-
-# Failures get a shot too: "why didn't that click land?" is answered by looking.
-[ -n "$O" ] || exit $rc
-tab=
-prev=
-for a in "$@"; do
-  case "$a" in -h|--help) exit $rc ;; --tab=*) tab=${a#--tab=} ;; esac
-  [ "$prev" = --tab ] && tab=$a
-  prev=$a
-done
-# claude.ai shows the user everything under /mnt/user-data/outputs, so only the
-# latest shot and a zip of all of them go there, not one file per shot.
-OUT=/mnt/user-data/outputs
-mkdir -p "$D"
-# A shot taken the moment the command returns catches spinners and half-applied
-# re-renders, each costing the agent another look.
-"$REAL" wait --dom-quiet ${tab:+--tab "$tab"} >/dev/null 2>&1 || true
-n=$(( $(cat "$N" 2>/dev/null || echo 0) + 1 ))
-echo $n > "$N"
-shot=$D/$(printf %04d $n)-$1.jpg
-small=${shot%.jpg}-small.jpg
-# Fixed paths, viewable in the same message as the command. Cleared first so a
-# failed shot reads as missing, not as the previous page.
-rm -f "$D/latest.jpg" "$D/latest-small.jpg"
-# Full: at most ~1.15MP, past which claude.ai shrinks images (1440x779 fits whole).
-# Small: a quarter of the tokens, viewed by default. Both carry their scale to CSS
-# pixels. A build without --max-pixels gets the full shot alone.
-info=$("$REAL" screenshot -o "$shot" --max-pixels 1150000 --also-max-pixels 281000 ${tab:+--tab "$tab"} 2>/dev/null)
-[ -s "$shot" ] || "$REAL" screenshot -o "$shot" ${tab:+--tab "$tab"} >/dev/null 2>&1
-if [ -s "$shot" ]; then
-  # "Image <path> <w>x<h>, scale <s> (...)" per file -> "<w>x<h>, scale <s>"
-  dims() { printf '%s\n' "$info" | awk -v p="$1" '$1 == "Image" && $2 == p {
-    d = $3; sub(/,$/, "", d); printf "%s", d; if ($4 == "scale") printf ", scale %s", $5 }'; }
-  # SKILL.md explains the two sizes and the scale once; this line only names them.
-  full_dims=$(dims "$shot") small_dims=$(dims "$small")
-  line="$shot (${full_dims:-?})"
-  [ -s "$small" ] && line="$line, small: ${small##*/} (${small_dims:-?})"
-  cp -f "$shot" "$D/latest.jpg"
-  [ -s "$small" ] && cp -f "$small" "$D/latest-small.jpg"
-  printf '%s\n' "$line" >> "$L"
-  # Read by --unscale last-small|last-full.
-  scale_of() { printf '%s' "$1" | sed -n 's/.*scale \([0-9.]*\).*/\1/p'; }
-  { printf 'full %s\n' "$(scale_of "$full_dims")"
-    [ -s "$small" ] && printf 'small %s\n' "$(scale_of "$small_dims")"; } > "$D/latest.scale"
-  if [ -d $OUT ]; then
-    cp -f "$shot" "$OUT/$NAME-shot-latest.jpg"
-    # Append only what the zip lacks, so the cost doesn't grow with the session.
-    # A zip broken by two concurrent shims is rebuilt instead.
-    python3 - "$D0" "$OUT/$NAME-shots.zip" "$NAME-shots" <<'PY' 2>/dev/null
-import os, sys, zipfile
-d, z, top = sys.argv[1:]
-def add(mode):
-    with zipfile.ZipFile(z, mode) as f:
-        have = set(f.namelist())
-        for root, _, names in sorted(os.walk(d)):
-            for n in sorted(names):
-                if n.startswith("latest"):
-                    continue  # rewritten every shot; the numbered copy is in already
-                p = os.path.join(root, n)
-                a = top + "/" + os.path.relpath(p, d)
-                if a not in have:
-                    f.write(p, a)
-try:
-    add("a")
-except zipfile.BadZipFile:
-    add("w")
-PY
-  fi
+  echo "$NAME: the grant is gone (idle 30 min, released, or Louie revoked it). Ask again: $NAME grant \"<purpose>\"" >&2
 fi
 exit $rc
 SHIM_EOF
-{ shim_header local pinchtab "$SHOT_BASE" "$SHOT_LEDGER_BASE" /tmp/pinchtab-shot-count; cat "$SHIM_BODY"; } > "$SHIM"
-chmod +x "$SHIM"
-ln -sf "$SHIM" "$BIN_DIR/pinchtab-local"
 rm -f "$WIN_SHIM"
 if [ -f "$WINDOWS_JSON" ]; then
-  { shim_header windows pinchtab-windows "$WIN_SHOT_BASE" "$WIN_SHOT_LEDGER" /tmp/pinchtab-windows-shot-count
-    cat "$SHIM_BODY"; } > "$WIN_SHIM"
+  { wrapper_header windows pinchtab-windows; cat "$SHIM_BODY"; } > "$WIN_SHIM"
   chmod +x "$WIN_SHIM"
 fi
 rm -f "$CLOUD_SHIM"
 if [ -n "$CLOUD_KEY" ]; then
-  { shim_header cloud pinchtab-cloud "$CLOUD_SHOT_BASE" "$CLOUD_SHOT_LEDGER" /tmp/pinchtab-cloud-shot-count
-    cat "$SHIM_BODY"; } > "$CLOUD_SHIM"
+  { wrapper_header cloud pinchtab-cloud; cat "$SHIM_BODY"; } > "$CLOUD_SHIM"
   chmod +x "$CLOUD_SHIM"
 fi
 rm -f "$SHIM_BODY"

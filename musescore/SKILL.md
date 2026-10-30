@@ -30,14 +30,13 @@ The second command puts `msfetch` on PATH. `msfetch js search` and
 
 - **Never navigate with `--block-images`** (or any image or resource
   blocking) on musescore.com. It also blocks the page's own `fetch()` of
-  `score_N.svg`. A tab opened that way serves page 1 and nothing else, which
-  is what broke the 2026-10-29 session.
+  `score_N.svg`, so a tab opened that way gets page 1 and nothing else.
 - **Look at the screenshot after every navigation.** musescore.com sometimes
   answers with a Cloudflare "Verify you are human" page. The scripts then
   report "not a score page" or "not a search page". Run pinchtab's captcha
   `solve` step, wait until the real page shows, then evaluate again.
-- **Get the script into the eval without retyping it.** As of 2026-10-30 a
-  batch line expands `$VARS`, so this works: export `JS="$(cat "$(msfetch js
+- **Get the script into the eval without retyping it.** A batch line
+  expands `$VARS`, so this works: export `JS="$(cat "$(msfetch js
   fetch-score)")"`, then the step `eval --await-promise "$JS" > raw.json`.
   The output is several MB; it must go to a file, never into your context.
 
@@ -113,9 +112,9 @@ one-line summary. The eval takes 5–20 s.
 | 3 | jmuse refused every token | official score: log in. If you are logged in, see "When it breaks" |
 | 4 | **a file came from a different score than page 1** | nothing was saved. Evaluate once more; if it repeats, use his Chrome (`pinchtab-windows`, after a grant, in your own tab) |
 
-Exit 4 exists because a 2026-10-29 session got Bach's Goldberg Variations back
-for Viva La Vida's pages 2–7. **Render and view one page other than the first
-before you rely on the content:**
+**Render and view one page other than the first before you rely on the
+content.** MuseScore has been seen serving another score's pages under the
+right score id:
 
 ```bash
 python3 -c "import cairosvg; cairosvg.svg2png(url='<out>/pages/score_3.svg', write_to='/tmp/p4.png', scale=0.8, background_color='white')"
@@ -139,7 +138,7 @@ The three outputs are authoritative for different things:
 - **out.abc**: a derived view for analysis. Its rhythm notation is
   reconstructed, so the SVG and MIDI win over it.
 
-How good it is (tested 2026-10-30; 10–70 s per score):
+How good it is (10–70 s per score):
 - **Hal Leonard**: near-clean. Every note matched, and the lyrics round-trip
   through abcjs.
 - **Faber**: every note matched. Verse labels ("1.", "2.") leak into the
@@ -152,17 +151,10 @@ How good it is (tested 2026-10-30; 10–70 s per score):
 them. Known limits: two voices on one staff (the top note wins); only one
 stream goes to ABC.
 
-## Using what you got
-
-These are licensed arrangements on his Pro+ account, for his own analysis.
-Analyse them and quote what's needed (a phrase, a cadence, a chord). Don't
-paste a whole arrangement into a shared or published artifact. Work in the
-scratchpad. Save to the cfs store only if he asks.
-
 ## How MuseScore serves a score, and what to check when it breaks
 
 MuseScore has no public API; its REST API was shut down years ago. Everything
-below was read off the live site on 2026-10-30, so expect it to drift. When a
+below was read off the live site, so expect it to drift. When a
 script fails, find which step below changed and fix the script, then tell
 Louie what changed and commit the fix to the claude-skills repo
 (`musescore/`). The LibreScore userscript
@@ -195,8 +187,8 @@ it through a GitHub tool, never a raw fetch.
    - If every request gets 401/403 while logged in, grep the bundles for
      `jmuse` to see what the client sends now.
    - The real client also sends `X-MU-FRONTEND-VER`, `X-Mu-Unified-Id` and
-     sometimes `x-mu-cp`, which looks like a challenge token. None were
-     needed on 2026-10-30. If jmuse starts returning an error whose message
+     sometimes `x-mu-cp`, which looks like a challenge token. None are
+     needed so far. If jmuse starts returning an error whose message
      triggers a re-challenge in the bundle, those headers are the next thing
      to add.
    - 404 for an official score means no access: not logged in, or not

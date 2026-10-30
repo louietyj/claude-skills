@@ -60,7 +60,7 @@
       for (const m of t.matchAll(/"([^"]+)"\)\.substr\(0,4\)/g)) if (!suffixes.includes(m[1])) suffixes.push(m[1]);
     } catch (e) {}
   }
-  if (!suffixes.includes('111010')) suffixes.push('111010'); // last known value, 2026-10-30
+  if (!suffixes.includes('111010')) suffixes.push('111010'); // last known value
   meta.suffixes = suffixes;
 
   const jmuse = async (type, index, suffix) => {

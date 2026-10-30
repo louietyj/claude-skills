@@ -7,7 +7,8 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "musescore"
-MEMBERS = ["SKILL.md", "setup.sh", "bin/msfetch.py", "bin/login.sh", "bin/align.py", "bin/geom.py", "bin/abccheck.js"]
+MEMBERS = ["SKILL.md", "setup.sh", "js/search.js", "js/fetch-score.js",
+           "bin/msfetch.py", "bin/align.py", "bin/geom.py", "bin/abccheck.js"]
 
 
 def main() -> int:

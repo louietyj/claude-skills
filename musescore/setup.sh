@@ -1,7 +1,7 @@
 #!/bin/bash
 # Puts `msfetch` on PATH and installs what it needs. Idempotent -- re-run it
-# rather than working out whether it already ran. Needs the web-browser skill's
-# setup.sh to have run first (it provides `pinchtab`).
+# rather than working out whether it already ran. The browser half comes from
+# the web-browser skill; nothing here drives it.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +14,6 @@ fail() {
 }
 
 [ -f "$CLI" ] || fail "bin/msfetch.py not found -- the skill files are missing."
-command -v pinchtab >/dev/null 2>&1 || fail "pinchtab is not on PATH. Run the web-browser skill's setup.sh first."
 
 PY=""
 for name in python3 python; do
@@ -55,4 +54,4 @@ chmod +x "$BIN_DIR/msfetch"
 "$BIN_DIR/msfetch" --help >/dev/null 2>&1 || fail "the shim does not run (python $PY, cli $CLI)."
 
 echo "ready -- \`msfetch\` is on PATH. tesseract for lyrics OCR: $OCR"
-echo "login script: $HERE/bin/login.sh"
+echo "page scripts: $HERE/js/search.js  $HERE/js/fetch-score.js  (also \`msfetch js <name>\`)"

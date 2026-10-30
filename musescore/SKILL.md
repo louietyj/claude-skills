@@ -5,130 +5,126 @@ description: "Find a song's sheet music on musescore.com and download it as the 
 
 # MuseScore scores
 
-`msfetch` does the mechanics: search, download, convert. You do the judgement,
-which is picking the right score from the search results.
+You drive the browser yourself; this skill gives you two page scripts and a
+CLI for everything after them:
+
+- `js/search.js` and `js/fetch-score.js` hold the MuseScore knowledge. Each is
+  one async expression that you evaluate in the page, awaited. It returns a
+  single JSON string, which you save to a file.
+- `msfetch` turns those files into results and score files, and never touches
+  the browser. That way pinchtab's syntax can change without breaking
+  anything here. Write the browser steps in whatever syntax pinchtab's own
+  instructions give you today.
 
 ## Setup (once per conversation)
-
-The web-browser skill comes first, since it provides `pinchtab`:
 
 ```bash
 bash "$(ls -1dt /mnt/skills/*/web-browser ~/.claude/skills/synced/*/web-browser 2>/dev/null | head -1)/setup.sh"
 bash "$(ls -1dt /mnt/skills/*/musescore ~/.claude/skills/synced/*/musescore 2>/dev/null | head -1)/setup.sh"
 ```
 
-The second command puts `msfetch` on PATH and prints the path of `login.sh`.
-**Never re-derive the path.**
+The second command puts `msfetch` on PATH. `msfetch js search` and
+`msfetch js fetch-score` print the scripts' paths. **Never re-derive the path.**
+
+## The browser rules
+
+- **Never navigate with `--block-images`** (or any image or resource
+  blocking) on musescore.com. It also blocks the page's own `fetch()` of
+  `score_N.svg`. A tab opened that way serves page 1 and nothing else, which
+  is what broke the 2026-10-29 session.
+- **Look at the screenshot after every navigation.** musescore.com sometimes
+  answers with a Cloudflare "Verify you are human" page. The scripts then
+  report "not a score page" or "not a search page". Run pinchtab's captcha
+  `solve` step, wait until the real page shows, then evaluate again.
+- **Get the script into the eval without retyping it.** As of 2026-10-30 a
+  batch line expands `$VARS`, so this works: export `JS="$(cat "$(msfetch js
+  fetch-score)")"`, then the step `eval --await-promise "$JS" > raw.json`.
+  The output is several MB; it must go to a file, never into your context.
 
 ## Log in
 
-Check this first. Community scores work logged out, but official ones need
-his login.
+Community scores work logged out; official ones need his login. Both scripts
+report who is logged in: `results` prints it in its header, `unpack` as
+`logged_in_as`. If it is null and you need an official score, log in through
+request-credential the way the web-browser skill describes. Agreed scope: log
+in and view scores only. No purchases, favourites, settings or posts.
 
-```bash
-msfetch whoami        # {"id":0,...} = logged out; "name":"Louie Tan","pro_plus":true = ready
-```
+- The form is at `https://musescore.com/user/login`.
+- Fields: `#username` and `#password`.
+- Submit: `button[name=op]`. It stays disabled until React sees keystrokes, so
+  type into the fields rather than setting their values.
+- Success lands on `https://musescore.com/dashboard`. Check for that inside
+  the same `run`.
 
-If it shows logged out, log in through request-credential, using its usual
-`ask`/`wait`/`run` flow. Agreed scope: log in and view scores only. No
-purchases, favourites, settings or posts.
-
-```bash
-request-credential ask musescore.com "Log in to fetch a score"
-request-credential wait <id> && request-credential run <id> -- sh <login.sh path from setup>
-```
-
-It should end on `https://musescore.com/dashboard`. Cookies die with the
-sandbox, so each new conversation logs in again.
-
-**Never `nav --block-images` in this browser while working with MuseScore.**
-The flag also blocks the page's own `fetch()` of `score_N.svg`. That is what
-left an earlier session stuck on page 1. `msfetch` navigates without it.
+Cookies die with the sandbox, so each new conversation logs in again.
 
 ## 1. Search
 
 ```bash
-msfetch search "viva la vida coldplay" --type piano-voice --sort views
+msfetch search-url "viva la vida coldplay" --type piano-voice --sort views
 ```
 
-Defaults: interactive scores only, meaning MuseScore files with MIDI and
-playback. PDF-only uploads (scanned publisher PDFs, no MIDI) are left out. Add
-`--any-format` to include them; they show as `PDF-ONLY no MIDI`.
+That prints a results URL. Navigate to it, evaluate `search.js` and save the
+output to `search.json`, then run:
+
+```bash
+msfetch results search.json
+```
 
 | flag | meaning |
 |---|---|
-| `--type piano-voice\|pvg\|solo\|any` | MuseScore's instrumentation facet: Piano-Voice, Piano-Voice-Guitar, Solo |
+| `--type piano-voice\|pvg\|solo\|any` | instrumentation facet (ids 139, 140, 114) |
 | `--official` / `--community` | publisher scores only, or uploads by users only |
-| `--sort relevance\|rating\|views` | relevance by default |
-| `--page N` | 20 results per page |
-
-Each result prints its id, title, `[official]`/`[community]`, instrumentation,
-part names, page count and duration, key and time signature, rating, views,
-uploader and URL.
+| `--any-format` | include PDF-only scores (no MIDI); without it they are filtered out |
+| `--sort relevance\|rating\|views` | |
+| `--page N` | 20 per page |
 
 **Choosing:**
-- **The song, not a namesake.** Check the title and the artist in it. Duration
-  should be near the recording's length, unless he wants an excerpt.
-- **Has MIDI.** Keep the default filter. A PDF-only score gives SVG pages and
-  no MIDI, so there's no ABC. That is fine for reading, not for analysis.
-- **Fits the question.** For melody or lyrics, a score with a *Voice* part
-  (Piano-Voice or PVG). For harmony, PVG has chord symbols. For a piano
+- **The song, not a namesake.** Check the title, the artist, and a duration
+  near the recording's.
+- **Has MIDI.** Keep the default filter. PDF-only scores give SVG pages but no
+  MIDI, so there's no ABC.
+- **Fits the question.** For melody or lyrics, a score with a Voice part
+  (Piano-Voice or PVG). For harmony, PVG, which has chord symbols. For a piano
   question, Solo.
 - **Official beats community for accuracy.** Hal Leonard and Faber are
-  transcribed from the recording, in the original key. Community scores are
-  often transposed (see the key column: "Someone Like You" in C is a
-  transposition), simplified, or partial. The best-rated community score with
-  many votes is a fine second choice.
-- **Key in the listing ≠ the original key.** Check the key column against what
-  the recording is in before analysing.
-- Several candidates of similar standing: fetch two and compare.
+  transcribed from the recording, in its key. Community scores are often
+  transposed, simplified or partial. Compare the key column with the
+  recording's key. A Chris Mann cover in G is not Coldplay's A♭.
+- When several candidates are close, fetch two and compare.
 
 ## 2. Fetch
 
+Navigate to the score URL, evaluate `fetch-score.js` (awaited) with its output
+saved to `raw.json`, then:
+
 ```bash
-msfetch fetch <score-url> <out-dir> [--pdf] [--abc [--voice-track N]]
+msfetch unpack raw.json <out-dir> [--pdf]
 ```
 
-Writes `<out-dir>/pages/score_N.svg` (PNG for pre-2015 uploads), `score.mid`,
-`space.jsonp` (measure positions per page plus playback timing),
-`meta.json`, and, with `--pdf`, `score.pdf` built from the SVGs. It prints a
-one-line JSON summary: pages got/expected, format, midi, who it was logged in
-as. That takes 5–20 s.
-
-How it works: page 1 is the static URL the page preloads. Pages 2+ and the
-MIDI come from `/api/jmuse`, signed with the token the site's own bundle
-computes (`md5(id+type+index+suffix)[:4]`, with the suffix read live from the
-bundle). No scrolling, no viewer state. Every file must come from the same
-`scoredata/g/<hash>/` as page 1.
+This writes `pages/score_N.svg` (PNG for pre-2015 uploads), `score.mid`,
+`space.jsonp` and `meta.json`, plus `score.pdf` with `--pdf`. It prints a
+one-line summary. The eval takes 5–20 s.
 
 | exit | meaning | what to do |
 |---|---|---|
-| 0 | every page saved (plus MIDI unless PDF-only) | go on |
-| 2 | not a score page, or pages missing | read stderr; rerun once |
-| 3 | MuseScore refused (401/403/404) | official score: check `whoami`, log in |
-| 4 | **a file came from a different score than page 1** | nothing was saved. Do not fall back to scrolling the viewer. Rerun once; if it repeats, use `--browser pinchtab-windows` (his Chrome, after a grant) |
+| 0 | every page (plus MIDI unless PDF-only) | go on |
+| 2 | not a score page, or pages missing | look at the screenshot (Cloudflare?), read stderr, evaluate again |
+| 3 | jmuse refused every token | official score: log in. If you are logged in, see "When it breaks" |
+| 4 | **a file came from a different score than page 1** | nothing was saved. Evaluate once more; if it repeats, use his Chrome (`pinchtab-windows`, after a grant, in your own tab) |
 
 Exit 4 exists because a 2026-10-29 session got Bach's Goldberg Variations back
-for Viva La Vida's pages 2–7 and nearly analysed them. That decoy has not
-reproduced since (2026-10-30, 7 scores). Even so, **view one rendered page
-other than the first before you rely on the content**:
+for Viva La Vida's pages 2–7. **Render and view one page other than the first
+before you rely on the content:**
 
 ```bash
 python3 -c "import cairosvg; cairosvg.svg2png(url='<out>/pages/score_3.svg', write_to='/tmp/p4.png', scale=0.8, background_color='white')"
 ```
 
-### His Chrome instead
-
-`msfetch --browser pinchtab-windows fetch ...` runs the same thing in his
-logged-in Chrome. Get a grant first, open your own tab
-(`nav <url> --new-tab`), then pass `--skip-nav` so msfetch uses that tab rather
-than navigating the one he's looking at. Use it only when the sandbox browser
-fails twice.
-
 ## 3. ABC (optional)
 
 ```bash
-msfetch abc <out-dir> [--voice-track N]      # or fetch ... --abc
+msfetch abc <out-dir> [--voice-track N]
 ```
 
 The command aligns MIDI notes to the SVG noteheads, OCRs the lyric glyphs and
@@ -136,16 +132,12 @@ writes `out.abc` (melody plus aligned lyrics) and `report.json`. It needs SVG
 pages, `score.mid` and `space.jsonp`. It prints the MIDI streams; if the ABC
 picked the piano rather than the voice, rerun with the right `--voice-track`.
 
-Three artifacts, each authoritative for something different:
-- **SVG pages**: how it is *written*. Ties, beaming, enharmonic spelling, chord
-  symbols, repeats, dynamics. Look at them when anything seems off.
-- **score.mid**: what *sounds*. Exact pitches and onsets, with repeats unrolled.
-  It loses spelling, ties and rests-vs-staccato.
+The three outputs are authoritative for different things:
+- **SVG pages**: how it is written. Ties, beaming, spelling, chord symbols,
+  repeats.
+- **score.mid**: what sounds. Exact pitches and onsets, repeats unrolled.
 - **out.abc**: a derived view for analysis. Its rhythm notation is
   reconstructed, so the SVG and MIDI win over it.
-
-`report.json` lists flagged measures, meaning heads that don't match notes or
-unplaced syllables. Look at those on the page before quoting them.
 
 How good it is (tested 2026-10-30; 10–70 s per score):
 - **Hal Leonard**: near-clean. Every note matched, and the lyrics round-trip
@@ -153,15 +145,71 @@ How good it is (tested 2026-10-30; 10–70 s per score):
 - **Faber**: every note matched. Verse labels ("1.", "2.") leak into the
   lyrics.
 - **Community**: notes mostly right. Lyric OCR is noisy, and MIDI exported
-  with expressive timing yields odd durations (`B,/8-B,/60`). Use the SVG and
+  with expressive timing gives odd durations (`B,/8-B,/60`). Use the SVG and
   MIDI there, not the ABC.
 
-Known limits: two voices on one staff (the top note wins); only one stream
-goes to ABC.
+`report.json` lists flagged measures. Look at those on the page before quoting
+them. Known limits: two voices on one staff (the top note wins); only one
+stream goes to ABC.
 
 ## Using what you got
 
 These are licensed arrangements on his Pro+ account, for his own analysis.
 Analyse them and quote what's needed (a phrase, a cadence, a chord). Don't
-paste a whole arrangement into a shared or published artifact. Working files
-live in the scratchpad. Save one to the cfs store only if he asks.
+paste a whole arrangement into a shared or published artifact. Work in the
+scratchpad. Save to the cfs store only if he asks.
+
+## How MuseScore serves a score, and what to check when it breaks
+
+MuseScore has no public API; its REST API was shut down years ago. Everything
+below was read off the live site on 2026-10-30, so expect it to drift. When a
+script fails, find which step below changed and fix the script, then tell
+Louie what changed and commit the fix to the claude-skills repo
+(`musescore/`). The LibreScore userscript
+(github.com/LibreScore/dl-librescore, `src/file.ts` and `src/scoreinfo.ts`)
+does the same job and is usually updated quickly when MuseScore changes. Read
+it through a GitHub tool, never a raw fetch.
+
+1. **Page state.** Every page embeds its data in `window.UGAPP.store`:
+   - `page.data.score` on a score page: `id`, `title`, `pages_count`,
+     `is_pdf`, `is_official`, `is_purchased`, `parts_names`,
+     `instrumentations`, `keysig`.
+   - `page.data.scores` (plus `pagination`, `filters`) on a results page.
+   - `user`: `id` 0 when logged out, `username`, `isPro`, `isProPlus`.
+
+   If this moves, look for another embedded JSON store (`<div class="js-store"
+   data-content>`, `__NEXT_DATA__`) in the HTML.
+2. **Page 1** is a static file, which the page preloads:
+   `<link rel="preload" as="image" href="https://musescore.com/static/musescore/scoredata/g/<40-hex hash>/score_0.svg?no-cache=…">`.
+   **Do not use `og:image`**: it is a differently rendered thumbnail under
+   another hash. Old uploads only have `score_0.png`. Strip any `@…` size
+   suffix from the URL.
+3. **Pages 2+ and the MIDI** come from
+   `GET /api/jmuse?id=<id>&type=img|midi&index=<n>`, with header
+   `Authorization: md5(id + type + index + SUFFIX).slice(0, 4)`. The response is
+   `{info: {url}}`, a signed S3 URL that lasts 5 minutes, under the same hash as
+   page 1.
+   - SUFFIX was `"111010"`. The script reads it live from the site's bundles
+     (`/static/public/build/…/*.js`) by matching `"<suffix>").substr(0,4)`; the
+     surrounding code is `(e+t+n+"111010").substr(0,4)`.
+   - If every request gets 401/403 while logged in, grep the bundles for
+     `jmuse` to see what the client sends now.
+   - The real client also sends `X-MU-FRONTEND-VER`, `X-Mu-Unified-Id` and
+     sometimes `x-mu-cp`, which looks like a challenge token. None were
+     needed on 2026-10-30. If jmuse starts returning an error whose message
+     triggers a re-challenge in the bundle, those headers are the next thing
+     to add.
+   - 404 for an official score means no access: not logged in, or not
+     entitled.
+4. **Layout**: `space.jsonp` sits beside the pages, at
+   `/static/musescore/scoredata/g/<hash>/space.jsonp`. It holds measure boxes
+   in 1200-dpi units plus playback timing. Older SVGs are 72 dpi (width about
+   600), newer ones 360 dpi; `align.py` normalises both.
+5. **Same-score check**: every file's `scoredata/g/<hash>` must equal page
+   1's. A mismatch means a decoy or the wrong score. Never "fix" it by
+   relaxing the check.
+6. **Bytes** are fetched inside the page, because musescore.com returns 403 to
+   the sandbox's own HTTP client.
+7. MuseScore listens for a `devtoolschange` event. dl-librescore suppresses
+   it, which suggests the site may detect devtools or automation. If decoys
+   start appearing consistently, suspect this first.

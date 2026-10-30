@@ -13,8 +13,8 @@
 //   request-credential pair
 //   request-credential health
 //
-// wait's exit codes: 0 received, 2 nothing yet (wait again), 4 declined,
-// expired or undeliverable (ask again only if Louie wants), 1 error.
+// wait's exit codes: 0 received, 2 nothing yet (wait again), 4 declined or
+// expired (ask again only if Louie wants), 1 error.
 //
 // A received login lives in RAM (/dev/shm), never on a disk where deleted bytes
 // survive. It is deleted when a run succeeds, and otherwise RETRY_MS after it
@@ -142,6 +142,10 @@ async function ask(args) {
   saveRecord({ id, rid: out.rid, site, url });
   // No URL: the phone has it, and Louie never needs to open it himself.
   process.stdout.write(`id: ${id}\nsent to the phone: ${site}\n`);
+  if (out.push_error) {
+    process.stdout.write(`warning: no notification will show (${out.push_error}). ` +
+      "The request is waiting in the Credential Request app: ask Louie to open it.\n");
+  }
   if (!IN_RAM) process.stderr.write(`warning: no ${RAM}, so the login will be held on disk\n`);
   return EXIT.OK;
 }
@@ -177,7 +181,7 @@ async function wait(args) {
       return w.code === 4 ? EXIT.GONE : EXIT.ERROR;
     }
     const { out } = await relay("GET", `/request/${rec.rid}`);
-    if (["declined", "expired", "undelivered"].includes(out.status)) {
+    if (["declined", "expired"].includes(out.status)) {
       forgetNow(rec.id);
       process.stderr.write(`${rec.id}: Louie's phone reports the request ${out.status}. ` +
         "Do not ask again unless he says to.\n");
@@ -185,6 +189,7 @@ async function wait(args) {
     }
     if (Date.now() >= deadline) {
       process.stderr.write(`${rec.id}: nothing yet (phone: ${out.status ?? "unknown"}); run wait again\n`);
+      if (out.status === "pending") process.stderr.write(PENDING_HINT);
       return EXIT.TIMEOUT;
     }
   }
@@ -287,8 +292,13 @@ async function status(args) {
   const { status, out } = await relay("GET", `/request/${rec.rid}`);
   if (status !== 200) throw new Fail(`relay: HTTP ${status} ${out.error ?? ""}`);
   process.stdout.write(`${rec.id}  ${out.site}  ${out.status}\n`);
+  if (out.push_error) process.stdout.write(`push failed: ${out.push_error}\n`);
+  if (out.status === "pending") process.stdout.write(PENDING_HINT);
   return EXIT.OK;
 }
+
+const PENDING_HINT = "pending: the phone has not loaded the request yet. It is waiting in the " +
+  "Credential Request app either way; if no notification showed, Louie can open the app and tap it there.\n";
 
 async function pair() {
   const { status, out } = await relay("POST", "/pair", {});

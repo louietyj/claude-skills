@@ -237,12 +237,43 @@ class C_Requests(unittest.TestCase):
         self.assertEqual(http("/request/0123456789abcdef")[0], 404)
         self.assertEqual(http("/request/nothex")[0], 404)
 
-    def test_stale_fcm_token_is_reported(self):
+    def test_stale_fcm_token_is_reported_but_the_request_waits_in_the_app(self):
         self.assertEqual(http("/device", "PUT", {"fcm_token": "stale"}, token=DEV)[0], 200)
         status, out = ask()
-        self.assertEqual(status, 502)
-        self.assertIn("stale", out["error"])
-        self.assertEqual(http(f"/request/{out['rid']}")[1]["status"], "undelivered")
+        self.assertEqual(status, 200)
+        self.assertIn("stale", out["push_error"])
+        mine = http(f"/request/{out['rid']}")[1]
+        self.assertEqual(mine["status"], "pending")
+        self.assertIn("stale", mine["push_error"])
+        listed = http("/device/requests", token=DEV)[1]["requests"]
+        self.assertIn(out["rid"], [r["rid"] for r in listed])
+
+    def test_check_in_proves_the_pairing(self):
+        before = time.time() * 1000
+        pair("fcm-1")
+        status, out = http("/device", "PUT", {"fcm_token": "fcm-2"}, token=DEV)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(out["paired"], before - 5000)
+        ask()
+        self.assertEqual(FakeGoogle.sent[-1]["token"], "fcm-2")
+        self.assertEqual(http("/device", "PUT", {"fcm_token": "x"}, token="wrong")[0], 401)
+
+    def test_list_shows_only_open_requests_without_links(self):
+        sent = ask(reason="one")[1]["rid"]
+        http(f"/device/request/{sent}/sent", "POST", {}, token=DEV)
+        declined = ask(reason="two")[1]["rid"]
+        http(f"/device/request/{declined}/declined", "POST", {}, token=DEV)
+        waiting = ask(reason="three")[1]["rid"]
+        status, out = http("/device/requests", token=DEV)
+        self.assertEqual(status, 200)
+        rids = [r["rid"] for r in out["requests"]]
+        self.assertIn(waiting, rids)
+        self.assertNotIn(sent, rids)
+        self.assertNotIn(declined, rids)
+        mine = next(r for r in out["requests"] if r["rid"] == waiting)
+        self.assertEqual((mine["site"], mine["reason"], mine["status"]), ("chase.com", "three", "pending"))
+        self.assertNotIn("url", mine)
+        self.assertEqual(http("/device/requests", token=CLI)[0], 401)
 
     def test_requests_expire(self):
         rid = ask(ttl_s=30)[1]["rid"]

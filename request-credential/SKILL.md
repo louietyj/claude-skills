@@ -56,12 +56,18 @@ used the moment it arrives.
 |---|---|---|
 | 0 | received (it prints the username, never the password) | `run` it within the minute |
 | 2 | nothing yet, request still open | run `wait` again |
-| 4 | he declined, it expired, or the phone could not be reached (stderr says which) | stop; tell him; ask again only if he says to |
+| 4 | he declined or it expired (stderr says which) | stop; tell him; ask again only if he says to |
 | 1 | error (stderr) | report it |
 
 `request-credential status <id>` shows where it is if he asks: pending (not
 yet on the phone), delivered (notification showing), opened (he is looking at
 it), sent, declined, expired.
+
+**No notification is not a dead request.** Every open request also waits in
+the Credential Request app's list. If he says nothing showed up, or `ask`
+warns that the push failed, have him open the app and tap it there. Do not
+ask again, and do not re-pair unless the app says the relay doesn't know the
+phone.
 
 ## Using the login: `run`
 
@@ -102,6 +108,8 @@ request-credential run rt-3f9a1c2e -- sh -c '
 
 ## Pairing
 
-If `ask` says no phone is paired, or the phone's push registration is stale:
-run `request-credential pair`, give Louie the 6-digit code, and have him enter
-it in the Credential Request app.
+Only when `ask` says no phone is paired, or the app itself says the relay
+doesn't know the phone (it shows a pairing box then, and only then): run
+`request-credential pair`, give Louie the 6-digit code, and have him enter it
+in the Credential Request app. The app checks its pairing with the relay and
+refreshes its push token every time it opens, so a stale token fixes itself.

@@ -11,7 +11,9 @@
 //   PATCH /request/:rid        {url}: request-text reconnected under a new one
 // Device (Authorization: Bearer DEVICE_TOKEN):
 //   POST  /pair/claim          {code, fcm_token} -> {k}; the code is the only gate
-//   PUT   /device              {fcm_token} after FCM rotates it
+//   PUT   /device              {fcm_token} -> {paired}; the app checks in with it on
+//                              every open, and after FCM rotates the token
+//   GET   /device/requests     {requests: [{rid, site, reason, status, expires_at}]}, open ones
 //   GET   /device/request/:rid[?seen=opened]  {site, reason, url, expires_at, status};
 //                              marks delivered, or opened when the screen asks
 //   POST  /device/request/:rid/{declined|sent}
@@ -37,7 +39,8 @@ const b64u = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)))
   .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 // The states a request moves through before it ends, in order. They lapse to
-// expired; the final states (sent, declined, undelivered) stick.
+// expired; the final states (sent, declined) stick. A failed push leaves it
+// pending: the app's list still shows it.
 const OPEN = ["pending", "delivered", "opened"];
 
 function statusOf(r, now) {
@@ -151,7 +154,17 @@ export class Hub {
       const d = await st.get("device");
       if (!d) return json({ error: "not paired" }, 409);
       await st.put("device", { ...d, fcm_token: String(body.fcm_token) });
-      return json({ ok: true });
+      return json({ ok: true, paired: d.paired });
+    }
+
+    if (pathname === "/device/list") {
+      const open = [];
+      for (const r of (await st.list({ prefix: "r:" })).values()) {
+        const status = statusOf(r, now);
+        if (OPEN.includes(status)) open.push({ rid: r.rid, site: r.site, reason: r.reason, status, expires_at: r.exp });
+      }
+      open.sort((a, b) => b.expires_at - a.expires_at);
+      return json({ requests: open });
     }
 
     if (pathname === "/request/new") {
@@ -174,8 +187,8 @@ export class Hub {
 
       const failed = await push(this.env, this.oauth, d.fcm_token, rid, ttlS).catch((e) => String(e.message ?? e));
       if (failed) {
-        await st.put(`r:${rid}`, { ...r, status: "undelivered" });
-        return json({ error: failed, rid }, 502);
+        await st.put(`r:${rid}`, { ...r, push_error: failed });
+        return json({ rid, expires_at: r.exp, push_error: failed });
       }
       return json({ rid, expires_at: r.exp });
     }
@@ -196,7 +209,7 @@ export class Hub {
         return json({ ok: true });
       }
       return json({ rid, site: r.site, reason: r.reason, status, created: r.created, expires_at: r.exp,
-        ...(r.ended ? { ended: r.ended } : {}) });
+        ...(r.ended ? { ended: r.ended } : {}), ...(r.push_error ? { push_error: r.push_error } : {}) });
     }
 
     if (!action) {
@@ -258,6 +271,7 @@ export default {
       return forward("/request/new");
     }
     if (path === "/device" && req.method === "PUT") return forward("/device", "POST");
+    if (path === "/device/requests" && req.method === "GET") return forward("/device/list");
 
     let m = path.match(/^\/request\/([^/]+)$/);
     if (m && req.method === "GET") return forward(`/cli/${m[1]}`);

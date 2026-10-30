@@ -194,7 +194,8 @@ and pass `--tab <id>` on every step for his tab.
 He watches it happen, and each screenshot brings your tab to the front. Never
 close or navigate a tab of his he didn't hand you, and close your own when
 done (`pinchtab-windows tab close <id>`). Confirm before anything that acts as
-him: paying, sending, deleting, changing settings.
+him: paying, sending, deleting, changing settings. A file a page downloads
+lands in his own Downloads folder; `wait --download` also copies it to you.
 
 **3. Release it** with `pinchtab-windows release` when the task is done. A
 grant also lapses after 30 idle minutes; a command then says so, and you ask

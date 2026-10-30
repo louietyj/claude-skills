@@ -95,6 +95,20 @@ A single command prints nothing about its shot: the agent views `latest-small.jp
 
 Every example in both SKILL.md files is an `execute-batch`, a single step included. Agents used to chain `cmd; cmd`, `&&` and `| tail -1 | cut -c1-90` because the docs taught one command per shell line about 60 times for every batch; with one grammar there is nothing else to imitate.
 
+## Downloads
+
+`download <url>` is a GET of a URL. Most real downloads aren't one: a PrimeFaces "Download Zip File" button POSTs a form and gets the zip back as an attachment (SERFF), a link is `href="#"` with an onclick, a page builds a blob and clicks an `<a download>`. Those went to Chrome's download manager, which under CDP silently drops them unless told otherwise, so the click came back `UNCONFIRMED` and nothing landed anywhere.
+
+The fork now catches every download, however it started, with `Browser.setDownloadBehavior` (events on), sent again on every launch or attach since it can change on a live connection. A click that starts one prints `download started: <name>`; `wait --download [-o file]` waits for it to finish and saves it to `~/pinchtab-downloads/`. Getting the file back works on every tier:
+
+- **`pinchtab`**: Chrome saves under a guid name in the instance's state dir, and the bridge reads it off the shared disk.
+- **`pinchtab-cloud`**: the file lands on Browser Use's machine (setup.sh points it at `/tmp/pinchtab-downloads` there). The bridge reads it back over CDP: `DOM.setFileInputFiles` on a file input that never joins the page, made in an isolated world, then `File.slice()` 8 MB at a time. Locally that moved 50 MB byte-exact in 1.8 s. `Network.loadNetworkResource` refuses `file://`, and a `file://` page can't `fetch` another one without a launch flag we don't control on attached browsers. Browser Use doesn't bill that traffic: pulling 10 MB back as 13.3 MB of base64 left `proxyUsedMb` where the in-page fetch had put it. Only the browser's own download bills.
+- **`pinchtab-windows`**: the bridge runs on Louie's laptop, so it reads the file off his disk. Attached browsers default to `downloadBehavior: user`, real names in `~/Downloads`, rather than redirecting his own downloads into a guid-named directory while pinchtab is attached.
+
+`instanceDefaults.downloadFileMaxBytes` (default 1 GB, far above `download <url>`'s 20 MB in-memory cap) cancels a bigger download and says so. Not done: handing back a presigned blob-store URL instead of downloading it, to save the cloud bill. It only works for URLs that carry their own authorisation (S3, GCS, Azure SAS) and must be decided before the request is sent, so it waits for a real need.
+
+Finding this also turned up a double click: pinchtab followed every trusted click on a link with a JS `.click()`, on the theory that CDP mouse events don't follow links. They do (a coordinate click navigated by itself), so every link fired twice: two downloads, or two form POSTs from an `href="#"` link. The JS click is gone.
+
 ## Captcha solving
 
 `setup.sh` installs pinchtab from [louietyj/pinchtab](https://github.com/louietyj/pinchtab) rather than upstream npm, replacing the managed binary the npm package fetched and leaving its bundled docs alone. Upstream ships the CapSolver solver as an unimplemented stub (`internal/autosolver/external/capsolver.go` returns `"not yet implemented"`), so a captcha page is detected, abandoned, and reported as an unexplained `solved:false`. The fork implements it and fixes three bugs found around it: detection matching vendor names as bare substrings anywhere in the document, sitekeys being unreachable on explicitly-rendered widgets, and `/solve` reporting `solved:true` on a challenge it never detected. `PINCHTAB_USE_FORK=0` stays on the npm build.

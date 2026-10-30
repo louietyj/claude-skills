@@ -230,6 +230,13 @@ EOF
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
 - `pinchtab-cloud start --country gb` for another country.
+- **A login that lasts:** set `PINCHTAB_CLOUD_PROFILE=<name>` on every call
+  of a task that should stay logged in. The browser loads that Browser Use
+  profile's cookies and saves them back when it ends (`stop`, or the hour
+  running out); the profile is created on first use. A call with another
+  profile, or none, replaces the browser.
+- `pinchtab-cloud live` prints a link a person can open to watch and drive
+  the browser: give it to Louie when he should log in himself.
 - **A first look may catch the bot check**: "Verifying the device..." on
   Yelp passes by itself in a few seconds. Look again before calling it blocked.
 - Captchas are solved by pinchtab as usual, and screenshots, `--unscale` and

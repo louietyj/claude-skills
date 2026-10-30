@@ -33,6 +33,13 @@ HINTs stay the only ones) and runs a `pinchtab bridge --cdp-attach` to it on por
 `*.cdp.browser-use.com` allowed, and Browser Use's in-cluster proxy (`10.0.x.x`,
 which every page comes back from) trusted by the SSRF guard.
 
+`PINCHTAB_CLOUD_PROFILE=<name>` starts the browser with that Browser Use profile
+(`profileId`, looked up by name under `/api/v4/profiles`, created if absent).
+Browser Use loads the profile's cookies and localStorage into the default context
+and saves them back when the browser ends, by stop or timeout; the bridge drives
+that context, so a login made through pinchtab persists. A call naming another
+profile, or none, replaces the browser. `pinchtab-cloud live` prints its `liveUrl`.
+
 Its timeout is the one Browser Use enforces, 60 minutes from start
 (`PINCHTAB_CLOUD_MINUTES`). Their API can't extend a browser, and an idle timer
 in the sandbox would not survive it being suspended between turns, so agents

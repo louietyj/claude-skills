@@ -616,7 +616,10 @@ if [ "$TIER" = cloud ]; then
   B=$CLOUD_DIR/browser.json
   END=$CLOUD_DIR/ends-at
   MINUTES=${PINCHTAB_CLOUD_MINUTES:-60}
+  # A Browser Use profile, by name: cookies that outlive the browser.
+  PROFILE=${PINCHTAB_CLOUD_PROFILE:-}
   API=https://api.browser-use.com/api/v4/browsers
+  PROFILES=https://api.browser-use.com/api/v4/profiles
   TOKEN=$(cat "$CLOUD_DIR/token")
   api() { curl -sS -m 60 -H "X-Browser-Use-API-Key: $(cat "$CLOUD_DIR/key")" -H 'Content-Type: application/json' "$@"; }
   bridge_up() { curl -sf -m 5 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$CLOUD_PORT/health" >/dev/null; }
@@ -645,11 +648,28 @@ except Exception:
     print("Stop sent; Browser Use did not report the usage.")'
     rm -f "$B"
   }
+  profile_id() {  # $PROFILE's id, creating the profile on first use
+    # Creates only when the list came back without it, never on a failed list.
+    id=$(api "$PROFILES?pageSize=100" | python3 -c '
+import json, sys
+print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == sys.argv[1]), "new"))' "$PROFILE") || return 1
+    if [ "$id" = new ]; then
+      api -X POST "$PROFILES" --data "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$PROFILE")" | json id
+    else
+      echo "$id"
+    fi
+  }
   start_cloud() {  # $1 country
     stop_cloud > /dev/null
+    extra=
+    if [ -n "$PROFILE" ]; then
+      pid=$(profile_id)
+      [ -n "$pid" ] || { echo "$NAME: could not find or create the profile \"$PROFILE\"" >&2; return 1; }
+      extra=",\"profileId\":\"$pid\""
+    fi
     # 1440x900 like the local browser, so its shots stay under claude.ai's
     # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
-    api -X POST "$API" --data "{\"proxyCountryCode\":\"$1\",\"timeout\":$MINUTES,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false}" > "$B"
+    api -X POST "$API" --data "{\"proxyCountryCode\":\"$1\",\"timeout\":$MINUTES,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false$extra}" > "$B"
     if [ -z "$(json cdpUrl < "$B")" ]; then
       echo "$NAME: Browser Use refused: $(cat "$B")" >&2
       rm -f "$B"
@@ -658,18 +678,21 @@ except Exception:
     # A minute early, so a command never lands on a browser about to end.
     echo $(( $(date +%s) + MINUTES * 60 - 60 )) > "$END"
     printf '%s' "$1" > "$CLOUD_DIR/country"
+    printf '%s' "$PROFILE" > "$CLOUD_DIR/profile"
     if ! attach; then
       echo "$NAME: the bridge never attached. Its log:" >&2
       tail -5 "$CLOUD_DIR/bridge.log" >&2
       stop_cloud >&2
       return 1
     fi
-    echo "$NAME: started a cloud browser on a $1 residential IP, ending by itself in $MINUTES minutes. A new browser has no page loaded: nav first." >&2
+    echo "$NAME: started a cloud browser on a $1 residential IP${PROFILE:+ with the profile \"$PROFILE\"}, ending by itself in $MINUTES minutes. A new browser has no page loaded: nav first." >&2
   }
   # A live browser whose bridge died with a suspended sandbox is re-attached,
-  # tabs and all; an ended or lost one is replaced.
+  # tabs and all; an ended or lost one is replaced, and so is one on another
+  # profile, so a logged-in profile never serves a command that didn't ask for it.
   ensure() {
-    if [ -s "$B" ] && [ "$(date +%s)" -lt "$(cat "$END" 2>/dev/null || echo 0)" ]; then
+    if [ -s "$B" ] && [ "$(date +%s)" -lt "$(cat "$END" 2>/dev/null || echo 0)" ] &&
+       [ "$PROFILE" = "$(cat "$CLOUD_DIR/profile" 2>/dev/null)" ]; then
       bridge_up || attach || start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
     else
       start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
@@ -683,6 +706,10 @@ except Exception:
       exit $? ;;
     stop)
       stop_cloud
+      exit 0 ;;
+    live)  # a link a person opens to see and drive this browser, e.g. to log in
+      ensure || exit 1
+      json liveUrl < "$B"
       exit 0 ;;
   esac
   ensure || exit 1

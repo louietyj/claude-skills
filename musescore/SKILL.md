@@ -25,6 +25,8 @@ bash "$(ls -1dt /mnt/skills/*/musescore ~/.claude/skills/synced/*/musescore 2>/d
 
 The second command puts `msfetch` on PATH. `msfetch js search` and
 `msfetch js fetch-score` print the scripts' paths. **Never re-derive the path.**
+If you are a subagent, the web-browser setup is the one your brief gave you
+(with its `--subagent` name); don't run it a second time bare.
 
 ## The browser rules
 
@@ -34,11 +36,17 @@ The second command puts `msfetch` on PATH. `msfetch js search` and
 - **Look at the screenshot after every navigation.** musescore.com sometimes
   answers with a Cloudflare "Verify you are human" page. The scripts then
   report "not a score page" or "not a search page". Run pinchtab's captcha
-  `solve` step, wait until the real page shows, then evaluate again.
+  `solve` step, wait until the real page shows, then evaluate again. The
+  reverse also happens: pinchtab reports a challenge as unsolved or given up
+  while the real page loaded fine. The page content is what counts.
+- **The eval must await the Promise the script returns.** In today's pinchtab
+  that's `eval --await-promise`. Without it you get `{}` back.
 - **Get the script into the eval without retyping it.** A batch line
-  expands `$VARS`, so this works: export `JS="$(cat "$(msfetch js
-  fetch-score)")"`, then the step `eval --await-promise "$JS" > raw.json`.
-  The output is several MB; it must go to a file, never into your context.
+  expands `$VARS`, so in one bash call: `export JS="$(cat "$(msfetch js
+  fetch-score)")"`, then a batch whose step is
+  `eval --await-promise "$JS" > raw.json`. The variable dies with the bash
+  call, so set it in the same one. The output is several MB; it must go to a
+  file, never into your context.
 
 ## Log in
 
@@ -89,7 +97,9 @@ msfetch results search.json
 - **Official beats community for accuracy.** Hal Leonard and Faber are
   transcribed from the recording, in its key. Community scores are often
   transposed, simplified or partial. Compare the key column with the
-  recording's key. A Chris Mann cover in G is not Coldplay's A♭.
+  recording's key. A Chris Mann cover in G is not Coldplay's A♭. The column
+  names the key signature's major/minor pair ("E♭ major, C minor"), not which
+  one is the tonic.
 - When several candidates are close, fetch two and compare.
 
 ## 2. Fetch
@@ -112,13 +122,16 @@ one-line summary. The eval takes 5–20 s.
 | 3 | jmuse refused every token | official score: log in. If you are logged in, see "When it breaks" |
 | 4 | **a file came from a different score than page 1** | nothing was saved. Evaluate once more; if it repeats, use his Chrome (`pinchtab-windows`, after a grant, in your own tab) |
 
-**Render and view one page other than the first before you rely on the
-content.** MuseScore has been seen serving another score's pages under the
-right score id:
+To look at pages, render them to PNG. Don't call cairosvg yourself: MuseScore
+writes negative dash lengths that crash it, and `render` strips them.
 
 ```bash
-python3 -c "import cairosvg; cairosvg.svg2png(url='<out>/pages/score_3.svg', write_to='/tmp/p4.png', scale=0.8, background_color='white')"
+msfetch render <out-dir> 1 last        # 1-based page numbers or `last`; writes <out-dir>/page_N.png
 ```
+
+**View one page other than the first before you rely on the content.**
+MuseScore has been seen serving another score's pages under the right score
+id.
 
 ## 3. ABC (optional)
 

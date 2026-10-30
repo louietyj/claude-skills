@@ -1,7 +1,7 @@
 """Align MuseScore page-SVG lyrics with score.mid notes.
 
 usage: python3 align.py <score_dir> [--track N] [--ocr-dir DIR]
-score_dir holds score_*.svg, score.mid, space.jsonp (from the bookmarklet).
+score_dir holds score_*.svg, score.mid, space.jsonp (from `msfetch unpack`).
 Writes <score_dir>/aligned.json and prints a per-measure report.
 """
 from collections import Counter

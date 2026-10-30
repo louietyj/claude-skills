@@ -11,6 +11,7 @@ usage:
   msfetch results <search.json>
   msfetch unpack <raw.json> <out-dir> [--pdf]
   msfetch abc <out-dir> [--voice-track N]
+  msfetch render <out-dir> <page|last>... [--scale S]   # -> <out-dir>/page_N.png to look at
   msfetch js search|fetch-score          # path of a page script
 
 Exit codes: 0 ok, 2 bad input / incomplete, 3 needs login or access,
@@ -116,6 +117,12 @@ def cmd_unpack(o):
     return 0
 
 
+def svg_for_cairo(path):
+    # MuseScore emits negative dash lengths (e.g. on hairpins), which cairo rejects outright.
+    src = open(path, encoding="utf-8").read()
+    return re.sub(r' stroke-dasharray="[^"]*-[^"]*"', "", src).encode()
+
+
 def render_pdf(out, pages):
     import cairosvg
     import pymupdf
@@ -123,10 +130,29 @@ def render_pdf(out, pages):
     for n in pages:
         p = os.path.join(out, "pages", n)
         if n.endswith(".svg"):
-            doc.insert_pdf(pymupdf.open("pdf", cairosvg.svg2pdf(url=p)))
+            doc.insert_pdf(pymupdf.open("pdf", cairosvg.svg2pdf(bytestring=svg_for_cairo(p))))
         else:
             doc.insert_pdf(pymupdf.open("pdf", pymupdf.open(p).convert_to_pdf()))
     doc.save(os.path.join(out, "score.pdf"))
+
+
+def cmd_render(o):
+    import cairosvg
+    files = {int(re.search(r"\d+", n).group()) + 1: n for n in os.listdir(os.path.join(o.out, "pages"))
+             if n.startswith("score_")}
+    for want in o.pages:
+        num = max(files) if want == "last" else int(want)
+        if num not in files:
+            print(f"ERROR: no page {num}; have 1-{max(files)}", file=sys.stderr)
+            return 2
+        src, dest = os.path.join(o.out, "pages", files[num]), os.path.join(o.out, f"page_{num}.png")
+        if src.endswith(".svg"):
+            cairosvg.svg2png(bytestring=svg_for_cairo(src), write_to=dest, scale=o.scale, background_color="white")
+        else:
+            import shutil
+            shutil.copy(src, dest)
+        print(dest)
+    return 0
 
 
 # ------------------------------------------------------------------------ abc
@@ -211,13 +237,18 @@ def main():
     a = sub.add_parser("abc")
     a.add_argument("out")
     a.add_argument("--voice-track", type=int)
+    v = sub.add_parser("render")
+    v.add_argument("out")
+    v.add_argument("pages", nargs="+", help="1-based page numbers, or 'last'")
+    v.add_argument("--scale", type=float, default=0.4)
     j = sub.add_parser("js")
     j.add_argument("name", choices=["search", "fetch-score"])
     o = ap.parse_args()
     if o.cmd == "js":
         print(os.path.join(os.path.dirname(HERE), "js", o.name + ".js"))
         return 0
-    return {"search-url": cmd_search_url, "results": cmd_results, "unpack": cmd_unpack, "abc": cmd_abc}[o.cmd](o)
+    return {"search-url": cmd_search_url, "results": cmd_results, "unpack": cmd_unpack, "abc": cmd_abc,
+            "render": cmd_render}[o.cmd](o)
 
 
 if __name__ == "__main__":

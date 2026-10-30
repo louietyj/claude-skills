@@ -1,6 +1,5 @@
-// Evaluate (awaited) on a musescore.com score page. Returns one JSON string:
-// {ok, meta, files: {name: base64}, problems}. How each step works, and what to
-// check when MuseScore changes it, is in SKILL.md under "How MuseScore serves a score".
+// Evaluate (awaited) on a score page; returns JSON {ok, meta, files: {name: base64}, problems}.
+// SKILL.md's "How MuseScore serves a score" explains each step below.
 (async () => {
   // md5 (RFC 1321) over an ASCII string, for the jmuse Authorization token.
   const md5 = (s) => {
@@ -80,7 +79,6 @@
   for (let i = 1; i < s.pages_count; i++) wanted.push(['img', i]);
   if (!s.is_pdf) wanted.push(['midi', 0]);
 
-  // Find the suffix the server accepts, probing with the first wanted file.
   let suffix = null, probe = null;
   if (wanted.length) {
     for (const sx of suffixes) {

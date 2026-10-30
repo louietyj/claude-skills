@@ -34,7 +34,9 @@ HINTs stay the only ones) and runs a `pinchtab bridge --cdp-attach` to it on por
 which every page comes back from) trusted by the SSRF guard.
 
 `PINCHTAB_CLOUD_PROFILE=<name>` starts the browser with that Browser Use profile
-(`profileId`, looked up by name under `/api/v4/profiles`, created if absent).
+(`profileId`, looked up by name under `/api/v4/profiles`); a missing one is an
+error, and only `pinchtab-cloud profile create <name>` makes one, since a
+profile is a login any later session can use.
 Browser Use loads the profile's cookies and localStorage into the default context
 and saves them back when the browser ends, by stop or timeout; the bridge drives
 that context, so a login made through pinchtab persists. A call naming another

@@ -648,23 +648,17 @@ except Exception:
     print("Stop sent; Browser Use did not report the usage.")'
     rm -f "$B"
   }
-  profile_id() {  # $PROFILE's id, creating the profile on first use
-    # Creates only when the list came back without it, never on a failed list.
-    id=$(api "$PROFILES?pageSize=100" | python3 -c '
+  profile_id() {  # $1's id; empty if there is no such profile, failing if the list does
+    api "$PROFILES?pageSize=100" | python3 -c '
 import json, sys
-print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == sys.argv[1]), "new"))' "$PROFILE") || return 1
-    if [ "$id" = new ]; then
-      api -X POST "$PROFILES" --data "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$PROFILE")" | json id
-    else
-      echo "$id"
-    fi
+print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == sys.argv[1]), ""))' "$1"
   }
   start_cloud() {  # $1 country
     stop_cloud > /dev/null
     extra=
     if [ -n "$PROFILE" ]; then
-      pid=$(profile_id)
-      [ -n "$pid" ] || { echo "$NAME: could not find or create the profile \"$PROFILE\"" >&2; return 1; }
+      pid=$(profile_id "$PROFILE") || { echo "$NAME: could not list Browser Use profiles" >&2; return 1; }
+      [ -n "$pid" ] || { echo "$NAME: no profile named \"$PROFILE\". Creating one is a separate step that needs Louie's explicit yes: $NAME profile create <name>" >&2; return 1; }
       extra=",\"profileId\":\"$pid\""
     fi
     # 1440x900 like the local browser, so its shots stay under claude.ai's
@@ -706,6 +700,14 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
       exit $? ;;
     stop)
       stop_cloud
+      exit 0 ;;
+    profile)
+      [ "${2:-}" = create ] && [ -n "${3:-}" ] || { echo "usage: $NAME profile create <name>" >&2; exit 2; }
+      pid=$(profile_id "$3") || { echo "$NAME: could not list Browser Use profiles" >&2; exit 1; }
+      [ -z "$pid" ] || { echo "$NAME: a profile named \"$3\" already exists" >&2; exit 1; }
+      pid=$(api -X POST "$PROFILES" --data "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$3")" | json id)
+      [ -n "$pid" ] || { echo "$NAME: Browser Use did not create the profile" >&2; exit 1; }
+      echo "$NAME: created the profile \"$3\"; use it with PINCHTAB_CLOUD_PROFILE=$3"
       exit 0 ;;
     live)  # a link a person opens to see and drive this browser, e.g. to log in
       ensure || exit 1

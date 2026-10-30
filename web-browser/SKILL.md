@@ -230,11 +230,18 @@ EOF
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
 - `pinchtab-cloud start --country gb` for another country.
-- **A login that lasts:** set `PINCHTAB_CLOUD_PROFILE=<name>` on every call
-  of a task that should stay logged in. The browser loads that Browser Use
-  profile's cookies and saves them back when it ends (`stop`, or the hour
-  running out); the profile is created on first use. A call with another
-  profile, or none, replaces the browser.
+- **A login that lasts: almost never what you want.** A profile keeps a
+  login usable by any later session, which is a very different risk from a
+  one-off login. Logging in to check something once (a Cigna policy
+  document) is not a reason for one; only a recurring job that must stay
+  logged in is. Never create one without Louie's explicit yes to that
+  profile. Then:
+  - `pinchtab-cloud profile create <name>`, once.
+  - `PINCHTAB_CLOUD_PROFILE=<name>` on every call of a task that uses it.
+    The browser loads the profile's cookies and saves them back when it
+    ends (`stop`, or the hour running out). A missing profile is an error,
+    not a cue to create it. A call with another profile, or none, replaces
+    the browser.
 - `pinchtab-cloud live` prints a link a person can open to watch and drive
   the browser: give it to Louie when he should log in himself.
 - **A first look may catch the bot check**: "Verifying the device..." on

@@ -64,6 +64,13 @@ case ":$PATH:" in
   *) echo "warning: $BIN_DIR is not on PATH; run: export PATH=\"$BIN_DIR:\$PATH\"" >&2 ;;
 esac
 
+# session-init passes --no-check: it reads the memory index straight after,
+# which proves the same thing, and probes the store itself only if that fails.
+if [ "${1:-}" = "--no-check" ]; then
+  echo "ready -- \`cfs\` is on PATH."
+  exit 0
+fi
+
 # Prove the whole path works -- shim, interpreter, credentials, network. A
 # failure here is worth hitting now rather than inside the first real command.
 if ! "$BIN_DIR/cfs" list / >/dev/null 2>&1; then

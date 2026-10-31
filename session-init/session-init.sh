@@ -129,6 +129,11 @@ PY
 # Triggered cloud runs allow every connector tool and never see these policies,
 # so their SessionStart hook re-imposes them from this snapshot. This step alone
 # owns the file, so it overwrites it unattended.
+#
+# Cloud Code, Cowork and Duet all run this, each with its own platform servers
+# (claude-code-remote, hearthbot, widgets...) and a different subset of
+# connectors. So only the user's connectors are kept (platform servers have no
+# displayName), merged per server so a session lacking one doesn't drop it.
 cat >"$WORK/policy.py" <<'PY'
 import glob, json, os, re, subprocess, sys, tempfile
 
@@ -143,7 +148,7 @@ for path in glob.glob("/tmp/mcp-config-*.json"):
         continue
     for server, cfg in servers.items():
         tools = cfg.get("tools", [])
-        if not any("permission_policy" in t for t in tools):
+        if "displayName" not in cfg or not any("permission_policy" in t for t in tools):
             continue
         entry = policy.setdefault(server, {"ask": [], "deny": []})
         for t in tools:
@@ -157,12 +162,16 @@ if not policy:
     print("No connector policies in this session (triggered run, or not cloud); nothing to snapshot.")
     sys.exit(0)
 
-body = json.dumps(policy, indent=2, sort_keys=True) + "\n"
-
 with tempfile.TemporaryDirectory() as tmp:
     local = os.path.join(tmp, "current.json")
     subprocess.run(["cfs", "download", STORE_PATH, "--to", local], capture_output=True)
     current = open(local).read() if os.path.exists(local) else None
+try:
+    merged = json.loads(current) if current else {}
+except ValueError:
+    merged = {}
+merged.update(policy)
+body = json.dumps(merged, indent=2, sort_keys=True) + "\n"
 if current == body:
     print("Connector policies unchanged.")
     sys.exit(0)

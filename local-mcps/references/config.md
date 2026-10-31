@@ -18,6 +18,8 @@ A top-level `catalogUrl` beside `mcpServers` holds a share link to
 server. It is optional: without it, `servers` prints server lines only. The
 index is rebuilt every few hours by `routine/refresh.py`, so a server added here
 shows `(tools not indexed)` until the next run — which is correct, not broken.
+The same link as a second line of `config-url.txt` lets the two downloads
+overlap; it is ignored unless it matches `catalogUrl`.
 
 **Every server needs a `description`.** It is a non-standard key `lmcps` adds to
 the schema, and it is what `lmcps servers` prints — the trigger conditions for

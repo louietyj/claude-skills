@@ -236,15 +236,18 @@ PY
 
 # --- launch everything, then wait -------------------------------------------
 # The cfs shim is local and quick, and every cfs call needs it, so it goes
-# first. The index read and the policy sync are chained rather than run
-# side by side: with no token cached yet, each would mint its own. The deny
-# step finishes before the policy sync starts, since both rewrite settings.json.
+# first. `cfs auth` caches a token before the index read and the policy sync
+# start side by side; otherwise each would mint its own. A failure there shows
+# up in the index read. The deny step finishes before the policy sync starts,
+# since both rewrite settings.json.
 capture deny python3 -I "$WORK/deny.py"
 if [ -n "$DFS" ]; then
   capture dfs bash "$DFS/setup.sh" --no-check
   if [ "$(cat "$WORK/dfs.rc")" -eq 0 ]; then
-    { capture index cfs read /memory/INDEX.md --full
-      capture policy python3 -I "$WORK/policy.py"; } &
+    { cfs auth >/dev/null 2>&1
+      capture index cfs read /memory/INDEX.md --full &
+      capture policy python3 -I "$WORK/policy.py" &
+      wait; } &
   fi
 fi
 [ -n "$LMCPS" ] && capture lmcps bash "$LMCPS/setup.sh" &

@@ -783,6 +783,65 @@ class TestConfigOverHttp(Base):
         self.assertNotIn("not valid JSON", r.stderr)
 
 
+class LinkHandler(BaseHTTPRequestHandler):
+    """Serves both share links: the config, which names the catalog, and the catalog."""
+    paths = []
+
+    def do_GET(self):
+        LinkHandler.paths.append(self.path)
+        port = self.server.server_address[1]
+        if self.path.startswith("/catalog.json"):
+            body = catalog({"fetched": indexed("lookup")})
+        else:
+            body = {"catalogUrl": f"http://127.0.0.1:{port}/catalog.json?rlkey=c",
+                    "mcpServers": {"fetched": {"type": "http", "url": "http://x.invalid",
+                                               "description": "came over the wire"}}}
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
+
+    def log_message(self, *a):
+        pass
+
+
+class TestCatalogPrefetch(Base):
+    """A catalog link on config-url.txt's second line downloads alongside the config."""
+
+    run_linked = TestConfigOverHttp.run_linked
+
+    def setUp(self):
+        super().setUp()
+        LinkHandler.paths = []
+        self.httpd = HTTPServer(("127.0.0.1", 0), LinkHandler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.shutdown)
+        self.skill_dir = self.tmp / "skill"
+        (self.skill_dir / "bin").mkdir(parents=True)
+        shutil.copy(LMCPS, self.skill_dir / "bin" / "lmcps.py")
+        self.port = self.httpd.server_address[1]
+
+    def link(self, catalog_path):
+        (self.skill_dir / "config-url.txt").write_text(
+            f"http://127.0.0.1:{self.port}/config.json?rlkey=abc\n"
+            f"http://127.0.0.1:{self.port}/{catalog_path}?rlkey=c\n", encoding="utf-8")
+
+    def test_a_matching_link_is_prefetched_with_the_config(self):
+        self.link("catalog.json")
+        # `refresh` loads only the config, so a cached catalog means the prefetch ran.
+        self.assertEqual(self.run_linked("refresh").returncode, 0)
+        self.assertTrue((self.tmp / "home" / "catalog.json").is_file())
+
+        self.httpd.shutdown()
+        r = self.run_linked("servers")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("lookup", r.stdout)
+
+    def test_a_link_the_config_does_not_name_is_ignored(self):
+        self.link("stale.json")
+        self.assertEqual(self.run_linked("refresh").returncode, 0)
+        self.assertFalse((self.tmp / "home" / "catalog.json").exists())
+
+
 def catalog(servers, built_at="2099-01-01T00:00:00Z"):
     return {"version": 1, "builtAt": built_at, "builtBy": "test", "servers": servers}
 

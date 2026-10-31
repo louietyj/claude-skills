@@ -1922,6 +1922,11 @@ def cmd_download(args) -> str:
     return f"Downloaded {path} -> {args.dest} ({human_size(len(data))}).\nrev: {meta['rev']}"
 
 
+def cmd_auth(args) -> str:
+    access_token()
+    return "Access token cached."
+
+
 # --------------------------------------------------------------------------
 
 
@@ -2106,6 +2111,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path")
     p.add_argument("--to", dest="dest", required=True, help="local destination")
     p.set_defaults(func=cmd_download)
+
+    # For session-init: mint once, so the calls it then runs side by side share it.
+    p = sub.add_parser("auth", help="mint and cache an access token")
+    p.set_defaults(func=cmd_auth)
 
     return parser
 

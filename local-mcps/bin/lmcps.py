@@ -96,6 +96,7 @@ def expand(val, env):
 #   1. $LMCPS_CONFIG           an explicit path (tests, local development)
 #   2. $LMCPS_HOME/config.json the copy fetched earlier this conversation
 #   3. config-url.txt          a Dropbox shared link, fetched and then cached
+#                              (a second line prefetches the catalog alongside)
 #   4. config.json             sitting beside the skill, used as-is
 #
 # Deliberately no fall back to ~/.claude.json: it exists on a Claude Code
@@ -105,15 +106,14 @@ def expand(val, env):
 CONFIG_CACHE = LMCPS_HOME / "config.json"
 
 
-def config_url():
+def config_links():
+    """The config link, then optionally the catalog link -- also named inside
+    the config, but listing it here lets the two downloads overlap."""
     f = SKILL_DIR / "config-url.txt"
     if not f.is_file():
-        return None
-    for line in f.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            return line
-    return None
+        return []
+    lines = (l.strip() for l in f.read_text(encoding="utf-8").splitlines())
+    return [l for l in lines if l and not l.startswith("#")]
 
 
 def bust(url):
@@ -175,12 +175,23 @@ def load_config(force_refresh=False):
     if CONFIG_CACHE.is_file() and not force_refresh:
         return parse_config(CONFIG_CACHE.read_text(encoding="utf-8"), CONFIG_CACHE)
 
-    url = config_url()
-    if url:
+    links = config_links()
+    if links:
+        url = links[0]
+        hint = links[1] if len(links) > 1 else None
+        prefetched = {}
+        if hint:
+            prefetch = threading.Thread(
+                target=lambda: prefetched.update(text=fetch_catalog(hint)), daemon=True)
+            prefetch.start()
         text = fetch_config(url)
         doc = parse_config(text, url)  # validate before caching
         LMCPS_HOME.mkdir(parents=True, exist_ok=True)
         CONFIG_CACHE.write_text(text, encoding="utf-8")
+        # The config stays the authority on where the catalog lives.
+        if hint and doc.get("catalogUrl") == hint:
+            prefetch.join()
+            cache_catalog(prefetched.get("text"))
         return doc
 
     local = SKILL_DIR / "config.json"
@@ -238,12 +249,18 @@ def load_catalog(doc):
     url = doc.get("catalogUrl")
     if not url:
         return None
+    return cache_catalog(fetch_catalog(url))
+
+
+def fetch_catalog(url):
     try:
         with urllib.request.urlopen(bust(url), timeout=30) as r:
-            text = r.read().decode("utf-8")
+            return r.read().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
+
+def cache_catalog(text):
     cat = parse_catalog(text)
     if cat is None:
         return None

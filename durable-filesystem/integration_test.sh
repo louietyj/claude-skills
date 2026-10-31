@@ -44,6 +44,13 @@ body() {
     | sed 's/^ *[0-9]*\t//'
 }
 
+echo "=== auth ==="
+TOKEN_CACHE=$(python -c 'import os, tempfile; print(os.path.join(tempfile.gettempdir(), ".cfs-token.json"))')
+rm -f "$TOKEN_CACHE"
+expect_ok "auth mints a token" $CFS auth
+[ -s "$TOKEN_CACHE" ] && ok "auth caches the token for later calls" \
+  || bad "auth caches the token for later calls"
+
 echo "=== create / write via --json stdin ==="
 expect_ok_json "write --new with JSON stdin" '{"content": "line one\nline two\n"}' \
   $CFS write $ROOT/a.md --new --json

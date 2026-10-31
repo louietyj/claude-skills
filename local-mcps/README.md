@@ -86,7 +86,7 @@ The tool index is optional — without it `servers` prints what it always printe
 
 1. Run `refresh.py` once by hand, on a box that can reach both Dropbox and your servers. `/mcp-catalog.json` appears beside the config.
 2. Run it a **second** time, then confirm the file's share link still serves. The whole read path depends on `mode=overwrite` updating the file in place rather than replacing it; check that once here rather than discovering it silently broken weeks later.
-3. In Dropbox, right-click `/mcp-catalog.json` → **Copy link**, and add it to `mcp.json` as a top-level `catalogUrl`, beside `mcpServers`.
+3. In Dropbox, right-click `/mcp-catalog.json` → **Copy link**, and add it to `mcp.json` as a top-level `catalogUrl`, beside `mcpServers`. Paste the same link as a second line of `config-url.txt` too: the config only names the catalog once fetched, so this copy lets both downloads run at once. It is used only while it matches `catalogUrl`.
 
    **A share link follows a rename.** If `/mcp-catalog.json` came into being by renaming `/mcp.json` rather than by a fresh upload, the link already in `config-url.txt` now points at the catalog — and its URL still *says* `mcp.json`, so it looks right. Both links must be re-checked against `get_shared_link_metadata`, not against what the URL reads. `lmcps` names this specific mix-up rather than reporting a config with no `mcpServers`, because the generic error sends you to inspect a config that is fine.
 4. `python package.py` and re-upload, so the skill knows to look for `catalogUrl`.

@@ -25,8 +25,9 @@ def config_member():
             links = [l.strip() for l in fh if l.strip() and not l.startswith("#")]
         if not links:
             raise SystemExit("config-url.txt has no link in it -- only comments.")
-        if not links[0].startswith("http"):
-            raise SystemExit(f"config-url.txt does not look like a URL: {links[0][:60]}")
+        for link in links[:2]:
+            if not link.startswith("http"):
+                raise SystemExit(f"config-url.txt does not look like a URL: {link[:60]}")
         return "config-url.txt"
 
     local = os.path.join(HERE, "config.json")

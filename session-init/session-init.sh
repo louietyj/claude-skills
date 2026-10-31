@@ -125,53 +125,96 @@ print("Native WebSearch and WebFetch are denied. Use mcp-parallel's web_search")
 print("and web_fetch for all web work.")
 PY
 
-# --- snapshot connector tool policies for triggered runs ----------------------
-# Triggered cloud runs allow every connector tool and never see these policies,
-# so their SessionStart hook re-imposes them from this snapshot. This step alone
-# owns the file, so it overwrites it unattended.
+# --- sync connector tool policies with the snapshot ---------------------------
+# Triggered cloud runs and Duet allow every connector tool regardless of the
+# user's claude.ai settings. Sessions that enforce them (cloud Code, Cowork)
+# write this snapshot; Duet, marked by its hearthbot server in every session
+# kind, applies it to itself instead, since nothing else runs on a fresh Duet
+# box. Triggered cloud runs apply it from a SessionStart hook (cloud-env).
 #
-# Cloud Code, Cowork and Duet all run this, each with its own platform servers
-# (claude-code-remote, hearthbot, widgets...) and a different subset of
-# connectors. So only the user's connectors are kept (platform servers have no
-# displayName), merged per server so a session lacking one doesn't drop it.
+# Only the user's connectors are kept: platform servers (claude-code-remote,
+# hearthbot, widgets...) differ per session kind and have no displayName.
 cat >"$WORK/policy.py" <<'PY'
 import glob, json, os, re, subprocess, sys, tempfile
 
 STORE_PATH = "/connector-policy.json"
+SETTINGS = os.path.expanduser("~/.claude/settings.json")
+# lmcps-authorize is the approval gate itself; Duet keeps it ungated.
+UNGATED = {"lmcps-authorize"}
 
-policy = {}
+servers = {}
 for path in glob.glob("/tmp/mcp-config-*.json"):
     try:
         with open(path) as f:
-            servers = json.load(f).get("mcpServers", {})
+            servers.update(json.load(f).get("mcpServers", {}))
     except (OSError, ValueError):
         continue
-    for server, cfg in servers.items():
-        tools = cfg.get("tools", [])
-        if "displayName" not in cfg or not any("permission_policy" in t for t in tools):
+
+
+def read_snapshot():
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, "current.json")
+        subprocess.run(["cfs", "download", STORE_PATH, "--to", local], capture_output=True)
+        return open(local).read() if os.path.exists(local) else None
+
+
+if "hearthbot" in servers:
+    raw = read_snapshot()
+    if raw is None:
+        print(f"Duet session, but {STORE_PATH} is missing: connector tools run ungated.")
+        sys.exit(1)
+    snapshot = json.loads(raw)
+    connectors = {s for s, cfg in servers.items() if "displayName" in cfg and s not in UNGATED}
+    ask, deny, unknown = set(), set(), []
+    for server in connectors:
+        entry = snapshot.get(server)
+        if entry is None:
+            ask.add(f"mcp__{server}__*")
+            unknown.append(server)
             continue
-        entry = policy.setdefault(server, {"ask": [], "deny": []})
-        for t in tools:
-            p = t.get("permission_policy")
-            if p == "always_ask":
-                entry["ask"].append(t["name"])
-            elif p == "always_deny":
-                entry["deny"].append(t["name"])
+        ask |= {f"mcp__{server}__{t}" for t in entry["ask"]}
+        deny |= {f"mcp__{server}__{t}" for t in entry["deny"]}
+
+    try:
+        with open(SETTINGS) as f:
+            settings = json.load(f)
+    except FileNotFoundError:
+        settings = {}
+    perms = settings.setdefault("permissions", {})
+    ours = tuple(f"mcp__{s}__" for s in connectors)
+    perms["ask"] = sorted({r for r in perms.get("ask", []) if not r.startswith(ours)} | ask)
+    perms["deny"] = sorted({r for r in perms.get("deny", []) if not r.startswith(ours)} | deny)
+    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SETTINGS))
+    with os.fdopen(fd, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, SETTINGS)
+    msg = f"Duet session: applied {STORE_PATH} to {SETTINGS} ({len(ask)} ask, {len(deny)} deny rules)"
+    if unknown:
+        msg += f"; not in the snapshot, so every tool asks: {', '.join(sorted(unknown))}"
+    print(msg + ". This session reads the snapshot and never writes it.")
+    sys.exit(0)
+
+policy = {}
+for server, cfg in servers.items():
+    tools = cfg.get("tools", [])
+    if "displayName" not in cfg or not any("permission_policy" in t for t in tools):
+        continue
+    entry = policy.setdefault(server, {"ask": [], "deny": []})
+    for t in tools:
+        p = t.get("permission_policy")
+        if p == "always_ask":
+            entry["ask"].append(t["name"])
+        elif p == "always_deny":
+            entry["deny"].append(t["name"])
 
 if not policy:
     print("No connector policies in this session (triggered run, or not cloud); nothing to snapshot.")
     sys.exit(0)
 
-with tempfile.TemporaryDirectory() as tmp:
-    local = os.path.join(tmp, "current.json")
-    subprocess.run(["cfs", "download", STORE_PATH, "--to", local], capture_output=True)
-    current = open(local).read() if os.path.exists(local) else None
-try:
-    merged = json.loads(current) if current else {}
-except ValueError:
-    merged = {}
-merged.update(policy)
-body = json.dumps(merged, indent=2, sort_keys=True) + "\n"
+body = json.dumps(policy, indent=2, sort_keys=True) + "\n"
+current = read_snapshot()
 if current == body:
     print("Connector policies unchanged.")
     sys.exit(0)
@@ -195,8 +238,10 @@ PY
 
 # --- launch everything, then wait -------------------------------------------
 # The cfs shim is local and quick, and every cfs call needs it, so it goes
-# first. The index read and the policy snapshot are chained rather than run
-# side by side: with no token cached yet, each would mint its own.
+# first. The index read and the policy sync are chained rather than run
+# side by side: with no token cached yet, each would mint its own. The deny
+# step finishes before the policy sync starts, since both rewrite settings.json.
+capture deny python3 -I "$WORK/deny.py"
 if [ -n "$DFS" ]; then
   capture dfs bash "$DFS/setup.sh" --no-check
   if [ "$(cat "$WORK/dfs.rc")" -eq 0 ]; then
@@ -205,7 +250,6 @@ if [ -n "$DFS" ]; then
   fi
 fi
 [ -n "$LMCPS" ] && capture lmcps bash "$LMCPS/setup.sh" &
-capture deny python3 -I "$WORK/deny.py"
 wait
 
 # setup.sh skipped its probe. If the index read failed, probe now to tell an
@@ -285,11 +329,11 @@ fi
 
 if [ -z "${cfs_ok:-}" ]; then
   skip 'cfs is not working'
-  note 'connector policy snapshot' 'SKIPPED'
-elif show policy 'snapshot connector policies to /connector-policy.json'; then
-  note 'connector policy snapshot' 'OK -- see step 7'
+  note 'connector policy sync' 'SKIPPED'
+elif show policy 'sync connector policies with /connector-policy.json'; then
+  note 'connector policy sync' 'OK -- see step 7'
 else
-  note 'connector policy snapshot' 'FAILED -- triggered runs may use a stale policy'
+  note 'connector policy sync' 'FAILED -- see step 7'
 fi
 
 printf '\n%s SESSION INIT COMPLETE %s\n' "$RULE_H" "$RULE_H"

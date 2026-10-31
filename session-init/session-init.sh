@@ -139,8 +139,6 @@ import glob, json, os, re, subprocess, sys, tempfile
 
 STORE_PATH = "/connector-policy.json"
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
-# lmcps-authorize is the approval gate itself; Duet keeps it ungated.
-UNGATED = {"lmcps-authorize"}
 
 servers = {}
 for path in glob.glob("/tmp/mcp-config-*.json"):
@@ -164,7 +162,7 @@ if "hearthbot" in servers:
         print(f"Duet session, but {STORE_PATH} is missing: connector tools run ungated.")
         sys.exit(1)
     snapshot = json.loads(raw)
-    connectors = {s for s, cfg in servers.items() if "displayName" in cfg and s not in UNGATED}
+    connectors = {s for s, cfg in servers.items() if "displayName" in cfg}
     ask, deny, unknown = set(), set(), []
     for server in connectors:
         entry = snapshot.get(server)

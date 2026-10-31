@@ -177,8 +177,7 @@ setup_cloud() {
   printf '%s' "$CLOUD_KEY" > "$CLOUD_DIR/key"
   # The bridge gets its own config: its own state dir, so it never touches the
   # local server's profile, and trust in Browser Use's in-cluster proxy, which
-  # every page of that browser comes back from (10.0.x.x). Page downloads land
-  # on Browser Use's machine, under /tmp there, and pinchtab copies them back.
+  # every page of that browser comes back from (10.0.x.x).
   if ! python3 - "$("$REAL" config path)" "$CLOUD_DIR" <<'PY'
 import json, sys
 src, d = sys.argv[1:]
@@ -188,7 +187,6 @@ sec = c.setdefault("security", {})
 sec["trustedProxyCIDRs"] = ["10.0.0.0/8"]
 sec["attach"] = {**sec.get("attach", {}), "enabled": True,
                  "allowHosts": ["*.cdp.browser-use.com"], "allowSchemes": ["https", "wss"]}
-c.setdefault("instanceDefaults", {}).update(downloadBehavior="managed", downloadDir="/tmp/pinchtab-downloads")
 json.dump(c, open(d + "/config.json", "w"), indent=2)
 open(d + "/token", "w").write(c["server"]["token"])
 PY

@@ -191,7 +191,8 @@ EOF
 
 and pass `--tab <id>` on every step for his tab.
 
-He watches it happen, and each screenshot brings your tab to the front. Never
+He may be watching. Your tab works in the background and never takes his
+active tab, so several agents can share his window at once. Never
 close or navigate a tab of his he didn't hand you, and close your own when
 done (`pinchtab-windows tab close <id>`). Confirm before anything that acts as
 him: paying, sending, deleting, changing settings. A file a page downloads

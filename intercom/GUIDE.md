@@ -149,7 +149,7 @@ intercom watch
   `>>` lines are notes you sent.
 - `tail`: the turn still being spoken, so far. Its last words may still
   change; read it to stay current, but never steer on how it ends. A
-  monologue is cut into turns at sentence ends every ~12s, so a long answer
+  monologue is cut into turns at sentence ends every ~5s, so a long answer
   doesn't stay invisible until it stops. In talk mode a turn stays in `tail`
   until Louie has been silent for the turn wait (0s unless changed), so a
   pause to think doesn't end it.

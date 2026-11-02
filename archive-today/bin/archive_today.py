@@ -244,7 +244,8 @@ def submit(url, fresh=False):
         return "done", target
     if status == 200 and b"Loading" in body:
         # A static page with no wip id, no refresh and no script. Every wsj.com URL got
-        # it on 2026-11-02, with or without anyway=1, and no capture ever appeared.
+        # it from the sandbox on 2026-11-02, with or without anyway=1, and no capture
+        # appeared, though other people's WSJ captures keep landing.
         raise Refused(f"archive.today accepted no capture of {url} (its id-less 'Loading' page)")
     raise Broken("unexpected-response", f"/submit/ answered {status}, target {target!r}: {body[:200]!r}")
 
@@ -379,8 +380,8 @@ def main():
     try:
         return a.fn(a)
     except Refused as e:
-        log(f"archive-today: {e}. It refuses some sites outright (all of wsj.com as of 2026-11-02); "
-            f"retrying won't help. Move on to a wire-syndicated copy or ghostarchive.")
+        log(f"archive-today: {e}. It refuses some sites' submissions from here (wsj.com as of "
+            f"2026-11-02); retrying won't help. Move on to a wire-syndicated copy or ghostarchive.")
         return EXIT_REFUSED
     except Broken as e:
         log(f"archive-today FAILED ({e.section}): {e}")

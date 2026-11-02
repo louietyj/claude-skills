@@ -33,8 +33,9 @@ command to resume. Run that; don't submit again.
 `--fresh` (on `read` and `submit`) captures again even if a snapshot exists.
 `--url-only` prints the snapshot URL instead of the text; `--html FILE` also saves the
 page. Exit codes: 0 done, 1 broken (see below), 3 no snapshot, 4 still capturing,
-5 archive.today refused to capture the site. It refuses all of wsj.com (as of
-2026-11-02), so a WSJ article is readable only if someone else already archived it.
+5 archive.today refused to capture the URL. As of 2026-11-02 it refuses every wsj.com
+submission from the sandbox, though others keep capturing WSJ. So existing WSJ
+snapshots read fine (they usually appear within hours), but you can't make a new one.
 With `--fresh`, `read` falls back to the newest snapshot instead.
 
 ## The URL decides whether there's a match

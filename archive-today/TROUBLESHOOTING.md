@@ -89,8 +89,10 @@ The error carries the status and the start of the body.
 - `/submit/` with no `Refresh` header and no "Loading" page: look for a form or token.
   Until 2026 the homepage form carried a hidden `submitid`, and that may be back.
 - A 200 "Loading" page with no wip id, no refresh and no script means archive.today
-  refused the capture (exit 5, not this section). On 2026-11-02 every wsj.com URL got it,
-  with or without `anyway=1`, and `/timemap/<url>` showed no capture appeared. FT,
+  refused the capture (exit 5, not this section). On 2026-11-02 every wsj.com URL got it
+  from the sandbox, with or without `anyway=1`, and `/timemap/<url>` showed no capture
+  appeared. Other people's WSJ captures kept landing, so the refusal is specific to the
+  submitter: its IP, or something about the request. That hasn't been narrowed down. FT,
   Economist, Bloomberg, Atlantic and NYT submitted normally.
 - `/timemap/<url>` lists every snapshot of a URL, with timestamps. It's the quickest way
   to check whether a submit ever produced anything.

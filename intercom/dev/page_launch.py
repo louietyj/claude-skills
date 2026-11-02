@@ -77,45 +77,61 @@ def main():
             check(page.evaluate("tapRetries === null && meterCtx.state === 'running'"),
                   "its tap was enough: nothing more asked")
             page.click("#menu")
-            check(not page.is_visible("#route"), "no earpiece offered where the browser lists none")
+            options = lambda: page.eval_on_selector_all("#route option", "os => os.map((o) => o.text)")
+            check(page.is_visible("#route") and options() == ["Automatic"],
+                  "with no devices listed, the audio dropdown holds only Automatic")
             page.click("#done")
             page.click("#stop")
 
-            # Chrome on Android lists the earpiece as a mic named "Headset earpiece";
-            # here the fake mic plays it, and every mic the page opens is logged.
+            # Chrome on Android lists the call devices as mics under fixed names; here
+            # the fake mic plays the earpiece and a made-up id the speaker, and every
+            # mic the page opens is logged.
             ctx = browser.new_context()
             ctx.add_init_script(f"localStorage.setItem('intercom-k', '{ts.DEV}')")
             ctx.add_init_script("""
                 window.__opened = [];
                 const md = navigator.mediaDevices;
                 const enumerate = md.enumerateDevices.bind(md), gum = md.getUserMedia.bind(md);
-                md.enumerateDevices = async () => (await enumerate()).map((d) =>
-                  d.kind === "audioinput" && d.deviceId !== "default"
-                    ? { kind: d.kind, deviceId: d.deviceId, groupId: d.groupId, label: "Headset earpiece" } : d);
-                md.getUserMedia = (c) => { __opened.push(c.audio?.deviceId?.exact ?? null); return gum(c); };
+                md.enumerateDevices = async () => {
+                  const ds = await enumerate();
+                  const mic = ds.find((d) => d.kind === "audioinput" && d.deviceId !== "default");
+                  return [...ds.filter((d) => d.deviceId === "default"),
+                          { kind: "audioinput", deviceId: "spk", groupId: "", label: "Speakerphone" },
+                          { kind: "audioinput", deviceId: mic.deviceId, groupId: "", label: "Headset earpiece" }];
+                };
+                md.getUserMedia = (c) => {
+                  const id = c.audio?.deviceId?.exact ?? null;
+                  __opened.push(id);
+                  return gum(id === "spk" ? { audio: true } : c);
+                };
             """)
             page = ctx.new_page()
             n = ts.stream_count()
             page.goto(f"{ts.BASE}/?ui=phone")
             page.click("#launchbtn")
             opened_room(page, n)
-            page.wait_for_function("earpieceId !== null", timeout=5000)
+            page.wait_for_function("routes.length === 3", timeout=5000)
             page.click("#menu")
-            check(page.inner_text("#route") == "Play on earpiece", "the sheet offers the earpiece")
-            page.click("#route")
+            check(options() == ["Automatic", "Speaker", "Earpiece"], "the dropdown lists Chrome's devices")
+            earpiece = page.evaluate("routes[2].id")
+            page.select_option("#route", earpiece)
             page.wait_for_function("routeStream !== null", timeout=5000)
-            check(page.evaluate("__opened.at(-1) === earpieceId && stream.getAudioTracks()[0].readyState === 'live'"),
-                  "it opens a mic on the earpiece and leaves the recorder's alone")
-            check(page.inner_text("#route") == "Play on speaker", "then offers the speaker")
-            page.click("#route")
-            page.wait_for_function("routeStream === null", timeout=5000)
-            check(page.evaluate("__opened.at(-1) === 'default'"), "the speaker hands the route back to the default")
-            page.click("#route")
+            check(page.evaluate(f"__opened.at(-1) === '{earpiece}' && stream.getAudioTracks()[0].readyState === 'live'"),
+                  "picking one opens a mic on it and leaves the recorder's alone")
+            page.select_option("#route", "spk")
+            page.wait_for_function("routeId === 'spk'", timeout=5000)
+            check(page.evaluate("__opened.slice(-1)[0] === 'spk' && routeStream.active"),
+                  "another pick swaps that mic for the new device")
+            page.select_option("#route", "default")
+            page.wait_for_function("routeStream === null && routeId === 'default'", timeout=5000)
+            check(page.evaluate("__opened.at(-1) === 'default'"), "Automatic hands the route back to the default")
+            page.select_option("#route", earpiece)
             page.wait_for_function("routeStream !== null", timeout=5000)
             page.click("#done")
             page.click("#pause")
             page.wait_for_function("!holding", timeout=5000)
-            check(page.evaluate("routeStream === null"), "leaving the audio closes the earpiece's mic")
+            check(page.evaluate("routeStream === null") and options() == ["Automatic"],
+                  "leaving the audio closes that mic and empties the list")
             page.click("#stop")
             browser.close()
 

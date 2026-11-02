@@ -403,18 +403,21 @@ quick rooms end like any other. Choices:
   talk sections by heading (about half the guide). Every Monitor wake re-reads
   the whole context, so this shortens every turn, not just the first.
 
-**The earpiece is picked through a second mic.** Chrome on Android offers
-`setSinkId` nothing but "default". It routes every call-mode stream through
-one communication device, set by the `deviceId` of the mic opened last, and
-lists the phone's earpiece as a mic called "Headset earpiece"
-(`CommunicationDeviceSelector.java`). So the sheet's "Play on earpiece" opens
-a second mic on that device and keeps it open, which leaves the recorder's
-track and its transcriber stream untouched; "Play on speaker" closes it and
-opens the default for a moment, handing the choice back to Chrome (wired, USB,
-Bluetooth, then speaker). It is offered only when that device is listed, which
-leaves out the watch. It lasts one session, since a remembered earpiece would
-beat Louie's earbuds the next time. Web pages get no proximity sensor, so the
-screen stays on against his cheek.
+**The audio device is picked through a second mic.** Chrome on Android offers
+`setSinkId` nothing but "default", so separate input and output pickers aren't
+possible. It routes every call-mode stream, in and out, through one
+communication device, set by the `deviceId` of the mic opened last, and lists
+those devices as mics with fixed names: "Speakerphone", "Headset earpiece",
+"Wired headset", "Bluetooth headset", "USB audio"
+(`CommunicationDeviceSelector.java`). The sheet's Audio dropdown (talk mode)
+offers Automatic plus whichever of those are listed; picking one opens a second
+mic on it and keeps it open, which leaves the recorder's track and its
+transcriber stream untouched. Automatic closes it and opens the default for a
+moment, handing the choice back to Chrome (wired, USB, Bluetooth, then
+speaker). Where none are listed (the watch, or before this screen holds the
+audio) the dropdown holds only Automatic. The pick lasts one session, since a
+remembered earpiece would beat Louie's earbuds the next time. Web pages get no
+proximity sensor, so the screen stays on against his cheek.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

@@ -128,6 +128,7 @@ button:active{background:#2a2a2a}
   <button id="hangup" class="pill hide">Hang up the phone</button>
   <button id="usehere2" class="pill hide">Switch to web here</button>
   <button id="pip" class="pill hide">Picture in picture</button>
+  <button id="route" class="pill hide"></button>
   <div id="numrow" class="hint"></div>
   <input id="phonenum" class="hide" type="tel" autocomplete="tel" placeholder="+1 415 555 0123">
   <button id="savenum" class="pill hide">Save number</button>
@@ -409,6 +410,7 @@ async function takeAudio() {
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
   send({ type: "take" });
   startAudio();
+  if (talk) findEarpiece();
 }
 
 // On a socket the relay knows holds the audio: a fresh segment, and Claude's voice.
@@ -640,6 +642,8 @@ function renderSheet() {
   $("hangup").classList.toggle("hide", !roomCall);
   $("usehere2").classList.toggle("hide", holding || !(roomAudio || roomCall));
   $("pip").classList.toggle("hide", !PIP_OK || !holding);
+  $("route").classList.toggle("hide", !talk || !holding || !earpieceId);
+  $("route").textContent = routeStream ? "Play on speaker" : "Play on earpiece";
   const editing = editingNumber || !myNumber;
   $("numrow").innerHTML = myNumber && !editing ? `Calls ${myNumber} <button id="changenum">change</button>` : "Your number, for Call me";
   if ($("changenum")) $("changenum").onclick = () => { editingNumber = true; renderSheet(); };
@@ -679,6 +683,45 @@ function closeSheet() {
 addEventListener("popstate", () => {
   if (!$("sheet").classList.contains("hide")) { $("sheet").classList.add("hide"); editingNumber = false; }
 });
+
+// ---- earpiece ------------------------------------------------------------------------
+// Chrome on Android routes output by the deviceId of the mic opened last, so a second
+// mic on "Headset earpiece" moves Claude's voice there without touching the recorder's.
+// Per session: a remembered earpiece would beat Louie's earbuds next time.
+
+let earpieceId = null, routeStream = null;
+
+async function findEarpiece() {
+  try {
+    const d = (await navigator.mediaDevices.enumerateDevices())
+      .find((x) => x.kind === "audioinput" && x.label === "Headset earpiece");
+    earpieceId = d ? d.deviceId : null;
+  } catch { earpieceId = null; }
+  renderSheet();
+}
+
+async function openRoute(deviceId) {
+  return navigator.mediaDevices.getUserMedia({ audio:
+    { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+}
+
+function closeRoute() {
+  if (routeStream) routeStream.getTracks().forEach((t) => t.stop());
+  routeStream = null;
+}
+
+async function toggleRoute() {
+  if (!holding) return;
+  try {
+    if (routeStream) {
+      closeRoute();
+      (await openRoute("default")).getTracks().forEach((t) => t.stop());
+    } else if (earpieceId) {
+      routeStream = await openRoute(earpieceId);
+    }
+  } catch { closeRoute(); status("Couldn't switch the audio", "red"); }
+  renderSheet();
+}
 
 // ---- the phone line ------------------------------------------------------------------
 // The relay keeps no number: this device remembers Louie's and sends it with
@@ -726,6 +769,7 @@ $("usehere").onclick = takeAudio;
 $("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
+$("route").onclick = toggleRoute;
 
 // ---- Claude's voice (talk mode) ------------------------------------------------------
 // A WebRTC track from Cloudflare's SFU, played by an <audio> element: the only
@@ -1012,6 +1056,7 @@ function releaseAudio() {
   meterCtx = null;
   closePip();
   stopRecorder();
+  closeRoute();
   for (const s of [stream, sendStream, raw]) if (s) s.getTracks().forEach((t) => t.stop());
   stream = sendStream = raw = aec = null;
   renderRoom();

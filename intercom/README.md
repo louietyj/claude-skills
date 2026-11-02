@@ -403,6 +403,19 @@ quick rooms end like any other. Choices:
   talk sections by heading (about half the guide). Every Monitor wake re-reads
   the whole context, so this shortens every turn, not just the first.
 
+**The earpiece is picked through a second mic.** Chrome on Android offers
+`setSinkId` nothing but "default". It routes every call-mode stream through
+one communication device, set by the `deviceId` of the mic opened last, and
+lists the phone's earpiece as a mic called "Headset earpiece"
+(`CommunicationDeviceSelector.java`). So the sheet's "Play on earpiece" opens
+a second mic on that device and keeps it open, which leaves the recorder's
+track and its transcriber stream untouched; "Play on speaker" closes it and
+opens the default for a moment, handing the choice back to Chrome (wired, USB,
+Bluetooth, then speaker). It is offered only when that device is listed, which
+leaves out the watch. It lasts one session, since a remembered earpiece would
+beat Louie's earbuds the next time. Web pages get no proximity sensor, so the
+screen stays on against his cheek.
+
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the
 transcriber stream runs on (billed alike: Soniox charges for stream time, not

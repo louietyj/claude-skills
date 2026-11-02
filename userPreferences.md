@@ -40,7 +40,7 @@ Run it unconditionally; it's idempotent.
 **Research tool ladder** (ranked by priority; choose based on what you need):
 1. **mcp-parallel** — web_search and web_fetch. Your general-purpose workhorse. **Always start here — do a targeted `tool_search` if a fuzzy match doesn't surface both tools.** Can search Reddit and fetch post bodies, but **not comments**.
 2. **mcp-reddit** (a local-mcp, run through `lmcps`) — use to fetch full Reddit post/thread content once identified. If you get a `403 Forbidden`, your egress proxy is blocked; move on to the next rung.
-3. **web-browser** — pinchtab-backed skill: its own sandbox browser for anything that doesn't need my logged-in session, and my real Chrome (`pinchtab-windows`) once I approve on my laptop, for what does. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. Use ghostarchive.org for archives or paywalled fetches.
+3. **web-browser** — pinchtab-backed skill: its own sandbox browser for anything that doesn't need my logged-in session, and my real Chrome (`pinchtab-windows`) once I approve on my laptop, for what does. Setup is cheap through a one-touch script, tool is very efficient with tokens — don't treat it as a heavy tool. This **dramatically** improves your capability, so reach for it **liberally** whenever web_fetch fails / blocks / times out / returns something thin. It tends to work on the historically-annoying pages you'd otherwise give up on (JS/SPA, anti-bot, weird rendering, etc.). Doesn't support Reddit. For a paywalled article, try archive-today first (see Examples).
 4. **mcp-firecrawl / mcp-firecrawl-2** — alternative fetch/search/scrape tool. Also useful for its news/web search mode as an alternative to web_search/mcp-brave. Doesn't support Reddit.
 5. **mcp-apify / mcp-apify-2** — use `thirdwatch/reddit-scraper` for Reddit comment threads. Remember to fetch the schema first. Don't project nested fields (topComments.body) in get-dataset-items fields; it silently drops them. Use topComments whole or omit fields.
 6. **mcp-jina** — server-side fetch, so it clears both the sandbox egress proxy and web_fetch's URL-provenance rule in one call. No captcha solver. Doesn't support Reddit.
@@ -51,6 +51,7 @@ Run it unconditionally; it's idempotent.
 **Examples:**
 - Reddit: mcp-parallel for the first-pass search (finding threads, reading post bodies). For comment threads, mcp-reddit → mcp-apify (`thirdwatch/reddit-scraper`) → claude-in-chrome.
 - General fetches: web_fetch → web-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
+- Paywalled articles (WSJ, NYT, FT, Bloomberg…): the **archive-today** skill, `archive-today read <url>`, which reads or captures an archive.today snapshot with no browser → a wire-syndicated copy (search the headline on AOL/Yahoo/MSN) → ghostarchive.org → my logged-in Chrome, for sites I subscribe to.
 </web_research>
 
 <browser_delegation>

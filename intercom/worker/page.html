@@ -102,6 +102,7 @@ button:active{background:#2a2a2a}
   <div id="idle" class="hide">
     <div id="msg">Waiting for Claude…</div>
     <div id="list"></div>
+    <button id="launchbtn" class="pill">Talk to Claude</button>
   </div>
   <div id="live" class="hide">
     <div id="status" class="hide"></div>
@@ -260,6 +261,7 @@ $("pairbtn").onclick = async () => {
     if (!out.ok) { $("pairmsg").textContent = capital(out.error || "wrong code"); return; }
     K = out.k; store(K);
     $("code").value = "";
+    if (LAUNCH) return launch();
     mode = "idle"; show("idle"); poll();
   } catch { $("pairmsg").textContent = "Offline…"; }
 };
@@ -303,6 +305,49 @@ function render(sessions) {
 }
 
 setInterval(poll, 3000);
+
+// ---- quick start: /launch, or the button here ----------------------------------------
+// The relay opens a talk room (or hands back the open one) and wakes Claude;
+// this page joins and takes the audio at once, so Louie talks while Claude boots.
+
+const LAUNCH = location.pathname === "/launch";
+let launchPending = false;
+
+async function launch() {
+  mode = "launch";
+  show("idle");
+  $("list").innerHTML = "";
+  $("msg").classList.remove("hide");
+  $("msg").textContent = "Starting…";
+  try {
+    const r = await fetch(`/quick?k=${encodeURIComponent(K)}`, { method: "POST", body: JSON.stringify({ via: "web" }) });
+    if (r.status === 401) return needPairing("Not paired.<br>Pairing code");
+    const out = await r.json();
+    if (!out.id) throw new Error(out.error || `relay returned ${r.status}`);
+    launchPending = true;
+    join({ id: out.id, mode: "talk", state: out.state, label: "" });
+  } catch (e) {
+    $("msg").textContent = capital(e.message === "Failed to fetch" ? "offline…" : e.message);
+    // Long enough to read before the room list comes back over it.
+    setTimeout(() => { if (mode === "launch") { mode = "idle"; poll(); } }, 5000);
+  }
+}
+$("launchbtn").onclick = launch;
+
+// Opened with no tap (/launch), the browser may hold audio back until one:
+// then AEC3's context is suspended (no audio is sent) or Claude's voice won't play.
+let tapRetries = null;
+function needTap(retry) {
+  if (tapRetries) return tapRetries.push(retry);
+  tapRetries = [retry];
+  status("Tap to start audio", "amber");
+  addEventListener("pointerdown", () => {
+    const retries = tapRetries;
+    tapRetries = null;
+    status("");
+    for (const r of retries) r();
+  }, { once: true, capture: true });
+}
 
 // ---- live -------------------------------------------------------------------------
 
@@ -349,6 +394,11 @@ async function takeAudio() {
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams. AEC3 runs at 48 kHz.
   try { meterCtx = new AudioContext(talk && OWN_AEC ? { sampleRate: 48000 } : {}); meterCtx.resume(); } catch {}
+  // A blocked resume() neither resolves nor rejects, so give it a moment.
+  if (meterCtx && meterCtx.state !== "running") {
+    await Promise.race([meterCtx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
+    if (meterCtx.state !== "running") needTap(() => meterCtx && meterCtx.resume());
+  }
   if (talk && OWN_AEC && meterCtx) await startAec();
   applyMute();
   holding = true;
@@ -392,6 +442,7 @@ function connect(opened) {
            ...(talk && holdPref != null ? { hold_ms: holdPref } : {}) });
     switchWhy = null;
     if (holding && !rec) startAudio();
+    if (launchPending) { launchPending = false; takeAudio(); }
   };
   sock.onmessage = (m) => {
     if (ws === sock) {
@@ -876,7 +927,9 @@ function startVoice() {
     try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
     voiceEl.srcObject = new MediaStream([e.track]);
     aecReference();
-    voiceEl.play().then(() => { playing = true; ready(); }, (err) => voiceFailed(`won't play (${err.name})`));
+    const play = () => voiceEl.play().then(() => { playing = true; ready(); },
+      (err) => err.name === "NotAllowedError" ? needTap(play) : voiceFailed(`won't play (${err.name})`));
+    play();
   };
   // A network switch fails the voice's connection too: ask for the track again, a few times.
   pc.onconnectionstatechange = () => {
@@ -1107,6 +1160,8 @@ try {
   others.postMessage("opened");
 } catch {}
 
-if (K) { show("idle"); poll(); } else needPairing();
+if (!K) needPairing();
+else if (LAUNCH) launch();
+else { show("idle"); poll(); }
 </script>
 </body></html>

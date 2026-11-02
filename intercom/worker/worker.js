@@ -13,6 +13,8 @@
 //   GET  /            the page
 //   POST /pair/claim  {code} -> the device token; the code is the only gate
 //   GET  /armed       sessions waiting to start, and live ones to rejoin
+//   POST /quick       {via: web|phone} -> {id}: a button press opens a talk room (or the open
+//                     one), phone rings Louie, and the routine is fired so Claude joins it
 //   GET  /device?id   websocket, one per screen in the room: controls, and audio from
 //                     the one holding it, in; room state, notes and the end out
 // Claude (CLI_TOKEN as ?token=):
@@ -83,6 +85,13 @@ const PAIR_FAILS_PER_HOUR = 20;
 const WATCH_MAX_S = 590;
 const MAX_ENTRIES = 400;
 const PENDING_AUDIO_MAX = 200;      // chunks held while the transcriber's socket opens
+
+// Quick start: a press opens the room and Claude is woken to join it. The
+// device token can now start a billed room and wake Claude, so presses are capped.
+const QUICK_PER_HOUR = 20;
+const QUICK_LABEL = "talk with Claude";
+const ANTHROPIC_API_URL = "https://api.anthropic.com";
+const ROUTINE_BETA = "experimental-cc-routine-2026-04-01";
 
 // Talk mode's voice isolation (Krisp): 16-bit PCM in 30 ms frames, at 8 or 16 kHz.
 const KRISP_API_URL = "https://api.developers.krisp.ai";
@@ -357,15 +366,33 @@ export class Registry {
     const now = Date.now();
 
     if (pathname === "/claim") {
-      const { label, mode } = await req.json();
+      const { label, mode, quick } = await req.json();
       for (let tries = 0; tries < 50; tries++) {
         const id = Array.from(crypto.getRandomValues(new Uint8Array(4)),
                               (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
         if (await this.ctx.storage.get(`s:${id}`)) continue;
-        await this.ctx.storage.put(`s:${id}`, { id, label, mode, state: "armed", at: now });
+        await this.ctx.storage.put(`s:${id}`, { id, label, mode, quick: !!quick, state: "armed", at: now });
         return json({ id });
       }
       return json({ error: "no free id" }, 500);
+    }
+
+    // A press counts against the hourly cap, then gets the newest quick room
+    // still open, if any: a second press rejoins rather than starting another.
+    if (pathname === "/quick") {
+      const { limit } = await req.json();
+      const hour = Math.floor(now / 3600_000);
+      const used = (await this.ctx.storage.get("quickuse")) ?? { hour, n: 0 };
+      if (used.hour !== hour) { used.hour = hour; used.n = 0; }
+      if (used.n >= limit) return json({ error: `more than ${limit} presses this hour; try again later` }, 429);
+      used.n += 1;
+      await this.ctx.storage.put("quickuse", used);
+      let open = null;
+      for (const s of (await this.ctx.storage.list({ prefix: "s:" })).values()) {
+        const fresh = s.state === "live" || (s.state === "armed" && now - s.at < ARMED_TTL_MS);
+        if (s.quick && fresh && (!open || s.at > open.at)) open = s;
+      }
+      return json(open ? { id: open.id, state: open.state } : {});
     }
 
     // One pairing code at a time: 6 digits, 5 minutes, 5 tries, and at most
@@ -1062,6 +1089,44 @@ export class Session {
     try { await this.telnyx(`/v2/calls/${encodeURIComponent(call.ccid)}/actions/hangup`); }
     catch (e) { return { ok: false, error: e.message }; }
     return { ok: true };
+  }
+
+  // --- waking Claude (quick start) ----------------------------------------------------
+  //
+  // A fire that worked isn't repeated (two Claudes in one room); a failed one is.
+  async fireRoutine() {
+    if (this.meta.fire?.ok) return this.meta.fire;
+    // Two quick presses mustn't both fire: the object takes requests while one awaits Anthropic.
+    this.firing ??= this.fireOnce().finally(() => { this.firing = null; });
+    return this.firing;
+  }
+
+  async fireOnce() {
+    const { ROUTINE_ID: rid, ROUTINE_TOKEN: token } = this.env;
+    let fire;
+    try {
+      if (!rid || !token) throw new Error("the relay has no routine set up (ROUTINE_ID, ROUTINE_TOKEN)");
+      const resp = await fetch(`${this.env.ANTHROPIC_API_URL ?? ANTHROPIC_API_URL}/v1/claude_code/routines/${encodeURIComponent(rid)}/fire`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "anthropic-beta": ROUTINE_BETA,
+                   "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ text: `intercom room ${this.meta.id}` }),
+      });
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(`the routine returned ${resp.status}: ${JSON.stringify(out.error ?? out).slice(0, 200)}`);
+      fire = { ok: true, at: Date.now(), url: out.claude_code_session_url ?? null };
+      await this.addEntry("event", { text: `Claude woken by the button (${fire.url ?? "no session link"})` });
+    } catch (e) {
+      fire = { ok: false, at: Date.now(), error: e.message };
+      await this.addEntry("event", { text: `could not wake Claude: ${e.message}` });
+      // As a note, so the screen says so; the room may not be live yet, which `note` requires.
+      const text = "Couldn't wake Claude";
+      this.meta.last_note = { text, at: Date.now() };
+      this.toScreens({ type: "note", text });
+    }
+    this.meta.fire = fire;
+    await this.saveMeta();
+    return fire;
   }
 
   // Webhooks for any other call (an old one, a retry) are ignored.
@@ -1851,7 +1916,7 @@ export class Session {
       const b = await req.json();
       // The mode is set here and nowhere else: a listen session can never speak.
       this.meta = {
-        id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive,
+        id: b.id, label: b.label ?? "", keyterms: b.keyterms ?? [], archive: !!b.archive, quick: !!b.quick,
         mode: b.mode, isolate: !!b.isolate, event_key: randomKey(), origin: b.origin, hold_ms: b.hold_ms ?? null,
         state: "armed", created_at: Date.now(), started_at: null, ended_at: null,
         end_reason: null, seq: 0, news_seq: 0, segs: [],
@@ -1899,6 +1964,7 @@ export class Session {
       const out = await this.hangUp();
       return json(out, out.ok ? 200 : 400);
     }
+    if (path === "/fire") return json(await this.fireRoutine());
     if (path === "/telnyx-event") {
       await this.onTelnyx(await req.json());
       return json({ ok: true });
@@ -1937,7 +2003,7 @@ export class Session {
 
 // ---------------------------------------------------------------------------
 
-const DEVICE_ROUTES = new Set(["/armed", "/device"]);
+const DEVICE_ROUTES = new Set(["/armed", "/device", "/quick"]);
 const CLI_ROUTES = new Set(["/session", "/watch", "/note", "/speak", "/set", "/call", "/hangup", "/stop",
                             "/transcript", "/status", "/audio", "/pair"]);
 
@@ -1960,13 +2026,38 @@ async function telnyxSigned(env, req, signed) {
 // token, and the SFU adapter never sees it.
 const EVENT_ROUTES = new Set(["/events", "/tts-in", "/phone"]);
 
+// Claims an id and creates the session there; the body is already validated.
+async function createRoom(env, registry, b) {
+  const claim = await (await registry.fetch("https://registry/claim", {
+    method: "POST", body: JSON.stringify({ label: b.label, mode: b.mode, quick: b.quick }) })).json();
+  if (!claim.id) return json(claim, 500);
+  const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
+  return stub.fetch("https://session/create", { method: "POST", body: JSON.stringify({ ...b, id: claim.id }) });
+}
+
+// The standing keyterm list (`intercom start --default-terms` reads the same
+// file). A failed fetch starts the room without it: it must not hold up a press.
+async function defaultTerms(env) {
+  if (!env.KEYTERMS_URL) return [];
+  try {
+    const resp = await fetch(env.KEYTERMS_URL);
+    if (!resp.ok) return [];
+    const seen = new Set();
+    return (await resp.text()).split(/[\n,]/).map((t) => t.trim())
+      .filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = url.pathname;
     const q = url.searchParams;
 
-    if (path === "/" && req.method === "GET") {
+    // /launch is the same page: it opens a quick room by itself (the watch's shortcut).
+    if ((path === "/" || path === "/launch") && req.method === "GET") {
       return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     }
     if (AEC_FILES[path] && req.method === "GET") {
@@ -1981,7 +2072,10 @@ export default {
       }, phone_line: {
         TELNYX_API_KEY: !!env.TELNYX_API_KEY, TELNYX_PUBLIC_KEY: !!env.TELNYX_PUBLIC_KEY,
         TELNYX_CONNECTION_ID: !!env.TELNYX_CONNECTION_ID, TELNYX_FROM: !!env.TELNYX_FROM,
-      }, voice_isolation: { KRISP_API_KEY: !!env.KRISP_API_KEY } });
+      }, voice_isolation: { KRISP_API_KEY: !!env.KRISP_API_KEY }, quick_start: {
+        ROUTINE_ID: !!env.ROUTINE_ID, ROUTINE_TOKEN: !!env.ROUTINE_TOKEN,
+        QUICK_CALL_TO: !!env.QUICK_CALL_TO, KEYTERMS_URL: !!env.KEYTERMS_URL,
+      } });
     }
 
     // Telnyx's webhooks: the signature is the gate, and client_state names the session.
@@ -2043,13 +2137,42 @@ export default {
       // Isolation keeps one voice: listening needs everyone's.
       if (b.isolate && mode !== "talk") return json({ error: "voice isolation is for talk sessions only" }, 400);
       const keyterms = (b.keyterms ?? []).map((t) => String(t).trim()).filter(Boolean).slice(0, 100);
-      const claim = await (await registry.fetch("https://registry/claim", {
-        method: "POST", body: JSON.stringify({ label: b.label ?? "", mode }) })).json();
-      if (!claim.id) return json(claim, 500);
-      const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
-      return stub.fetch("https://session/create", { method: "POST",
-        body: JSON.stringify({ id: claim.id, label: b.label ?? "", keyterms, archive: !!b.archive, mode,
-                               isolate: !!b.isolate, hold_ms, origin: url.origin }) });
+      return createRoom(env, registry, { label: b.label ?? "", keyterms, archive: !!b.archive, mode,
+                                         isolate: !!b.isolate, hold_ms, origin: url.origin });
+    }
+
+    // Both buttons end here; they differ only in who brings the audio: the page
+    // takes it itself (web), or the relay rings Louie (phone). His number is a
+    // secret, never the request's: a leaked device token can't call anyone else.
+    if (path === "/quick") {
+      if (req.method !== "POST") return json({ error: "POST" }, 405);
+      const via = (await req.json().catch(() => ({})))?.via ?? "web";
+      if (via !== "web" && via !== "phone") return json({ error: `via must be web or phone, not ${via}` }, 400);
+      if (via === "phone" && !E164_RE.test(env.QUICK_CALL_TO ?? "")) {
+        return json({ error: "the relay has no QUICK_CALL_TO to ring" }, 500);
+      }
+      const found = await registry.fetch("https://registry/quick", { method: "POST",
+        body: JSON.stringify({ limit: Number(env.QUICK_PER_HOUR ?? QUICK_PER_HOUR) }) });
+      let { id, state, error } = await found.json();
+      if (error) return json({ error }, found.status);
+      const fresh = !id;
+      if (fresh) {
+        const made = await (await createRoom(env, registry, {
+          label: QUICK_LABEL, keyterms: await defaultTerms(env), archive: false, mode: "talk",
+          isolate: true, hold_ms: null, origin: url.origin, quick: true })).json();
+        if (!made.id) return json(made, 500);
+        ({ id, state } = made);
+      }
+      const stub = env.SESSION.get(env.SESSION.idFromName(id));
+      let call;
+      if (via === "phone") {
+        call = await (await stub.fetch("https://session/call", { method: "POST",
+          body: JSON.stringify({ to: env.QUICK_CALL_TO }) })).json();
+        if (call.ok) state = "live";
+      }
+      // Answered first, so neither the page nor the ring waits on Anthropic.
+      ctx.waitUntil(stub.fetch("https://session/fire", { method: "POST" }));
+      return json({ id, mode: "talk", state, fresh, ...(call ? { call } : {}) });
     }
 
     // The stream URL as Telnyx was given it, which a Worker sees with an http scheme.

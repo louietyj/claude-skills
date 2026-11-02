@@ -256,6 +256,10 @@ def cmd_health(cfg, args):
         f"not set up (missing {', '.join(k for k, v in phone.items() if not v) or 'everything'}): `call` will fail"
     isolation = "set up" if (body.get("voice_isolation") or {}).get("KRISP_API_KEY") else \
         "not set up (no KRISP_API_KEY): talk mode hears music and other voices"
+    quick = body.get("quick_start") or {}
+    quick_start = "set up" if quick and all(quick.values()) else \
+        f"not set up (missing {', '.join(k for k, v in quick.items() if not v) or 'everything'}): " \
+        "a button press can't wake Claude, ring Louie, or load the standing keyterms"
     # 404 for a session that cannot exist proves the token passed the gate.
     status, body = relay(cfg, "/status", id="AAAA", timeout=15)
     if status == 401:
@@ -263,7 +267,7 @@ def cmd_health(cfg, args):
     if status not in (200, 404):
         die(f"relay error on an authenticated route: {status} {error_text(body)}")
     emit({"ok": True, "relay": cfg["worker_url"], "secrets": "all set", "cli_token": "accepted",
-          "phone_line": phone_line, "voice_isolation": isolation})
+          "phone_line": phone_line, "voice_isolation": isolation, "quick_start": quick_start})
 
 
 def fetch_default_terms(cfg):
@@ -319,6 +323,27 @@ def cmd_start(cfg, args):
     emit({"id": sid, "mode": args.mode, "state": "armed", "keyterms": len(terms),
           **({"keyterms_warning": terms_warning} if terms_warning else {}),
           "archive": args.archive, "next": tap + then})
+
+
+def cmd_join(cfg, args):
+    """A room a button press opened: the relay made it and woke this session. Creates nothing."""
+    sid = args.id.strip().upper()
+    status, body = relay(cfg, "/status", id=sid, timeout=15)
+    if status == 404:
+        die(f"no room {sid}. Check the id in the routine's payload.")
+    if status != 200 or not isinstance(body, dict):
+        die(f"could not read room {sid}: {status} {error_text(body)}")
+    if body.get("state") not in ("armed", "live"):
+        die(f"room {sid} is {body.get('state')}: nothing to join. Louie can press again.")
+    if body.get("mode") != "talk":
+        die(f"room {sid} is a {body.get('mode')} session; only talk rooms are joined this way")
+    write_state("current.json", {"id": sid, "label": body.get("label", ""), "mode": "talk", "at": time.time()})
+    # From the start: whatever Louie said before this session booted is the first thing to answer.
+    write_state(f"cursor-{sid}.json", {"since": 0})
+    emit({"id": sid, "mode": "talk", "state": body["state"],
+          "next": "Arm Monitor on the command `intercom follow --since 0`: what Louie has already said "
+                  "arrives at once. Only without a Monitor tool, run `intercom watch` and keep watching "
+                  "in this same turn."})
 
 
 def cmd_watch(cfg, args):
@@ -935,6 +960,11 @@ def main():
                         "dropping music, chatter and other voices")
     s.add_argument("--force", action="store_true", help="start even though one is still live")
     s.set_defaults(fn=cmd_start)
+
+    j = sub.add_parser("join", help="a talk room a button press already opened (the routine's payload "
+                                    "names it): make it current, cursor at the start")
+    j.add_argument("id")
+    j.set_defaults(fn=cmd_join)
 
     w = sub.add_parser("watch", help="block until new speech, a device event, or the end")
     w.add_argument("--since", type=int, help="entry number to resume after (default: saved cursor)")

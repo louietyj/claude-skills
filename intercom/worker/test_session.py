@@ -28,6 +28,7 @@ from websockets.sync.client import connect
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "dev"))
+import fake_routine  # noqa: E402
 import fake_stt  # noqa: E402
 import fake_telnyx  # noqa: E402
 
@@ -47,12 +48,16 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
                  "--var TELNYX_FROM:+15550100 --var KRISP_API_KEY:krkey "
-                 "--var KRISP_API_URL:http://127.0.0.1:8798 --var KRISP_URL:http://127.0.0.1:8798/voice-isolation")
+                 "--var KRISP_API_URL:http://127.0.0.1:8798 --var KRISP_URL:http://127.0.0.1:8798/voice-isolation "
+                 "--var ROUTINE_ID:trig_test --var ROUTINE_TOKEN:rttok "
+                 "--var ANTHROPIC_API_URL:http://127.0.0.1:8796 --var KEYTERMS_URL:http://127.0.0.1:8796/keyterms.txt "
+                 "--var QUICK_CALL_TO:+14155550123 --var QUICK_PER_HOUR:40")
 # Chrome's MediaRecorder as the page runs it (opus, 64 kbps, 250 ms chunks): 3.96 s once decoded.
 WEBM = (HERE / "chrome-opus.webm").read_bytes()
 WEBM_PCM_BYTES = 63360 * 2
 FAKE = None
 TELNYX = None
+ROUTINE = None
 WRANGLER = None
 
 
@@ -140,9 +145,10 @@ def wait_streams(n, timeout=8):
 
 
 def setUpModule():
-    global FAKE, TELNYX, WRANGLER
+    global FAKE, TELNYX, ROUTINE, WRANGLER
     FAKE = fake_stt.start(8798)
     TELNYX = fake_telnyx.start(8797)
+    ROUTINE = fake_routine.start(8796)
     if len(sys.argv) > 1:
         return
     persist = tempfile.mkdtemp(prefix="intercom-test-")
@@ -1314,6 +1320,108 @@ class PhoneLine(unittest.TestCase):
         self.assertNotIn("phone line connected", call_events(sid))
         self.assertEqual(TELNYX.post_signed(url, body), 200)
         wait_entries(sid, lambda es: "phone line connected" in texts(es, "event"))
+
+
+def press(via="web", k=DEV, **extra):
+    return http("/quick", "POST", {"via": via, **extra}, token=None, k=k)
+
+
+def wait_for(pred, timeout=8):
+    end = time.time() + timeout
+    while time.time() < end:
+        if pred():
+            return
+        time.sleep(0.1)
+    raise AssertionError("never happened")
+
+
+class QuickStart(unittest.TestCase):
+    def pressed(self, via="web", **extra):
+        status, out = press(via, **extra)
+        self.assertEqual(status, 200, out)
+        # A quick room outlives its test (5 min with no screen): end it, or the next press rejoins it.
+        self.addCleanup(http, "/stop", "POST", {}, id=out["id"])
+        return out
+
+    def fires_for(self, sid):
+        return [f for f in ROUTINE.fires if f["body"] == {"text": f"intercom room {sid}"}]
+
+    def test_a_press_opens_a_talk_room_with_the_standing_terms_and_wakes_claude_with_its_id(self):
+        out = self.pressed()
+        sid = out["id"]
+        self.assertEqual((out["mode"], out["state"], out["fresh"]), ("talk", "armed", True))
+        meta = http("/status", id=sid)[1]
+        self.assertEqual((meta["mode"], meta["isolate"], meta["quick"]), ("talk", True, True))
+        self.assertEqual(meta["keyterms"], ["Fragomen", "Shizuku", "Telnyx"])
+        wait_for(lambda: self.fires_for(sid))
+        fire = self.fires_for(sid)[0]
+        self.assertEqual((fire["routine"], fire["auth"], fire["beta"], fire["version"]),
+                         ("trig_test", "Bearer rttok", "experimental-cc-routine-2026-04-01", "2023-06-01"))
+        wait_entries(sid, lambda es: any(t.startswith("Claude woken by the button (https://claude.ai/code/session_fake")
+                                         for t in texts(es, "event")))
+        self.assertNotIn("rttok", json.dumps(http("/status", id=sid)[1]))
+
+    def test_the_page_takes_the_audio_so_louie_is_heard_before_claude_joins(self):
+        sid = self.pressed()["id"]
+        ws = device(sid)
+        es = wait_entries(sid, lambda es: "recording started on the watch" in texts(es, "event"))
+        self.assertEqual(http("/status", id=sid)[1]["state"], "live")
+        # Claude joins later and reads from the start.
+        self.assertEqual(es[0]["n"], 1)
+        ws.close()
+
+    def test_a_second_press_rejoins_the_open_room_and_wakes_no_second_claude(self):
+        first = self.pressed()
+        wait_for(lambda: self.fires_for(first["id"]))
+        second = self.pressed()
+        self.assertEqual((second["id"], second["fresh"]), (first["id"], False))
+        time.sleep(0.5)
+        self.assertEqual(len(self.fires_for(first["id"])), 1)
+
+    def test_the_phone_press_rings_louie_at_once_and_only_his_number(self):
+        before = len(TELNYX.calls)
+        out = self.pressed("phone", to="+19995550100")
+        self.assertEqual((out["state"], out["call"]), ("live", {"ok": True, "state": "dialing"}))
+        self.assertEqual(len(TELNYX.calls), before + 1)
+        self.assertEqual(TELNYX.calls[TELNYX.last()]["body"]["to"], LOUIE)
+        self.assertIn("calling his phone (…0123)", call_events(out["id"]))
+        wait_for(lambda: self.fires_for(out["id"]))
+        # Pressed again while it rings: same room, no second call.
+        again = self.pressed("phone")
+        self.assertEqual(again["id"], out["id"])
+        self.assertFalse(again["call"]["ok"])
+        self.assertEqual(len(TELNYX.calls), before + 1)
+
+    def test_a_failed_fire_is_news_on_the_screen_and_the_next_press_tries_again(self):
+        ROUTINE.fail = 401
+        self.addCleanup(setattr, ROUTINE, "fail", None)
+        sid = self.pressed()["id"]
+        ws = screen(sid)
+        self.assertEqual(recv_until(ws, lambda m: m.get("type") == "note")["text"], "Couldn't wake Claude")
+        wait_entries(sid, lambda es: any(t.startswith("could not wake Claude: the routine returned 401")
+                                         for t in texts(es, "event")))
+        ROUTINE.fail = None
+        self.assertEqual(self.pressed()["id"], sid)
+        wait_entries(sid, lambda es: any(t.startswith("Claude woken") for t in texts(es, "event")))
+        ws.close()
+
+    def test_presses_need_the_device_token_and_a_known_via(self):
+        self.assertEqual(press(k=CLI)[0], 401)
+        self.assertEqual(press("fax")[0], 400)
+        with urllib.request.urlopen(BASE + "/launch", timeout=10) as r:
+            self.assertIn(b"Talk to Claude", r.read())
+
+
+# Named to run after QuickStart: once it hits the cap, every press this hour is refused.
+class QuickStartZCap(unittest.TestCase):
+    def test_presses_are_capped_per_hour(self):
+        for _ in range(41):
+            status, out = press()
+            if status == 429:
+                break
+            http("/stop", "POST", {}, id=out["id"])
+        self.assertEqual(status, 429)
+        self.assertIn("presses this hour", out["error"])
 
 
 class PhoneAudio(unittest.TestCase):

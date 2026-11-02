@@ -31,8 +31,9 @@ video call to join.
 |---|---|
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
+| `GUIDE-quick.md` | for a session a button woke (`setup.sh --quick`): what differs, then GUIDE.md's talk sections |
 | `GATE.md` | the gate agent's prompt; `intercom gate start` fills in GUIDE.md's "Steering or collaborating" and the brief |
-| `bin/intercom.py` | the CLI: health, start, watch, follow, gate, wake-next, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, join, watch, follow, gate, wake-next, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
@@ -41,6 +42,8 @@ video call to join.
 | `dev/fake_stt.py` | Soniox-shaped live STT and TTS, Deepgram-shaped batch and Krisp-shaped voice isolation stand-ins, scripted by the test's audio frames |
 | `dev/telnyx_api.py` | Telnyx's API with the key in `dev/telnyx.key` (gitignored), for setting up the phone line |
 | `dev/fake_telnyx.py` | Telnyx-shaped call API and signed webhooks, driven by tests or by `dev/phone.html`, the fake handset it serves at `/phone` |
+| `dev/fake_routine.py` | Anthropic's routine fire endpoint and the standing keyterm list, for the quick-start tests |
+| `dev/page_launch.py` | headless Chromium opens a quick room from the real page (`/launch`, the landing button) and checks it records |
 | `dev/feed.py` | stands in for the phone: streams a file to the deployed relay |
 | `dev/soniox_compare.py` | streams a file straight to Soniox, for comparing providers on identical bytes |
 | `dev/make_sample.ps1` | two Windows voices act out a consultation -> `dev/sample.webm` |
@@ -74,9 +77,20 @@ npx wrangler secret put TELNYX_CONNECTION_ID    # the Call Control application's
 npx wrangler secret put TELNYX_FROM             # the Telnyx number, E.164
 ```
 
-No number to call is configured anywhere: `intercom call --to` and the page
-pass one each time (the repo is public). `intercom health` says whether the
-phone line is set up.
+No number to call is in the repo: `intercom call --to` and the page pass one
+each time (the repo is public). `intercom health` says whether the phone line
+is set up.
+
+Quick start (a button opens the room and wakes Claude; see "Quick start"
+below) needs a claude.ai routine with an API trigger, whose prompt joins the
+room its payload names, and:
+
+```bash
+npx wrangler secret put ROUTINE_ID       # trig_..., from the routine's API trigger
+npx wrangler secret put ROUTINE_TOKEN    # its bearer token, shown once
+npx wrangler secret put QUICK_CALL_TO    # Louie's number, E.164: the only one a phone press rings
+npx wrangler secret put KEYTERMS_URL     # the standing keyterm list (config.json's keyterms_url)
+```
 
 `config.json` (gitignored; see `config.example.json`) holds `worker_url`,
 `cli_token`, `device_token` and optionally `keyterms_url`, the standing list
@@ -107,6 +121,7 @@ token reads any live conversation's transcript.
 python test_intercom.py                 # offline, instant
 python worker/test_session.py         # starts wrangler dev + fakes, ~2 min
 python dev/page_resume.py             # the page itself, headless; CHROME=<path> for a preinstalled one
+python dev/page_launch.py             # the page opening a quick room, headless
 ```
 
 End to end against the real providers, no phone:
@@ -354,6 +369,35 @@ cancels echo itself, so the page's echo gate doesn't apply. A screen taking
 the audio, or leaving it, hangs up; nothing redials, since a drop and a hang-up
 can't reliably be told apart. A call counts as presence, so it can open a room
 no screen has, and keep it. Only the number's last four digits are stored.
+
+**Quick start: the room opens before Claude does.** When Claude starts the
+room, Louie waits for a container to boot and a first turn to run; the phone
+used to ring only after that. Now a press goes to the relay (`POST /quick`,
+with the device token): the watch's `/launch` bookmark, the landing page's
+"Talk to Claude" button, or Tasker on the phone's long-press. The relay opens
+a talk room with the standing keyterms and connects the audio at once (the
+page takes it, or Telnyx rings `QUICK_CALL_TO`), then fires the routine with
+`intercom room <id>`. Louie talks while Claude boots; the relay stores his
+turns either way, and Claude's `intercom join` + `follow --since 0` starts
+from the first. Both buttons share everything but who brings the audio, and
+quick rooms end like any other. Choices:
+- The routine token stays in the relay; devices hold only the device token.
+  So a device token can now start a billed room and wake Claude: presses are
+  capped at 20 an hour, and the number a phone press rings is a secret, never
+  the request's, so a leaked token can't make Telnyx call anyone else.
+- A press while a quick room is open rejoins it. A fire that worked isn't
+  repeated (two Claudes in one room); one that failed is, and the screen gets
+  a "Couldn't wake Claude" note meanwhile.
+- Talk only: a press never opens a listen room.
+- `/launch` takes the audio with no tap. Chromium lets a page that is
+  capturing the mic play sound untapped (headless, even under the strictest
+  autoplay policy); a browser that holds the AudioContext or Claude's voice
+  back gets "Tap to start audio", and one tap resumes both. On the watch, a
+  suspended context would mean no audio sent at all: AEC3's output is what the
+  recorder records.
+- The woken session gets `setup.sh --quick`: GUIDE-quick.md, then GUIDE.md's
+  talk sections by heading (about half the guide). Every Monitor wake re-reads
+  the whole context, so this shortens every turn, not just the first.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

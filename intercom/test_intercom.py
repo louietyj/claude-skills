@@ -500,6 +500,28 @@ class Note(Base):
         self.assertIn("say it in chat", json.loads(out)["warning"])
 
 
+class Join(Base):
+    def test_joining_a_pressed_room_makes_it_current_from_the_start_and_creates_nothing(self):
+        intercom.write_state("current.json", {"id": "K7QM"})
+        intercom.write_state("cursor-ACDE.json", {"since": 12})
+        relay = Relay({"/status": (200, {"id": "ACDE", "state": "live", "mode": "talk", "label": "talk with Claude"})})
+        code, out, _ = self.run_cli(["join", "acde"], relay)
+        self.assertEqual(code, 0)
+        self.assertEqual(intercom.read_state("current.json")["id"], "ACDE")
+        self.assertEqual(intercom.read_state("cursor-ACDE.json"), {"since": 0})
+        self.assertIn("follow --since 0", json.loads(out)["next"])
+        self.assertEqual([c["path"] for c in relay.calls], ["/status"])
+
+    def test_a_room_that_is_gone_or_listening_is_not_joined(self):
+        for status, body, says in [(404, {"error": "no such session"}, "no room"),
+                                   (200, {"state": "ended", "mode": "talk"}, "is ended"),
+                                   (200, {"state": "live", "mode": "listen"}, "listen session")]:
+            code, _, err = self.run_cli(["join", "ACDE"], Relay({"/status": (status, body)}))
+            self.assertEqual(code, 1)
+            self.assertIn(says, err)
+            self.assertIsNone(intercom.read_state("current.json"))
+
+
 class Start(Base):
     def test_second_start_is_refused_while_one_is_live(self):
         intercom.write_state("current.json", {"id": "K7QM"})

@@ -8,6 +8,11 @@
 # a fresh disk and needs this again.
 set -euo pipefail
 
+# --quick: a session a button woke prints only the talk-mode guide. Every Monitor
+# wake re-reads the whole context, so this shortens every turn, not just the first.
+QUICK=0
+[ "${1:-}" = "--quick" ] && QUICK=1
+
 find_intercom_py() {
   local candidate
   # Beside this script first -- that is where the CLI sits in an installed
@@ -96,11 +101,20 @@ end 2 $rc
 # The guide rides in this output rather than in SKILL.md: a long SKILL.md read
 # with `view` can come back middle-truncated, silently dropping a rule.
 GUIDE="$(dirname "$(dirname "$INTERCOM_PY")")/GUIDE.md"
-begin 3 "cat $GUIDE"
+QUICK_HEAD="$(dirname "$GUIDE")/GUIDE-quick.md"
+# The talk sections are taken from GUIDE.md by heading, so the two never drift.
+QUICK_SECTIONS='The loop: Monitor whenever you have one|Talk mode|Reading the transcript|The device line|The phone line|Ending'
+print_guide() {
+  if [ $QUICK -eq 0 ]; then cat "$GUIDE"; return; fi
+  cat "$QUICK_HEAD" &&
+  awk -v want="^## (${QUICK_SECTIONS})\$" '/^## /{on = ($0 ~ want)} on' "$GUIDE"
+}
+if [ $QUICK -eq 1 ]; then begin 3 "the talk-mode guide: $QUICK_HEAD, then GUIDE.md's talk sections"
+else begin 3 "cat $GUIDE"; fi
 guide_rc=0
 if [ $rc -ne 0 ]; then
   printf 'SKIPPED -- intercom health failed, so nothing can be heard.\n'
-elif cat "$GUIDE"; then
+elif print_guide; then
   printf '%s END OF GUIDE %s\n' "$RULE_H" "$RULE_H"
 else
   guide_rc=1
@@ -124,5 +138,10 @@ fi
 printf '\nAll three steps are done for the rest of this conversation. This output is a\n'
 printf 'transcript of work already done, not a plan: do not re-run this script or\n'
 printf '`intercom health`.\n'
-printf '\nNext: pick the mode, build the keyterm list, `intercom start --mode ...`,\n'
-printf 'tell Louie the id, then follow that mode'"'"'s loop in the guide.\n'
+if [ $QUICK -eq 1 ]; then
+  printf '\nNext: `intercom join <id>` (the room your routine'"'"'s payload names), then Monitor\n'
+  printf 'on `intercom follow --since 0`.\n'
+else
+  printf '\nNext: pick the mode, build the keyterm list, `intercom start --mode ...`,\n'
+  printf 'tell Louie the id, then follow that mode'"'"'s loop in the guide.\n'
+fi

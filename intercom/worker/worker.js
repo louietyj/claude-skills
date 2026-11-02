@@ -2031,8 +2031,13 @@ async function createRoom(env, registry, b) {
   const claim = await (await registry.fetch("https://registry/claim", {
     method: "POST", body: JSON.stringify({ label: b.label, mode: b.mode, quick: b.quick }) })).json();
   if (!claim.id) return json(claim, 500);
+  // Every room calls Claude by name, and a misheard one ("Hey, Clark") misses the
+  // rule that delivers a turn naming Claude.
+  const terms = b.keyterms ?? [];
+  const keyterms = terms.some((t) => t.toLowerCase() === "claude") ? terms : ["Claude", ...terms].slice(0, 100);
   const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));
-  return stub.fetch("https://session/create", { method: "POST", body: JSON.stringify({ ...b, id: claim.id }) });
+  return stub.fetch("https://session/create", {
+    method: "POST", body: JSON.stringify({ ...b, keyterms, id: claim.id }) });
 }
 
 // The standing keyterm list (`intercom start --default-terms` reads the same

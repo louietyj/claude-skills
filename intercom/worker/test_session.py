@@ -401,6 +401,11 @@ class Room(unittest.TestCase):
 
 
 class Turns(unittest.TestCase):
+    def test_claude_is_always_a_keyterm_and_never_twice(self):
+        self.assertEqual(http("/status", id=create())[1]["keyterms"], ["Claude"])
+        sid = create(keyterms=["Wooga", "claude"])
+        self.assertEqual(http("/status", id=sid)[1]["keyterms"], ["Wooga", "claude"])
+
     def test_header_chunk_and_config_reach_the_transcriber(self):
         n = stream_count()
         sid = create(keyterms=["Wooga", "trustee fee"])
@@ -420,7 +425,7 @@ class Turns(unittest.TestCase):
         self.assertEqual(c["model"], "stt-rt-v5")
         self.assertTrue(c["enable_speaker_diarization"])
         self.assertNotIn("max_endpoint_delay_ms", c)
-        self.assertEqual(c["context"]["terms"], ["Wooga", "trustee fee"])
+        self.assertEqual(c["context"]["terms"], ["Claude", "Wooga", "trustee fee"])
         ws.close()
 
     def test_speaker_change_and_end_marker_split_turns(self):
@@ -1352,7 +1357,7 @@ class QuickStart(unittest.TestCase):
         self.assertEqual((out["mode"], out["state"], out["fresh"]), ("talk", "armed", True))
         meta = http("/status", id=sid)[1]
         self.assertEqual((meta["mode"], meta["isolate"], meta["quick"]), ("talk", True, True))
-        self.assertEqual(meta["keyterms"], ["Fragomen", "Shizuku", "Telnyx"])
+        self.assertEqual(meta["keyterms"], ["Claude", "Fragomen", "Shizuku", "Telnyx"])
         wait_for(lambda: self.fires_for(sid))
         fire = self.fires_for(sid)[0]
         self.assertEqual((fire["routine"], fire["auth"], fire["beta"], fire["version"]),

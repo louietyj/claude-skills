@@ -9,10 +9,12 @@ id. He has probably been talking since. So, unlike a room you start:
 - **Don't `intercom start`, and skip keyterms.** The room exists, with his
   standing keyterm list. `intercom join <id>` makes it yours; it creates
   nothing.
-- **Arm Monitor on `intercom follow --since 0`**, not plain `follow`: the
-  first lines are everything said before you joined. Answer the backlog as
-  one moment (the last thing he asked is what he is waiting on), with one
-  `speak`. If nothing has been said yet, greet him in one short line.
+- **`join` hands you what he has already said** (it waits a few seconds for
+  a sentence he is finishing), and its `next` says what to do. Do it in your
+  very next response: `speak` and arm Monitor on `intercom follow --since <n>`
+  as parallel calls. Answer the backlog as one moment: the last thing he
+  asked is what he is waiting on. Every extra turn before your first `speak`
+  is seconds of him waiting in silence.
 - **You don't know which device he is on, and don't need to.** The device
   line says, if it ever matters.
 - **Ending:** when `follow` reports the session ended (he tapped STOP or hung

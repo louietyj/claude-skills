@@ -30,6 +30,7 @@ STATE = os.environ.get("INTERCOM_STATE") or os.path.expanduser("~/.intercom")
 # Inside the Bash tool's default 120s timeout; it only caps silence.
 WATCH_BUDGET = 90
 WATCH_INTERVAL = 10
+JOIN_WAIT_S = 6  # `join` waits this long for a sentence Louie is still finishing
 NOTE_MAX = 120
 SPEAK_CHARS_PER_S = 8     # deliberately slow, so the timeout never cuts off playback
 SPEAK_RETRY_S = 1         # after a lost connection; doubles
@@ -338,12 +339,30 @@ def cmd_join(cfg, args):
     if body.get("mode") != "talk":
         die(f"room {sid} is a {body.get('mode')} session; only talk rooms are joined this way")
     write_state("current.json", {"id": sid, "label": body.get("label", ""), "mode": "talk", "at": time.time()})
-    # From the start: whatever Louie said before this session booted is the first thing to answer.
-    write_state(f"cursor-{sid}.json", {"since": 0})
-    emit({"id": sid, "mode": "talk", "state": body["state"],
-          "next": "Arm Monitor on the command `intercom follow --since 0`: what Louie has already said "
-                  "arrives at once. Only without a Monitor tool, run `intercom watch` and keep watching "
-                  "in this same turn."})
+    # What Louie said before this session booted comes back here, so the next response can
+    # answer it: arming Monitor first just to be handed it costs model turns.
+    since, lines, tail, heard = 0, [], None, False
+    deadline = time.time() + JOIN_WAIT_S
+    while True:
+        left = max(1, int(deadline - time.time()))
+        status, w = relay(cfg, "/watch", id=sid, since=since, interval=0, wait=left, timeout=left + 20)
+        if status != 200 or not isinstance(w, dict):
+            break
+        lines += [f"{e['n']} {render(e)}" for e in w.get("entries", [])]
+        heard = heard or any(e.get("kind") == "turn" for e in w.get("entries", []))
+        since, tail = w.get("last", since), w.get("tail")
+        if w.get("event") == "ended" or (heard and not tail) or time.time() >= deadline:
+            break
+    write_state(f"cursor-{sid}.json", {"since": since})
+    follow = f"`intercom follow --since {since}`"
+    if tail:
+        nxt = f"He is mid-sentence: don't speak yet. Arm Monitor on {follow} and answer his turn when it arrives."
+    else:
+        say = "Answer what he said" if heard else "He hasn't said anything yet: greet him in one short line"
+        nxt = f"{say} with `intercom speak --since {since}` and, in the same response, arm Monitor on {follow}."
+    emit({"id": sid, "mode": "talk", "state": body["state"], "new": lines,
+          "tail": f"S{tail['spk']}: {tail['text']}{IN_PROGRESS}" if tail else None,
+          "next": nxt + " Only without a Monitor tool, use `intercom watch` instead, in this same turn."})
 
 
 def cmd_watch(cfg, args):

@@ -378,8 +378,11 @@ with the device token): the watch's `/launch` bookmark, the landing page's
 a talk room with the standing keyterms and connects the audio at once (the
 page takes it, or Telnyx rings `QUICK_CALL_TO`), then fires the routine with
 `intercom room <id>`. Louie talks while Claude boots; the relay stores his
-turns either way, and Claude's `intercom join` + `follow --since 0` starts
-from the first. Both buttons share everything but who brings the audio, and
+turns either way, and Claude's `intercom join` prints them (waiting up to
+6s for a sentence still being spoken), so its next response can `speak` and
+arm `follow` together. The first tests took ~20s from Louie's first sentence
+to Claude's answer: ~7s of boot, the rest model turns spent loading Monitor,
+arming it, saying it was armed, and only then being handed the turn. Both buttons share everything but who brings the audio, and
 quick rooms end like any other. Choices:
 - The routine token stays in the relay; devices hold only the device token.
   So a device token can now start a billed room and wake Claude: presses are

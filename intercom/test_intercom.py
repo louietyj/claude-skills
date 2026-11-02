@@ -501,16 +501,44 @@ class Note(Base):
 
 
 class Join(Base):
-    def test_joining_a_pressed_room_makes_it_current_from_the_start_and_creates_nothing(self):
-        intercom.write_state("current.json", {"id": "K7QM"})
-        intercom.write_state("cursor-ACDE.json", {"since": 12})
-        relay = Relay({"/status": (200, {"id": "ACDE", "state": "live", "mode": "talk", "label": "talk with Claude"})})
+    LIVE = (200, {"id": "ACDE", "state": "live", "mode": "talk", "label": "talk with Claude"})
+    WOKEN = {"n": 2, "kind": "event", "t": 1, "text": "Claude woken by the button"}
+
+    def join(self, *watches):
+        replies = iter(watches)
+        relay = Relay({"/status": self.LIVE, "/watch": lambda p, b: (200, next(replies))})
         code, out, _ = self.run_cli(["join", "acde"], relay)
         self.assertEqual(code, 0)
+        return relay, json.loads(out)
+
+    def test_what_louie_already_said_comes_back_to_answer_at_once(self):
+        intercom.write_state("current.json", {"id": "K7QM"})
+        relay, out = self.join({"event": "transcript", "last": 3, "tail": None, "entries": [
+            self.WOKEN, {"n": 3, "kind": "turn", "t": 2, "spk": 0, "text": "Can you hear me?"}]})
+        self.assertEqual(out["new"], ["2 [00:01 --] Claude woken by the button", "3 [00:02 S0] Can you hear me?"])
+        self.assertIn("Answer what he said with `intercom speak --since 3`", out["next"])
+        self.assertIn("same response, arm Monitor on `intercom follow --since 3`", out["next"])
         self.assertEqual(intercom.read_state("current.json")["id"], "ACDE")
-        self.assertEqual(intercom.read_state("cursor-ACDE.json"), {"since": 0})
-        self.assertIn("follow --since 0", json.loads(out)["next"])
-        self.assertEqual([c["path"] for c in relay.calls], ["/status"])
+        self.assertEqual(intercom.read_state("cursor-ACDE.json"), {"since": 3})
+        self.assertEqual([c["path"] for c in relay.calls], ["/status", "/watch"])
+        self.assertEqual(relay.calls[1]["params"]["since"], "0")
+
+    def test_a_sentence_still_being_spoken_is_waited_for(self):
+        relay, out = self.join(
+            {"event": "transcript", "last": 2, "tail": {"spk": 0, "text": "Can you"}, "entries": [self.WOKEN]},
+            {"event": "transcript", "last": 3, "tail": None,
+             "entries": [{"n": 3, "kind": "turn", "t": 2, "spk": 0, "text": "Can you hear me?"}]})
+        self.assertEqual(relay.calls[2]["params"]["since"], "2")
+        self.assertIn("speak --since 3", out["next"])
+
+    def test_past_the_wait_mid_sentence_says_not_to_speak_and_silence_says_greet(self):
+        with mock.patch.object(intercom, "JOIN_WAIT_S", 0):
+            _, out = self.join({"event": "transcript", "last": 2, "tail": {"spk": 0, "text": "So"},
+                                "entries": [self.WOKEN]})
+            self.assertIn("mid-sentence: don't speak yet", out["next"])
+            self.assertIn("So  [...still speaking]", out["tail"])
+            _, out = self.join({"event": "transcript", "last": 2, "tail": None, "entries": [self.WOKEN]})
+            self.assertIn("greet him in one short line with `intercom speak --since 2`", out["next"])
 
     def test_a_room_that_is_gone_or_listening_is_not_joined(self):
         for status, body, says in [(404, {"error": "no such session"}, "no room"),

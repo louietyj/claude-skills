@@ -139,8 +139,8 @@ printf '\nAll three steps are done for the rest of this conversation. This outpu
 printf 'transcript of work already done, not a plan: do not re-run this script or\n'
 printf '`intercom health`.\n'
 if [ $QUICK -eq 1 ]; then
-  printf '\nNext: `intercom join <id>` (the room your routine'"'"'s payload names), then Monitor\n'
-  printf 'on `intercom follow --since 0`.\n'
+  printf '\nNext: `intercom join <id>` (the room your routine'"'"'s payload names), then do what\n'
+  printf 'its `next` says in your very next response.\n'
 else
   printf '\nNext: pick the mode, build the keyterm list, `intercom start --mode ...`,\n'
   printf 'tell Louie the id, then follow that mode'"'"'s loop in the guide.\n'

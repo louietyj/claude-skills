@@ -41,7 +41,7 @@ NOT_NEWS = {"note", "said", "setting", "net"}   # as the relay's: logged, but wa
 # The gate (listen mode under Monitor): `follow` decides when the main agent wakes,
 # and a cheap gate agent says which batches are worth waking it for.
 CEILING_S = 30            # no closed turn waits longer than this for the main agent
-GATE_GATHER_S = 10        # the gate judges speech in batches, as listen mode always has
+GATE_GATHER_S = 3         # long enough for a turn still being finished; 10 doubled the gate's latency
 GATE_STALE_S = 30         # a gate that hasn't polled this long while speech waits isn't running
 GATE_POLL_S = 2           # follow's long-poll, short so the gate's answers land fast
 GATE_PREFIX_TOKENS = 60_000    # a subagent's own system prompt and tools, before anything we print

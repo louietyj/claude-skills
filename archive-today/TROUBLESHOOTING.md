@@ -91,9 +91,11 @@ The error carries the status and the start of the body.
 - A 200 "Loading" page with no wip id, no refresh and no script means archive.today
   refused the capture (exit 5, not this section). On 2026-11-02 every wsj.com URL got it
   from the sandbox, with or without `anyway=1`, and `/timemap/<url>` showed no capture
-  appeared. Other people's WSJ captures kept landing, so the refusal is specific to the
-  submitter: its IP, or something about the request. That hasn't been narrowed down. FT,
-  Economist, Bloomberg, Atlantic and NYT submitted normally.
+  appeared. A real browser got the same dead page, both in the sandbox and on a
+  residential IP (Browser Use), while that same residential browser submitted Wikipedia
+  normally. So it isn't the IP or this client. WSJ snapshots still appear, apparently
+  from archive.today's own crawling. FT, Economist, Bloomberg, Atlantic and NYT
+  submitted normally.
 - `/timemap/<url>` lists every snapshot of a URL, with timestamps. It's the quickest way
   to check whether a submit ever produced anything.
 

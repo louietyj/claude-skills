@@ -64,8 +64,8 @@ button:active{background:#2a2a2a}
        justify-content:center;justify-content:safe center;gap:4vmin;z-index:1;overflow-y:auto;padding:14vmin 0}
 #phonenum{width:62vmin;font-size:6vmin;text-align:center;border-radius:3vmin;padding:1.5vmin}
 #numrow button{font-size:4.5vmin;border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 1vmin}
-#holdrow,#routerow{display:flex;flex-direction:column;align-items:center;gap:2vmin}
-#route{font-size:6vmin;border-radius:3vmin;padding:1.5vmin 3vmin;min-width:45vmin;text-align:center}
+#holdrow,.devrow{display:flex;flex-direction:column;align-items:center;gap:2vmin}
+.devrow select{font-size:6vmin;border-radius:3vmin;padding:1.5vmin 3vmin;min-width:45vmin;max-width:80vmin;text-align:center}
 .label{font-size:7vmin}
 .hint{color:var(--dim);font-size:4.5vmin;max-width:60vmin}
 .stepper{display:flex;align-items:center;gap:5vmin}
@@ -129,9 +129,13 @@ button:active{background:#2a2a2a}
   <button id="hangup" class="pill hide">Hang up the phone</button>
   <button id="usehere2" class="pill hide">Switch to web here</button>
   <button id="pip" class="pill hide">Picture in picture</button>
-  <div id="routerow" class="hide">
-    <div class="label">Audio</div>
-    <select id="route" aria-label="audio device"></select>
+  <div class="devrow">
+    <div class="label">Mic</div>
+    <select id="mic" aria-label="microphone"></select>
+  </div>
+  <div id="speakerrow" class="devrow hide">
+    <div class="label">Speaker</div>
+    <select id="speaker" aria-label="speaker"></select>
   </div>
   <div id="numrow" class="hint"></div>
   <input id="phonenum" class="hide" type="tel" autocomplete="tel" placeholder="+1 415 555 0123">
@@ -366,6 +370,7 @@ async function join(s) {
   talk = s.mode === "talk";
   session = s; sid = s.id; mode = "live"; failures = 0;
   holding = false; roomAudio = undefined; roomCall = null; roomSince = null; holdMs = null; muted = false;
+  micId = sinkId = "default";
   clearTimeout(noteTimer); $("note").textContent = "";
   show("live");
   $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
@@ -382,19 +387,33 @@ async function takeAudio() {
     voiceEl = new Audio();
     voiceEl.autoplay = true;
     voiceEl.play().catch(() => {});
+    applySink();
   }
+  muted = false;
+  if (!await openMic()) return status("Microphone blocked", "red");
+  holding = true;
+  renderRoom();
+  send({ type: "take" });
+  startAudio();
+  findDevices();
+}
+
+// Listen: processing off, it flattens the voice differences diarization relies on.
+// Talk: echo cancellation on, or Claude transcribes its own voice. Auto gain stays
+// off in both: in talk mode it would boost echo residue to speaking level.
+function micConstraints(processing) {
+  return { echoCancellation: processing, noiseSuppression: processing, autoGainControl: false,
+           ...(micId !== "default" ? { deviceId: { exact: micId } } : {}) };
+}
+
+// The mic and everything that reads it; the recorder and Claude's voice are separate.
+async function openMic() {
   try {
-    // Listen: processing off, it flattens the voice differences diarization
-    // relies on. Talk: echo cancellation on, or Claude transcribes its own voice.
-    // Auto gain stays off in both: in talk mode it would boost echo residue to speaking level.
-    stream = await navigator.mediaDevices.getUserMedia({ audio: talk
-      ? { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
-      : { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  } catch { return status("Microphone blocked", "red"); }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(talk) });
+  } catch { return false; }
   // Mute disables only this clone: the transcriber gets silence on the same
   // stream, and the probe still reads the real mic, so Claude isn't told it died.
   sendStream = new MediaStream([stream.getAudioTracks()[0].clone()]);
-  muted = false;
   // Only after the mic, which puts Android in call mode: a context opened earlier
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams. AEC3 runs at 48 kHz.
@@ -406,15 +425,21 @@ async function takeAudio() {
   }
   if (talk && OWN_AEC && meterCtx) await startAec();
   applyMute();
-  holding = true;
-  renderRoom();
   if (talk) startMeter();
   startProbe();
   startChirps();
   stream.getAudioTracks()[0].addEventListener("ended", () => status("Microphone lost", "red"));
-  send({ type: "take" });
-  startAudio();
-  if (talk) findRoutes();
+  return true;
+}
+
+function closeMic() {
+  clearInterval(meterTimer);
+  probe = null;
+  chirp = null;
+  try { meterCtx && meterCtx.close(); } catch {}
+  meterCtx = null;
+  for (const s of [stream, sendStream, raw]) if (s) s.getTracks().forEach((t) => t.stop());
+  stream = sendStream = raw = aec = null;
 }
 
 // On a socket the relay knows holds the audio: a fresh segment, and Claude's voice.
@@ -646,8 +671,9 @@ function renderSheet() {
   $("hangup").classList.toggle("hide", !roomCall);
   $("usehere2").classList.toggle("hide", holding || !(roomAudio || roomCall));
   $("pip").classList.toggle("hide", !PIP_OK || !holding);
-  $("routerow").classList.toggle("hide", !talk);
-  renderRoutes();
+  $("speakerrow").classList.toggle("hide", !talk);
+  fillSelect($("mic"), mics, micId);
+  fillSelect($("speaker"), speakers, sinkId);
   const editing = editingNumber || !myNumber;
   $("numrow").innerHTML = myNumber && !editing ? `Calls ${myNumber} <button id="changenum">change</button>` : "Your number, for Call me";
   if ($("changenum")) $("changenum").onclick = () => { editingNumber = true; renderSheet(); };
@@ -673,7 +699,7 @@ function stepHold(dir) {
 // of leaving the page (and the room).
 function openSheet() {
   renderSheet();
-  if (talk && holding) findRoutes();   // earbuds may have come or gone
+  findDevices();   // Chrome on Android doesn't fire devicechange
   $("sheet").classList.remove("hide");
   history.pushState({ sheet: true }, "");
 }
@@ -689,61 +715,67 @@ addEventListener("popstate", () => {
   if (!$("sheet").classList.contains("hide")) { $("sheet").classList.add("hide"); editingNumber = false; }
 });
 
-// ---- audio device ----------------------------------------------------------------------
-// Chrome on Android has no output picker: it routes call audio, in and out, through the
-// device of the mic opened last. It lists those devices as mics under these names, so a
-// second mic opened on one moves Claude's voice there without touching the recorder's.
-// Per session: a remembered earpiece would beat Louie's earbuds next time.
+// ---- audio devices -------------------------------------------------------------------
+// As enumerateDevices reports them. Chrome on Android lists its call devices as mics, so
+// picking "Headset earpiece" moves Claude's voice there too. Per room: a remembered
+// earpiece would beat Louie's earbuds next time.
 
-const ROUTE_NAMES = { "Speakerphone": "Speaker", "Headset earpiece": "Earpiece",
-  "Wired headset": "Wired headset", "Bluetooth headset": "Bluetooth", "USB audio": "USB audio" };
-const AUTO = { id: "default", name: "Automatic" };
-let routes = [AUTO], routeId = "default", routeStream = null;
+const DEFAULT_DEVICE = { id: "default", name: "Default" };
+let mics = [DEFAULT_DEVICE], speakers = [DEFAULT_DEVICE], micId = "default", sinkId = "default";
 
-async function findRoutes() {
-  let found = [];
-  try {
-    found = (await navigator.mediaDevices.enumerateDevices())
-      .filter((d) => d.kind === "audioinput" && ROUTE_NAMES[d.label])
-      .map((d) => ({ id: d.deviceId, name: ROUTE_NAMES[d.label] }));
-  } catch {}
-  routes = [AUTO, ...found];
-  if (!routes.some((r) => r.id === routeId)) { closeRoute(); routeId = "default"; }
+async function findDevices() {
+  let all = [];
+  try { all = await navigator.mediaDevices.enumerateDevices(); } catch {}
+  // Labels stay blank until the page may use the mic; Firefox and Safari list no "default".
+  const list = (kind, word) => {
+    const ds = all.filter((d) => d.kind === kind)
+      .map((d, i) => ({ id: d.deviceId, name: d.label || (d.deviceId === "default" ? "Default" : `${word} ${i + 1}`) }));
+    return ds.some((d) => d.id === "default") ? ds : [DEFAULT_DEVICE, ...ds];
+  };
+  mics = list("audioinput", "Mic");
+  speakers = list("audiooutput", "Speaker");
+  renderSheet();
+}
+navigator.mediaDevices?.addEventListener?.("devicechange", findDevices);
+
+// A new mic means a new recorder run, so a new transcriber stream; the room and
+// Claude's voice carry on.
+async function pickMic(id) {
+  if (id === micId) return;
+  micId = id;
+  if (holding) {
+    await flushRecorder();
+    closeMic();
+    if (!await openMic()) {
+      micId = "default";
+      if (!await openMic()) return status("Microphone blocked", "red");
+      status("Couldn't open that mic", "red");
+    }
+    segment();
+  }
   renderSheet();
 }
 
-async function openRoute(deviceId) {
-  return navigator.mediaDevices.getUserMedia({ audio:
-    { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+async function applySink() {
+  if (!voiceEl || !voiceEl.setSinkId) return;
+  try { await voiceEl.setSinkId(sinkId === "default" ? "" : sinkId); }
+  catch { status("Couldn't use that speaker", "red"); }
 }
 
-function closeRoute() {
-  if (routeStream) routeStream.getTracks().forEach((t) => t.stop());
-  routeStream = null;
-}
-
-// Automatic opens the default for a moment, handing the choice back to Chrome
-// (wired, USB, Bluetooth, then speaker).
-async function pickRoute(id) {
-  if (!holding || id === routeId) return renderSheet();
-  closeRoute();
-  try {
-    if (id === "default") (await openRoute("default")).getTracks().forEach((t) => t.stop());
-    else routeStream = await openRoute(id);
-    routeId = id;
-  } catch { routeId = "default"; status("Couldn't switch the audio", "red"); }
+function pickSpeaker(id) {
+  sinkId = id;
+  applySink();
   renderSheet();
 }
 
-function renderRoutes() {
-  const sel = $("route");
-  // Rebuilt only on change: renderSheet runs often, and rebuilding would close an open picker.
-  const key = routes.map((r) => r.id).join();
+// Rebuilt only on change: renderSheet runs often, and rebuilding would close an open picker.
+function fillSelect(sel, items, value) {
+  const key = items.map((d) => d.id + d.name).join();
   if (sel.dataset.key !== key) {
-    sel.replaceChildren(...routes.map((r) => new Option(r.name, r.id)));
+    sel.replaceChildren(...items.map((d) => new Option(d.name, d.id)));
     sel.dataset.key = key;
   }
-  sel.value = routeId;
+  sel.value = value;
 }
 
 // ---- the phone line ------------------------------------------------------------------
@@ -792,7 +824,8 @@ $("usehere").onclick = takeAudio;
 $("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
-$("route").onchange = (e) => pickRoute(e.target.value);
+$("mic").onchange = (e) => pickMic(e.target.value);
+$("speaker").onchange = (e) => pickSpeaker(e.target.value);
 
 // ---- Claude's voice (talk mode) ------------------------------------------------------
 // A WebRTC track from Cloudflare's SFU, played by an <audio> element: the only
@@ -833,8 +866,7 @@ async function startAec() {
       WebAssembly.compileStreaming(fetch("/aec/aec3.wasm")),
       meterCtx.audioWorklet.addModule("/aec/worklet.js"),
     ]);
-    raw = await navigator.mediaDevices.getUserMedia({ audio:
-      { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    raw = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(false) });
     const into = meterCtx.createChannelMerger(2);
     meterCtx.createMediaStreamSource(raw).connect(into, 0, 0);
     const gain = meterCtx.createGain();
@@ -1072,17 +1104,9 @@ function releaseAudio() {
   closeVoice();
   claudeTalking = false;
   if (voiceEl) voiceEl.muted = true;
-  clearInterval(meterTimer);
-  probe = null;
-  chirp = null;
-  try { meterCtx && meterCtx.close(); } catch {}
-  meterCtx = null;
   closePip();
   stopRecorder();
-  closeRoute();
-  routes = [AUTO]; routeId = "default";
-  for (const s of [stream, sendStream, raw]) if (s) s.getTracks().forEach((t) => t.stop());
-  stream = sendStream = raw = aec = null;
+  closeMic();
   renderRoom();
   renderSheet();
 }

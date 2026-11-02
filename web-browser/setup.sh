@@ -512,8 +512,8 @@ done
 
 # Captcha solving. Keys are never committed: each comes from the environment, or
 # from an untracked key file beside this script. CapSolver solves reCAPTCHA,
-# Turnstile, AWS WAF, GeeTest and MTCaptcha; 2Captcha is the only one left that
-# solves hCaptcha and FunCaptcha, and backs CapSolver up on the rest. With neither
+# Turnstile, AWS WAF, GeeTest and MTCaptcha; 2Captcha solves FunCaptcha, backs
+# NoneCap up on hCaptcha, and CapSolver on the rest. With neither
 # key cloak's fingerprint is all that carries a page -- enough for risk-scored
 # anti-bot (Cloudflare, DataDome) but not for a site that gates every visitor
 # behind a captcha, archive.today being the common one.
@@ -526,6 +526,14 @@ SOLVERS='' KEYS_NOTE=''
 if [ -n "$CAPSOLVER_KEY" ]; then
   "$REAL" config set autoSolver.external.capsolverKey "$CAPSOLVER_KEY" >/dev/null 2>&1
   SOLVERS=capsolver, KEYS_NOTE="capsolver ...${CAPSOLVER_KEY: -4}"
+fi
+# NoneCap solves hCaptcha only, and goes before 2Captcha: the solvers list sets
+# the order. Listed only once the binary took the key: a build without it
+# rejects the name, and with it the whole solver list.
+NONECAP_KEY=${NONECAP_API_KEY:-}
+[ -n "$NONECAP_KEY" ] || NONECAP_KEY=$(cat "$SKILL_DIR/nonecap.key" 2>/dev/null | tr -d '\r\n')
+if [ -n "$NONECAP_KEY" ] && "$REAL" config set autoSolver.external.noneCapKey "$NONECAP_KEY" >/dev/null 2>&1; then
+  SOLVERS=${SOLVERS}nonecap, KEYS_NOTE="${KEYS_NOTE:+$KEYS_NOTE, }nonecap ...${NONECAP_KEY: -4}"
 fi
 if [ -n "$TWOCAPTCHA_KEY" ]; then
   "$REAL" config set autoSolver.external.twoCaptchaKey "$TWOCAPTCHA_KEY" >/dev/null 2>&1

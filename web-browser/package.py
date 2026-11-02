@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the uploadable skill zip.
 
-The zip embeds capsolver.key, and 2captcha.key, windows.json and browser-use.key
-when present, in plaintext. Treat the artefact as a secret: anyone holding it can
-spend all three balances, and ask Louie's laptop for browser grants.
+The zip embeds capsolver.key, and 2captcha.key, nonecap.key, windows.json and
+browser-use.key when present, in plaintext. Treat the artefact as a secret: anyone
+holding it can spend every balance, and ask Louie's laptop for browser grants.
 """
 
 import json
@@ -18,8 +18,10 @@ MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
            "cloak/package-lock.json", "cloak/refresh.sh"]
 KEY = "capsolver.key"
 PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
-# Optional: the only provider left for hCaptcha and FunCaptcha.
+# Optional: the only provider left for FunCaptcha, and hCaptcha's fallback.
 TWOCAPTCHA_KEY = "2captcha.key"
+# Optional: hCaptcha only, tried before 2Captcha.
+NONECAP_KEY = "nonecap.key"
 # Optional: the gate key for pinchtab-windows, Louie's Chrome.
 WINDOWS = "windows.json"
 # Optional: the Browser Use key behind pinchtab-cloud.
@@ -53,6 +55,17 @@ def read_twocaptcha_key() -> str:
         key = fh.read().strip()
     if not re.fullmatch(r"[0-9a-f]{32}", key):
         raise SystemExit(f"{TWOCAPTCHA_KEY} does not look like a 2Captcha key (expected 32 hex characters).")
+    return key
+
+
+def read_nonecap_key() -> str:
+    path = os.path.join(HERE, NONECAP_KEY)
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        key = fh.read().strip()
+    if not key.startswith("nc_live_"):
+        raise SystemExit(f"{NONECAP_KEY} does not look like a NoneCap key (expected an nc_live_ prefix).")
     return key
 
 
@@ -91,14 +104,16 @@ def check_description() -> None:
 def main() -> int:
     check_description()
     with_key = "--no-key" not in sys.argv[1:]
-    two_key = ""
+    two_key = none_key = ""
     if with_key:
         key = read_key()
         two_key = read_twocaptcha_key()
+        none_key = read_nonecap_key()
     windows = read_windows()
     bu_key = read_browser_use_key()
 
     members = (list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
+               + ([NONECAP_KEY] if none_key else [])
                + ([WINDOWS] if windows else []) + ([BROWSER_USE_KEY] if bu_key else []))
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -114,7 +129,11 @@ def main() -> int:
         if two_key:
             print(f"Contains {TWOCAPTCHA_KEY} in plaintext (ending ...{two_key[-4:]}) too.")
         else:
-            print(f"No {TWOCAPTCHA_KEY}: hCaptcha and FunCaptcha will go unsolved.")
+            print(f"No {TWOCAPTCHA_KEY}: FunCaptcha will go unsolved, and hCaptcha has no fallback.")
+        if none_key:
+            print(f"Contains {NONECAP_KEY} in plaintext (ending ...{none_key[-4:]}) too.")
+        else:
+            print(f"No {NONECAP_KEY}: hCaptcha goes to 2Captcha alone.")
     else:
         print("Built without a key: the browser works, captcha solving is off.")
     if windows:

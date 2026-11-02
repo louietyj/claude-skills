@@ -467,13 +467,13 @@ class Turns(unittest.TestCase):
         self.wait_tail(sid, {"spk": 2, "text": "So the core idea"})
         ws.close()
 
-    def test_monologue_is_split_at_a_sentence_end_after_twelve_seconds(self):
+    def test_monologue_is_split_at_a_sentence_end_after_five_seconds(self):
         sid = create()
         ws = device(sid)
         ws.send(json.dumps({"type": "seg"}))
         tok = lambda text, ms: {"text": text, "start_ms": ms, "is_final": True, "speaker": "2"}
-        script(ws, emit=[{"tokens": [tok("First.", 0), tok(" Still", 13000),
-                                     tok(" going.", 13500), tok(" More", 14000)]}])
+        script(ws, emit=[{"tokens": [tok("First.", 0), tok(" Still", 6000),
+                                     tok(" going.", 6500), tok(" More", 7000)]}])
         es = wait_entries(sid, lambda es: texts(es, "turn"))
         self.assertEqual(texts(es, "turn"), ["First. Still going."])
         self.wait_tail(sid, {"spk": 2, "text": "More"})

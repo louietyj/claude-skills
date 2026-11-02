@@ -42,7 +42,7 @@ STUB_MARKERS = [
     "err_proxy", "verify you are human", "unusual activity",
 ]
 
-EXIT_FAIL, EXIT_NONE, EXIT_PENDING = 1, 3, 4
+EXIT_FAIL, EXIT_NONE, EXIT_PENDING, EXIT_REFUSED = 1, 3, 4, 5
 
 
 class Broken(Exception):
@@ -51,6 +51,10 @@ class Broken(Exception):
     def __init__(self, section, detail):
         super().__init__(detail)
         self.section = section
+
+
+class Refused(Exception):
+    """archive.today declined to capture the URL. A fact about the site, not a bug."""
 
 
 def log(msg):
@@ -217,7 +221,7 @@ def newest(url):
 
 
 def submit(url, fresh=False):
-    """Returns ("done", snapshot) or ("wip", id) or ("queued", None).
+    """Returns ("done", snapshot) or ("wip", id); raises Refused.
 
     Without fresh, a URL archived recently comes back as its existing snapshot;
     archive.today matches it after normalizing the URL itself, so a cache-busting
@@ -239,23 +243,19 @@ def submit(url, fresh=False):
     if target and is_snapshot(target):
         return "done", target
     if status == 200 and b"Loading" in body:
-        # A capture of this URL is already in flight, started by someone else.
-        return "queued", None
+        # A static page with no wip id, no refresh and no script. Every wsj.com URL got
+        # it on 2026-11-02, with or without anyway=1, and no capture ever appeared.
+        raise Refused(f"archive.today accepted no capture of {url} (its id-less 'Loading' page)")
     raise Broken("unexpected-response", f"/submit/ answered {status}, target {target!r}: {body[:200]!r}")
 
 
-def wait(wip_id=None, url=None, deadline=None):
-    """Poll until a capture lands. Returns its snapshot URL, or None at the deadline."""
+def wait(wip_id, deadline):
+    """Poll /wip/<id> until the capture lands. Returns its snapshot URL, or None at the deadline."""
     while time.time() < deadline:
-        if wip_id:
-            status, hdrs, _ = fetch(f"{HOST}/wip/{wip_id}")
-            loc = hdrs.get("Location") or ""
-            if status in (301, 302) and "/wip/" not in loc:
-                return loc
-        else:
-            snap = newest(url)
-            if snap:
-                return snap
+        status, hdrs, _ = fetch(f"{HOST}/wip/{wip_id}")
+        loc = hdrs.get("Location") or ""
+        if status in (301, 302) and "/wip/" not in loc:
+            return loc
         time.sleep(min(10, max(0, deadline - time.time())))
     return None
 
@@ -300,56 +300,57 @@ def cmd_newest(a):
 
 def cmd_submit(a):
     kind, val = submit(normalize(a.url, a.keep_query), a.fresh)
-    print({"done": val, "wip": f"wip {val}", "queued": "queued (already being captured)"}[kind])
+    print(val if kind == "done" else f"wip {val}")
     return 0
 
 
-def _finish(snap, wip_id, url, a):
+def _finish(snap, wip_id, a):
     if snap:
         if a.url_only:
             print(snap)
         else:
             read_snapshot(snap, a.html)
         return 0
-    resume = f"archive-today wait {wip_id}" if wip_id else f"archive-today wait --url '{url}'"
-    log(f"still capturing after {a.budget}s. Resume with: {resume}")
+    log(f"still capturing after {a.budget}s. Resume with: archive-today wait {wip_id}")
     return EXIT_PENDING
 
 
 def cmd_read(a):
     deadline = time.time() + a.budget
     if is_snapshot(a.url):
-        return _finish(a.url, None, None, a)
+        return _finish(a.url, None, a)
     url = normalize(a.url, a.keep_query)
     snap = None if a.fresh else newest(url)
     wip_id = None
     if not snap:
         log("[submitting a fresh capture]" if a.fresh else "[no snapshot yet: submitting]")
-        kind, val = submit(url, a.fresh)
+        try:
+            kind, val = submit(url, a.fresh)
+        except Refused:
+            snap = newest(url) if a.fresh else None
+            if not snap:
+                raise
+            log("[archive.today refused a fresh capture; reading the newest snapshot instead]")
+            return _finish(snap, None, a)
         if kind == "done":
             snap = val
         else:
             wip_id = val
-            log(f"[capturing{' as wip ' + val if val else ''}; captures usually take 1-5 min]")
-            snap = wait(wip_id, url, deadline)
-    return _finish(snap, wip_id, url, a)
+            log(f"[capturing as wip {val}; captures usually take 1-5 min]")
+            snap = wait(wip_id, deadline)
+    return _finish(snap, wip_id, a)
 
 
 def cmd_wait(a):
-    if not (a.id or a.url):
-        raise SystemExit("give a wip id or --url")
-    url = normalize(a.url, a.keep_query) if a.url else None
-    snap = wait(a.id, url, time.time() + a.budget)
-    return _finish(snap, a.id, url, a)
+    return _finish(wait(a.id, time.time() + a.budget), a.id, a)
 
 
 def main():
     p = argparse.ArgumentParser(prog="archive-today", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def common(sp, url=True, fresh=False):
-        if url:
-            sp.add_argument("url")
+    def common(sp, fresh=False):
+        sp.add_argument("url")
         sp.add_argument("--keep-query", action="store_true", help="don't strip tracking parameters")
         if fresh:
             sp.add_argument("--fresh", action="store_true", help="capture again even if a snapshot exists")
@@ -370,15 +371,17 @@ def main():
     common(sp, fresh=True)
     sp.set_defaults(fn=cmd_submit)
     sp = sub.add_parser("wait", help="resume waiting on a capture, then read it")
-    sp.add_argument("id", nargs="?", help="wip id from submit/read")
-    sp.add_argument("--url", help="wait for this URL's first snapshot instead (capture queued without an id)")
-    common(sp, url=False)
+    sp.add_argument("id", help="wip id from submit/read")
     reading(sp)
     sp.set_defaults(fn=cmd_wait)
 
     a = p.parse_args()
     try:
         return a.fn(a)
+    except Refused as e:
+        log(f"archive-today: {e}. It refuses some sites outright (all of wsj.com as of 2026-11-02); "
+            f"retrying won't help. Move on to a wire-syndicated copy or ghostarchive.")
+        return EXIT_REFUSED
     except Broken as e:
         log(f"archive-today FAILED ({e.section}): {e}")
         log(f"Read the '{e.section}' section of {TROUBLE} before retrying or working around it.")

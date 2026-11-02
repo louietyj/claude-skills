@@ -27,12 +27,15 @@ command to resume. Run that; don't submit again.
 |---|---|
 | `read <url>` | newest snapshot, else submit + wait; prints text. Also takes a snapshot URL |
 | `newest <url>` | prints the newest snapshot URL; exit 3 if none |
-| `submit <url>` | starts a capture; prints the snapshot URL, `wip <id>`, or `queued` |
-| `wait <id>` / `wait --url <url>` | resumes waiting, then prints text |
+| `submit <url>` | starts a capture; prints the snapshot URL or `wip <id>` |
+| `wait <id>` | resumes waiting on a capture, then prints text |
 
 `--fresh` (on `read` and `submit`) captures again even if a snapshot exists.
 `--url-only` prints the snapshot URL instead of the text; `--html FILE` also saves the
-page. Exit codes: 0 done, 1 broken (see below), 3 no snapshot, 4 still capturing.
+page. Exit codes: 0 done, 1 broken (see below), 3 no snapshot, 4 still capturing,
+5 archive.today refused to capture the site. It refuses all of wsj.com (as of
+2026-11-02), so a WSJ article is readable only if someone else already archived it.
+With `--fresh`, `read` falls back to the newest snapshot instead.
 
 ## The URL decides whether there's a match
 

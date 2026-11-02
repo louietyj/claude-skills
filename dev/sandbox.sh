@@ -45,6 +45,11 @@ up() {
     name=$(basename "$skill")
     mounts+=(-v "$(host_path "$skill"):$SKILLS/$name:ro")
   done
+  # Solver keys live in keys/, outside every skill mount; the skills read these too.
+  for pair in CAPSOLVER_API_KEY:capsolver TWOCAPTCHA_API_KEY:2captcha NONECAP_API_KEY:nonecap; do
+    file="$REPO/keys/${pair#*:}.key"
+    [ -f "$file" ] && mounts+=(-e "${pair%%:*}=$(tr -d '\r\n' < "$file")")
+  done
 
   # Chrome dies on Docker's default 64MB /dev/shm.
   docker run -d --name "$NAME" --shm-size=1g --label "sandbox.workdir=$WORKDIR" \

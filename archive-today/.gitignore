@@ -1,0 +1,3 @@
+# Built by package.py; embeds the solver keys, so the zip is a secret.
+*.zip
+__pycache__/

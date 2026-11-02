@@ -1,9 +1,8 @@
-# Solver keys. This repo is public; the keys are live and funded. The uploaded
-# skill embeds them in plaintext, so the packaged zip is a secret too.
+# Solver keys now live in ../keys/. Still ignored here so a checkout that kept
+# its old copies can't commit them: this repo is public and the keys are funded.
 capsolver.key
 2captcha.key
 nonecap.key
-!*.key.example
 # The gate key in front of Louie's Chrome.
 windows.json
 # Browser Use, behind pinchtab-cloud.

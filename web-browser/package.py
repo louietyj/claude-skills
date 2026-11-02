@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build the uploadable skill zip.
 
-The zip embeds capsolver.key, and 2captcha.key, nonecap.key, windows.json and
-browser-use.key when present, in plaintext. Treat the artefact as a secret: anyone
-holding it can spend every balance, and ask Louie's laptop for browser grants.
+The zip embeds capsolver.key, and 2captcha.key and nonecap.key when present (all
+three from the repo's keys/), plus windows.json and browser-use.key when present,
+in plaintext. Treat the artefact as a secret: anyone holding it can spend every
+balance, and ask Louie's laptop for browser grants.
 """
 
 import json
@@ -13,60 +14,20 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "keys"))
+from solver_keys import (KEY, NONECAP_KEY, TWOCAPTCHA_KEY, read_key,  # noqa: E402
+                         read_nonecap_key, read_twocaptcha_key)
+from solver_keys import path as key_path  # noqa: E402
+
+SOLVER_KEYS = {KEY, TWOCAPTCHA_KEY, NONECAP_KEY}
+
 NAME = "web-browser"
 MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
            "cloak/package-lock.json", "cloak/refresh.sh"]
-KEY = "capsolver.key"
-PLACEHOLDER = "CAP-YOUR-CAPSOLVER-API-KEY-HERE"
-# Optional: the only provider left for FunCaptcha, and hCaptcha's fallback.
-TWOCAPTCHA_KEY = "2captcha.key"
-# Optional: hCaptcha only, tried before 2Captcha.
-NONECAP_KEY = "nonecap.key"
 # Optional: the gate key for pinchtab-windows, Louie's Chrome.
 WINDOWS = "windows.json"
 # Optional: the Browser Use key behind pinchtab-cloud.
 BROWSER_USE_KEY = "browser-use.key"
-
-
-def read_key() -> str:
-    path = os.path.join(HERE, KEY)
-    if not os.path.exists(path):
-        raise SystemExit(
-            f"{KEY} missing -- copy {KEY}.example to {KEY} and put the real key "
-            f"in it, or pass --no-key to build without captcha solving."
-        )
-    with open(path, encoding="utf-8") as fh:
-        key = fh.read().strip()
-    if not key or key == PLACEHOLDER:
-        raise SystemExit(
-            f"{KEY} still holds the placeholder -- put the real key in it. "
-            f"The skill would install cleanly and then fail every captcha."
-        )
-    if not key.startswith("CAP-"):
-        raise SystemExit(f"{KEY} does not look like a CapSolver key (expected a CAP- prefix).")
-    return key
-
-
-def read_twocaptcha_key() -> str:
-    path = os.path.join(HERE, TWOCAPTCHA_KEY)
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8") as fh:
-        key = fh.read().strip()
-    if not re.fullmatch(r"[0-9a-f]{32}", key):
-        raise SystemExit(f"{TWOCAPTCHA_KEY} does not look like a 2Captcha key (expected 32 hex characters).")
-    return key
-
-
-def read_nonecap_key() -> str:
-    path = os.path.join(HERE, NONECAP_KEY)
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8") as fh:
-        key = fh.read().strip()
-    if not key.startswith("nc_live_"):
-        raise SystemExit(f"{NONECAP_KEY} does not look like a NoneCap key (expected an nc_live_ prefix).")
-    return key
 
 
 def read_browser_use_key() -> str:
@@ -118,7 +79,7 @@ def main() -> int:
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for member in members:
-            src = os.path.join(HERE, member)
+            src = key_path(member) if member in SOLVER_KEYS else os.path.join(HERE, member)
             if not os.path.exists(src):
                 raise SystemExit(f"Missing {member}")
             zf.write(src, f"{NAME}/{member}")

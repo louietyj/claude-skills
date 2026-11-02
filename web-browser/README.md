@@ -285,8 +285,8 @@ AliExpress only challenges claude.ai's egress IPs. The local sandbox gets no sli
 There is now a credentials file:
 
 - **`capsolver.key` ships in the zip in plaintext**, exactly as `durable-filesystem/credentials.json` does. The uploaded skill is a credential — anyone holding it can spend the CapSolver balance. Don't commit it, don't share the zip.
-- Copy `capsolver.key.example` to `capsolver.key` and put the real key in it, or set `CAPSOLVER_API_KEY` in the environment instead. Without either, the solver is simply absent and everything else works unchanged.
-- `2captcha.key` (or `TWOCAPTCHA_API_KEY`) is optional and handled the same way. `package.py` ships it when it is present and checks that it looks like a key (32 hex characters). Without it, hCaptcha and FunCaptcha go unsolved.
+- The solver keys live in the repo's `keys/`, shared with `archive-today/`, and each zip carries its own copy. Copy `keys/capsolver.key.example` to `keys/capsolver.key` and put the real key in it, or set `CAPSOLVER_API_KEY` in the environment instead. Without either, the solver is simply absent and everything else works unchanged.
+- `keys/2captcha.key` (or `TWOCAPTCHA_API_KEY`) is optional and handled the same way. `package.py` ships it when it is present and checks that it looks like a key (32 hex characters). Without it, hCaptcha and FunCaptcha go unsolved. `keys/nonecap.key` (or `NONECAP_API_KEY`) is optional too.
 
 ## Sessions, screenshots and batches: in the fork
 

@@ -1,0 +1,5 @@
+# Captcha-solver keys, bundled by web-browser and archive-today. This repo is
+# public; the keys are live and funded, and each zip embeds them in plaintext.
+*.key
+!*.key.example
+__pycache__/

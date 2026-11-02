@@ -2031,8 +2031,7 @@ async function createRoom(env, registry, b) {
   const claim = await (await registry.fetch("https://registry/claim", {
     method: "POST", body: JSON.stringify({ label: b.label, mode: b.mode, quick: b.quick }) })).json();
   if (!claim.id) return json(claim, 500);
-  // Every room calls Claude by name, and a misheard one ("Hey, Clark") misses the
-  // rule that delivers a turn naming Claude.
+  // Misheard ("Hey, Clark"), Claude's name misses the rule that delivers it.
   const terms = b.keyterms ?? [];
   const keyterms = terms.some((t) => t.toLowerCase() === "claude") ? terms : ["Claude", ...terms].slice(0, 100);
   const stub = env.SESSION.get(env.SESSION.idFromName(claim.id));

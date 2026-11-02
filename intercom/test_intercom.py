@@ -300,8 +300,7 @@ class Gate(Base):
         with mock.patch.object(intercom, "main_transcript", lambda: main):
             self.follow([lambda: (200, watch_body(last=1, entries=[turn(1, "Hm.")])), ask("old"), ask("closed"),
                          lambda: (200, watch_body(last=2, entries=[turn(2, "so the point is")])), end])
-        # A `...` from before follow started doesn't count; one after takes a turn
-        # that already closed, or else the next one.
+        # "old": a `...` from before follow started doesn't count.
         self.assertEqual(seen, {"old": 0, "closed": 1, "end": 2})
 
     def test_start_hands_over_the_whole_conversation_then_asks_about_the_newest(self):

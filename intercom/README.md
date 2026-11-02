@@ -32,6 +32,7 @@ video call to join.
 | `SKILL.md` | thin skill body: just runs `setup.sh` |
 | `GUIDE.md` | how to run a session; printed in full by `setup.sh` |
 | `GUIDE-quick.md` | for a session a button woke (`setup.sh --quick`): what differs, then GUIDE.md's talk sections |
+| `ROUTINE.md` | the quick-start routine's prompt, pasted into claude.ai as is |
 | `GATE.md` | the gate agent's prompt; `intercom gate start` fills in GUIDE.md's "Steering or collaborating" and the brief |
 | `bin/intercom.py` | the CLI: health, start, join, watch, follow, gate, wake-next, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
@@ -82,8 +83,8 @@ each time (the repo is public). `intercom health` says whether the phone line
 is set up.
 
 Quick start (a button opens the room and wakes Claude; see "Quick start"
-below) needs a claude.ai routine with an API trigger, whose prompt joins the
-room its payload names, and:
+below) needs a claude.ai routine with an API trigger, whose prompt is
+[ROUTINE.md](ROUTINE.md), and:
 
 ```bash
 npx wrangler secret put ROUTINE_ID       # trig_..., from the routine's API trigger

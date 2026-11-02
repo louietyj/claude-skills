@@ -173,13 +173,19 @@ class Schedule(unittest.TestCase):
     def test_plain_talk_waits_for_the_gate(self):
         self.assertFalse(intercom.Scheduler().add(turn(1, "So the fee is fifteen hundred."), 0))
 
-    def test_naming_claude_device_news_and_wake_next_go_at_once(self):
+    def test_naming_claude_device_news_and_a_wait_reply_go_at_once(self):
         s = intercom.Scheduler()
         self.assertTrue(s.add(turn(1, "Claude, can you check that?"), 0))
         self.assertTrue(s.add({"n": 2, "kind": "event", "text": "mic silent"}, 0))
-        s.next_turn = True
+        s.take()
+        self.assertFalse(s.wait_for_next())
         self.assertTrue(s.add(turn(3, "and the second thing"), 0))
-        self.assertFalse(s.add(turn(4, "and a third"), 0), "wake-next is for one turn only")
+        self.assertFalse(s.add(turn(4, "and a third"), 0), "`...` is for one turn only")
+
+    def test_a_wait_reply_takes_a_turn_that_closed_before_it(self):
+        s = intercom.Scheduler()
+        s.add(turn(1, "so the point is"), 0)
+        self.assertTrue(s.wait_for_next())
 
     def test_the_oldest_waiting_line_sets_the_ceiling(self):
         s = intercom.Scheduler()
@@ -270,18 +276,33 @@ class Gate(Base):
                              later, lambda: (200, watch_body(event="ended"))])
         self.assertEqual([l.get("n") for l in lines], [1])
 
-    def test_wake_next_delivers_the_next_closed_turn(self):
+    def test_a_wait_reply_delivers_the_next_closed_turn(self):
         seen = {}
+        main = os.path.join(self.tmp.name, "main.jsonl")
+        Path(main).write_text(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "..."}]}}) + "\n", encoding="utf-8")
 
-        def ask():
-            intercom.write_json(self.path("wake-next"), {})
-            return 200, watch_body(event="idle")
+        def reply(text):
+            with open(main, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "text", "text": text}]}}) + "\n")
+
+        def ask(label):
+            def step():
+                seen[label] = self.delivered()
+                reply("...")
+                return 200, watch_body(event="idle")
+            return step
 
         def end():
-            seen["delivered"] = self.delivered()
-            return 200, watch_body(event="ended", last=1)
-        self.follow([ask, lambda: (200, watch_body(last=1, entries=[turn(1, "so the point is")])), end])
-        self.assertEqual(seen["delivered"], 1)
+            seen["end"] = self.delivered()
+            return 200, watch_body(event="ended", last=2)
+        with mock.patch.object(intercom, "main_transcript", lambda: main):
+            self.follow([lambda: (200, watch_body(last=1, entries=[turn(1, "Hm.")])), ask("old"), ask("closed"),
+                         lambda: (200, watch_body(last=2, entries=[turn(2, "so the point is")])), end])
+        # A `...` from before follow started doesn't count; one after takes a turn
+        # that already closed, or else the next one.
+        self.assertEqual(seen, {"old": 0, "closed": 1, "end": 2})
 
     def test_start_hands_over_the_whole_conversation_then_asks_about_the_newest(self):
         now = self.clock.now
@@ -351,10 +372,7 @@ class Gate(Base):
         self.assertEqual(code, 1)
         self.assertIn("intercom gate start", err)
 
-    def test_wake_next_and_brief_leave_files_for_follow_and_the_gate(self):
-        code, _, _ = self.run_cli(["wake-next"], Relay({}))
-        self.assertEqual(code, 0)
-        self.assertTrue(os.path.exists(self.path("wake-next")))
+    def test_brief_leaves_a_file_for_the_gate(self):
         self.run_cli(["brief"], Relay({}), stdin=io.StringIO("Steering: Louie at the dealer.\n"))
         self.assertEqual(Path(self.path("brief.txt")).read_text(encoding="utf-8"), "Steering: Louie at the dealer.")
 
@@ -364,6 +382,8 @@ class MainPosts(unittest.TestCase):
         rows = [
             {"type": "assistant", "timestamp": "2026-10-25T07:41:31Z",
              "message": {"content": [{"type": "text", "text": "."}]}},
+            {"type": "assistant", "timestamp": "2026-10-25T07:41:45Z",
+             "message": {"content": [{"type": "text", "text": "..."}]}},
             {"type": "assistant", "timestamp": "2026-10-25T07:41:59Z",
              "message": {"content": [{"type": "text", "text": "The modern one is SpringHill."}]}},
             {"type": "assistant", "timestamp": "2026-10-25T07:42:17Z",

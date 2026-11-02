@@ -100,8 +100,8 @@ batches are worth waking you for. Some rules never wait for it:
 - a turn that names Claude reaches you at once, and so does device news;
 - nothing waits longer than 30s: then the oldest line you haven't seen goes
   out, with everything else waiting;
-- after `intercom wake-next`, the next closed turn reaches you whatever the
-  gate says.
+- after you reply `...`, the next closed turn reaches you whatever the gate
+  says.
 
 Every delivery holds everything said since the last, and only closed turns, so
 nothing is skipped; it is only sometimes up to 30s late.
@@ -130,9 +130,11 @@ delivering until it is up. Its finishing is housekeeping: spawn it and say
 nothing in chat.
 
 **When you stay quiet only because the point isn't finished yet** (a question
-half asked, an explanation still going), run `intercom wake-next` instead of a
-bare `.`. Otherwise the gate may not wake you for the rest of it, and you hear
-it up to 30s late.
+half asked, an explanation still going), reply `...` instead of a bare `.`.
+The gate judges every turn within seconds, so you need this only when the line
+you're waiting for may look unremarkable on its own (a bare number answering
+a question). Otherwise the gate may not wake you for it, and you hear it up to
+30s late.
 
 ## Listen mode: one turn for the whole conversation
 

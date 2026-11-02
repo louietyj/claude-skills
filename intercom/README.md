@@ -34,7 +34,7 @@ video call to join.
 | `GUIDE-quick.md` | for a session a button woke (`setup.sh --quick`): what differs, then GUIDE.md's talk sections |
 | `ROUTINE.md` | the quick-start routine's prompt, pasted into claude.ai as is |
 | `GATE.md` | the gate agent's prompt; `intercom gate start` fills in GUIDE.md's "Steering or collaborating" and the brief |
-| `bin/intercom.py` | the CLI: health, start, join, watch, follow, gate, wake-next, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
+| `bin/intercom.py` | the CLI: health, start, join, watch, follow, gate, brief, monitor-url, speak, set, call, hangup, note, stop, transcript, audio, status, pair, bookmark |
 | `test_intercom.py` | offline CLI tests: `python test_intercom.py` |
 | `worker/` | the relay (`worker.js`), the device page (`page.html`), `wrangler.toml` |
 | `aec/` | the page's own echo canceller: `aec3.wasm` (WebRTC's AEC3), its wrapper `aec3.js`, `worklet.js`; rebuilt by `build.sh` from `wap.cc` |
@@ -437,7 +437,7 @@ much as a busy one. On a 3-hour collaborating call (Opus, 10s batches), 302 of
 595 calls were a bare `.`, and they were 55% of its 154M cache-read tokens. So
 `follow` holds listen-mode turns, and a Haiku subagent running `intercom gate`
 says which batches the main agent would act on. Deterministic rules don't wait
-for it: a turn naming Claude, device news, `wake-next`, and a 30 s ceiling on
+for it: a turn naming Claude, device news, a `...` reply, and a 30 s ceiling on
 the oldest undelivered line. Replayed against that call (Haiku answering each of
 its 523 batches, scored against what Opus actually did), Opus woke 226 times
 instead of 480; 63% of its actions arrived on the spot, 80% within 15 s, all
@@ -449,13 +449,16 @@ made the gate work:
 - Its question line sits after every batch. How the threshold is worded (40%,
   "think briefly") made no measurable difference.
 - Half its "false" wakes were one batch early: Opus waited for the point. Hence
-  `wake-next`, which only Opus can know to ask for.
+  the `...` reply, which only Opus can know to ask for. It was first a
+  `wake-next` command, but that cost a tool call and then an extra step to end
+  the turn with `.`. The gate already reads Opus's JSONL, so `follow` reads it
+  too and sees `...` there.
 
 The relay is unchanged. `follow` is its only reader, and the two agents meet in
 files under `~/.intercom/gate-<id>/`, one writer each (spool and delivery cursor
-from `follow`; answers, gate state and the `wake` flag from the gate;
-`wake-next` and the brief from the main agent). A gate that ends its turn
-notifies the main agent, which is how a respawn is asked for: past 100K tokens
+from `follow`; answers, gate state and the `wake` flag from the gate; the
+brief from the main agent, whose `...` replies `follow` reads from its JSONL).
+A gate that ends its turn notifies the main agent, which is how a respawn is asked for: past 100K tokens
 Haiku's input costs 5x, so each gate is told `RESPAWN` after reading up to
 ~35K, and the next starts from the whole conversation so far, compact. That
 fits easily: the call above was ~40K tokens of transcript and posts, while most

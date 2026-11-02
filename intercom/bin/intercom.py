@@ -52,6 +52,7 @@ NAME = re.compile(r"\bclaude\b", re.I)
 GATE_QUESTION = ("Would the main-agent have a 40% or greater chance of acting on this batch under "
                  "<main-agent-guidance>? Think briefly, then answer with `intercom gate y` or "
                  "`intercom gate n`.")
+WAIT_REPLIES = ("...", "…")    # the main agent's "deliver the next turn, whatever the gate says"
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 CFS_EDIT = re.compile(r"\bcfs (?:edit|write)(?: --new)? (\S+)")
 
@@ -610,11 +611,18 @@ def read_spool(sid):
 
 class Scheduler:
     """Which closed turns the main agent gets, and when: the gate's yes, its name, a
-    `wake-next`, device news, or the oldest waiting line reaching CEILING_S."""
+    `...` reply, device news, or the oldest waiting line reaching CEILING_S."""
 
     def __init__(self):
         self.pending = []          # (arrived, entry)
-        self.next_turn = False     # `wake-next`: deliver with the next closed turn
+        self.next_turn = False     # after a `...` reply: deliver with the next closed turn
+
+    def wait_for_next(self):
+        """The main agent replied `...`: True when a turn it hasn't seen is already here."""
+        if any(e.get("kind") == "turn" for _, e in self.pending):
+            return True
+        self.next_turn = True
+        return False
 
     def add(self, entry, now):
         """True when this entry makes a delivery due right away."""
@@ -652,6 +660,11 @@ def follow_gated(cfg, sid, since):
     seen = max((e.get("n", 0) for e in read_spool(sid)), default=0)
     write_json(gate_file(sid, "delivered.json"), {"upto": since})
     sched, polled_since, backoff = Scheduler(), since, 1
+    path = main_transcript()
+    try:
+        replies_at = os.path.getsize(path) if path else 0
+    except OSError:
+        replies_at = 0
 
     def deliver(extra=()):
         nonlocal since
@@ -662,8 +675,6 @@ def follow_gated(cfg, sid, since):
         write_json(gate_file(sid, "delivered.json"), {"upto": since})
 
     while True:
-        if take_flag(sid, "wake-next"):
-            sched.next_turn = True
         status, body = relay(cfg, "/watch", id=sid, since=polled_since, interval=0,
                              wait=GATE_POLL_S, timeout=GATE_POLL_S + 20)
         now = time.time()
@@ -684,6 +695,9 @@ def follow_gated(cfg, sid, since):
         else:
             time.sleep(backoff)
             backoff = min(backoff * 2, 30)
+        waits, replies_at = asked_to_wait(path, replies_at)
+        if waits:
+            due = sched.wait_for_next() or due
         due = take_flag(sid, "wake") or due or sched.overdue(now)
         # Needs speech that has waited as long as the ceiling, so it never adds a wake.
         alert = gate_alert(sid, sched, now)
@@ -713,9 +727,9 @@ def epoch(iso):
         return 0
 
 
-def main_posts(path, offset):
-    """(posts, new offset): the main agent's chat text and file edits after `offset`,
-    as (time, text)."""
+def main_blocks(path, offset):
+    """(blocks, new offset): the main agent's own content blocks after `offset`, as
+    (time, block). A half-written last line waits for the next call."""
     if not path:
         return [], offset
     try:
@@ -725,7 +739,7 @@ def main_posts(path, offset):
     except OSError:
         return [], offset
     end = data.rfind(b"\n") + 1
-    posts = []
+    blocks = []
     for line in data[:end].splitlines():
         try:
             r = json.loads(line)
@@ -734,16 +748,32 @@ def main_posts(path, offset):
         if r.get("type") != "assistant" or r.get("isSidechain"):
             continue
         at = epoch(r.get("timestamp"))
-        for b in (r.get("message") or {}).get("content") or []:
-            if b.get("type") == "text" and b.get("text", "").strip() not in ("", "."):
-                posts.append((at, b["text"].strip()))
-            elif b.get("type") == "tool_use":
-                inp = b.get("input") or {}
-                if b.get("name") in EDIT_TOOLS and inp.get("file_path"):
-                    posts.append((at, f"updated {os.path.basename(inp['file_path'])}"))
-                for m in CFS_EDIT.finditer(inp.get("command") or ""):
-                    posts.append((at, f"updated {os.path.basename(m.group(1))}"))
-    return posts, offset + end
+        blocks += [(at, b) for b in (r.get("message") or {}).get("content") or []]
+    return blocks, offset + end
+
+
+def asked_to_wait(path, offset):
+    """(whether the main agent replied `...` after `offset`, new offset)."""
+    blocks, offset = main_blocks(path, offset)
+    return any(b.get("type") == "text" and b.get("text", "").strip() in WAIT_REPLIES
+               for _, b in blocks), offset
+
+
+def main_posts(path, offset):
+    """(posts, new offset): the main agent's chat text and file edits after `offset`,
+    as (time, text)."""
+    blocks, offset = main_blocks(path, offset)
+    posts = []
+    for at, b in blocks:
+        if b.get("type") == "text" and b.get("text", "").strip() not in ("", ".", *WAIT_REPLIES):
+            posts.append((at, b["text"].strip()))
+        elif b.get("type") == "tool_use":
+            inp = b.get("input") or {}
+            if b.get("name") in EDIT_TOOLS and inp.get("file_path"):
+                posts.append((at, f"updated {os.path.basename(inp['file_path'])}"))
+            for m in CFS_EDIT.finditer(inp.get("command") or ""):
+                posts.append((at, f"updated {os.path.basename(m.group(1))}"))
+    return posts, offset
 
 
 def gate_lines(entries, posts, delivered=None):
@@ -855,12 +885,6 @@ def cmd_gate(cfg, args):
         write_json(gate_file(sid, "gate.json"), g)
         return
     gate_next(sid, g)
-
-
-def cmd_wake_next(cfg, args):
-    sid = current_id(args)
-    write_json(gate_file(sid, "wake-next"), {"at": time.time()})
-    emit({"ok": True, "next": "the next closed turn reaches you whatever the gate says"})
 
 
 def cmd_brief(cfg, args):
@@ -1042,10 +1066,6 @@ def main():
     ga.add_argument("action", choices=("start", "y", "n", "wait"))
     ga.add_argument("--id")
     ga.set_defaults(fn=cmd_gate)
-
-    wn = sub.add_parser("wake-next", help="listen mode: the next closed turn reaches you whatever the gate says")
-    wn.add_argument("--id")
-    wn.set_defaults(fn=cmd_wake_next)
 
     br = sub.add_parser("brief", help="listen mode: what this session is, on stdin, for every gate to read")
     br.add_argument("text", nargs="?", help=argparse.SUPPRESS)

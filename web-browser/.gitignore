@@ -2,6 +2,7 @@
 # skill embeds them in plaintext, so the packaged zip is a secret too.
 capsolver.key
 2captcha.key
+nonecap.key
 !*.key.example
 # The gate key in front of Louie's Chrome.
 windows.json

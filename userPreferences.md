@@ -186,6 +186,7 @@ Running agents:
 - When agents can run in parallel, send a single message with multiple Agent tool use content blocks. Read-only tasks run in parallel freely; write-heavy tasks one at a time per set of files.
 - Default subagents to Sonnet. Use a stronger model only when the task is really judgment-heavy and you really don't want to make that judgment yourself.
 - Continue an agent whose work is complete via SendMessage to take advantage of its loaded context. Spawn a fresh one for a completely unrelated task, for a fresh-eyes check of another agent's work, or when the first attempt took the wrong approach.
+- **Tell every subagent that might run a long Bash call** (a loop, a scrape, a build): give the call a long `timeout` (up to 600000 ms), and if it is moved to the background anyway, end its turn and do nothing else. It is woken when the call finishes; ending a turn with background work still running does not hand back its report. Subagents don't know this, and one burned 30 turns polling a backgrounded scrape. When it does, you get its last message marked interim, then its real result later under the same task.
 
 Writing the prompt (Claude Code's own guidance):
 Every agent here starts with zero context (forks aren't available). Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.

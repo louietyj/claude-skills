@@ -71,6 +71,10 @@ finish() {
     printf '  %s/latest-small.jpg\n' "$SHOT_DIR"
     printf 'If you re-run setup.sh, pass --subagent %s again: without it, it\n' "$AGENT"
     printf 'takes over the tab of the agent that spawned you.\n'
+    printf '\nA Bash call that loops over pages can run past the tool'"'"'s 2-minute\n'
+    printf 'default: give it `timeout: 600000`, and split anything longer than 10\n'
+    printf 'minutes into several calls. Never run a browser loop in the background:\n'
+    printf 'you cannot wait for it, and polling it costs a turn each time.\n'
   else
     printf '\nYour latest screenshot is always %s/latest-small.jpg\n' "$SHOT_DIR"
   fi
@@ -79,6 +83,10 @@ finish() {
     printf '\nLouie'"'"'s own logged-in Chrome is `pinchtab-windows`, after he approves a\n'
     printf 'grant -- see "Louie'"'"'s Chrome" in SKILL.md before using it. Its shots:\n'
     printf '  %s/latest-small.jpg\n' "$WIN_SHOT_DIR"
+    if [ -n "$AGENT" ] && [ -s /tmp/.pinchtab-windows-grant ]; then
+      printf 'A grant is already held, by the agent that spawned you, and you share\n'
+      printf 'it: use pinchtab-windows directly. Never run `grant` or `release`.\n'
+    fi
   fi
   if [ -x "$CLOUD_SHIM" ]; then
     printf '\nA cloud browser on a residential IP is `pinchtab-cloud`, for a site that\n'
@@ -780,6 +788,16 @@ if [ "$TIER" = windows ]; then
           echo "usage: $NAME grant \"<what you need Louie's browser for>\" | $NAME grant --wait" >&2
           exit 2 ;;
         *)
+          # Every agent in this sandbox shares one grant. A live one needs no
+          # second approval from Louie; one the gate refuses is gone.
+          if [ -s "$G" ]; then
+            case "$(gate -H "Authorization: Bearer $(cat "$G")" "$WIN_BASE/health" 2>&1)" in
+              *grant_required*|*grant_expired*) rm -f "$G" ;;
+              *)
+                echo "A grant is already held and shared by every agent here: use $NAME directly."
+                exit 0 ;;
+            esac
+          fi
           code=$(python3 -c 'import secrets; print("".join(secrets.choice("ACDEFHJKLMNPRTUVWXY34679") for _ in range(4)))')
           body=$(python3 -c 'import json,sys; print(json.dumps({"purpose": sys.argv[1], "code": sys.argv[2], "agent": sys.argv[3]}))' \
             "$2" "$code" "${PINCHTAB_AGENT:-claude}")

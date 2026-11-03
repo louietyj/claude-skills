@@ -159,7 +159,10 @@ tabs, a browser he is watching. Use it when a page needs his login, when
 in his browser or in a tab he has open. Everything else stays on `pinchtab`.
 Always name the tier: never let `pinchtab` stand in for it.
 
-**1. Ask for a grant.** Every use needs one, approved by Louie on the laptop:
+**1. Ask for a grant.** Every use needs one, approved by Louie on the laptop.
+Every agent in this sandbox shares it: a subagent whose setup says a grant is
+held never asks or releases, and `grant` with a live one already held just
+says so.
 
 ```bash
 pinchtab-windows grant "read my Chase statements for September"   # prints a 4-character code
@@ -198,9 +201,11 @@ done (`pinchtab-windows tab close <id>`). Confirm before anything that acts as
 him: paying, sending, deleting, changing settings. A file a page downloads
 lands in his own Downloads folder; `wait --download` also copies it to you.
 
-**3. Release it** with `pinchtab-windows release` when the task is done. A
-grant also lapses after 30 idle minutes; a command then says so, and you ask
-again with a new `grant`.
+**3. Release it** with `pinchtab-windows release` when the task is done, and
+not before: not between rounds of subagents you are still sending into his
+browser, since each release costs him another approval. A grant also lapses
+after 30 idle minutes; a command then says so, and you ask again with a new
+`grant`.
 
 Screenshots work as for `pinchtab`, in their own directory (setup.sh names the
 `latest` paths). His window can be any size, so take every coordinate through

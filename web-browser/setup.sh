@@ -73,8 +73,9 @@ finish() {
     printf 'takes over the tab of the agent that spawned you.\n'
     printf '\nA Bash call that loops over pages can run past the tool'"'"'s 2-minute\n'
     printf 'default: give it `timeout: 600000`, and split anything longer than 10\n'
-    printf 'minutes into several calls. Never run a browser loop in the background:\n'
-    printf 'you cannot wait for it, and polling it costs a turn each time.\n'
+    printf 'minutes into several calls. If a call is moved to the background anyway,\n'
+    printf 'just end your turn: you are woken when it finishes, and your work goes\n'
+    printf 'on from there. Never poll it; each check costs a turn.\n'
   else
     printf '\nYour latest screenshot is always %s/latest-small.jpg\n' "$SHOT_DIR"
   fi

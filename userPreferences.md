@@ -51,7 +51,8 @@ Run it unconditionally; it's idempotent.
 **Examples:**
 - Reddit: mcp-parallel for the first-pass search (finding threads, reading post bodies). For comment threads, mcp-reddit → mcp-apify (`thirdwatch/reddit-scraper`) → claude-in-chrome.
 - General fetches: web_fetch → web-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
-- Paywalled articles (WSJ, NYT, FT, Bloomberg…): the **archive-today** skill, `archive-today read <url>`, which reads or captures an archive.today snapshot with no browser → a wire-syndicated copy (search the headline on AOL/Yahoo/MSN) → ghostarchive.org → my logged-in Chrome, for sites I subscribe to.
+- Paywalled articles (WSJ, NYT, FT, Bloomberg…): the **archive-today** skill, `archive-today read <url>`, which reads or captures an archive.today snapshot with no browser (where the sandbox blocks archive.today it says so: start **tor-proxy** and add `--tor`) → a wire-syndicated copy (search the headline on AOL/Yahoo/MSN) → ghostarchive.org → my logged-in Chrome, for sites I subscribe to.
+- A host the sandbox's egress proxy blocks (every try fails with curl exit 35, or plain `http://` gets `403 x-block-reason: hostname_blocked`; web.archive.org is one): the **tor-proxy** skill runs a local SOCKS5/HTTP proxy that gets through. Slow, and many sites refuse Tor exits, so only for what's otherwise unreachable.
 </web_research>
 
 <browser_delegation>

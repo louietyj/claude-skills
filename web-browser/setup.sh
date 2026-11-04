@@ -660,7 +660,7 @@ import json, sys
 try:
     d = json.load(sys.stdin)
     cost = float(d.get("proxyCost") or 0) + float(d.get("browserCost") or 0)
-    print("Stopped. Billed so far: %.1f MB of residential traffic, $%.3f in all (the meter lags; the dashboard has the final figure)." % (float(d.get("proxyUsedMb") or 0), cost))
+    print("Stopped. Billed so far: %.1f MB of traffic, $%.3f in all (the meter lags; the dashboard has the final figure)." % (float(d.get("proxyUsedMb") or 0), cost))
 except Exception:
     print("Stop sent; Browser Use did not report the usage.")'
     rm -f "$B"
@@ -670,8 +670,10 @@ except Exception:
 import json, sys
 print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == sys.argv[1]), ""))' "$1"
   }
-  start_cloud() {  # $1 country
+  start_cloud() {  # $1 country, or none for Browser Use's own datacenter egress
     stop_cloud > /dev/null
+    proxy="\"$1\"" where="a $1 residential IP"
+    [ "$1" = none ] && proxy=null where="Browser Use's datacenter egress (no residential proxy)"
     extra=
     if [ -n "$PROFILE" ]; then
       pid=$(profile_id "$PROFILE") || { echo "$NAME: could not list Browser Use profiles" >&2; return 1; }
@@ -680,7 +682,7 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
     fi
     # 1440x900 like the local browser, so its shots stay under claude.ai's
     # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
-    api -X POST "$API" --data "{\"proxyCountryCode\":\"$1\",\"timeout\":$MINUTES,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false$extra}" > "$B"
+    api -X POST "$API" --data "{\"proxyCountryCode\":$proxy,\"timeout\":$MINUTES,\"browserScreenWidth\":1440,\"browserScreenHeight\":900,\"solveCaptchas\":false$extra}" > "$B"
     if [ -z "$(json cdpUrl < "$B")" ]; then
       echo "$NAME: Browser Use refused: $(cat "$B")" >&2
       rm -f "$B"
@@ -696,7 +698,7 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
       stop_cloud >&2
       return 1
     fi
-    echo "$NAME: started a cloud browser on a $1 residential IP${PROFILE:+ with the profile \"$PROFILE\"}, ending by itself in $MINUTES minutes. A new browser has no page loaded: nav first." >&2
+    echo "$NAME: started a cloud browser on $where${PROFILE:+ with the profile \"$PROFILE\"}, ending by itself in $MINUTES minutes. A new browser has no page loaded: nav first." >&2
   }
   # A live browser whose bridge died with a suspended sandbox is re-attached,
   # tabs and all; an ended or lost one is replaced, and so is one on another
@@ -712,7 +714,7 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
   case "${1:-}" in
     start)
       country=us
-      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country us]}
+      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country us|gb|...|none]}
       if [ "$country" = "$(cat "$CLOUD_DIR/country" 2>/dev/null)" ]; then ensure; else start_cloud "$country"; fi
       exit $? ;;
     stop)

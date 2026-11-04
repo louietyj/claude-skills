@@ -236,7 +236,9 @@ EOF
   an unattended scheduled task.
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
-- `pinchtab-cloud start --country gb` for another country.
+- `pinchtab-cloud start --country gb` for another country. `--country none` drops the
+  residential proxy for Browser Use's own datacenter egress, at $0.20/GB instead of $5:
+  for a site that is blocked only from this sandbox, not one that bans datacenter IPs.
 - **A login that lasts: almost never what you want.** A profile keeps a
   login usable by any later session, which is a very different risk from a
   one-off login. Logging in to check something once (a Cigna policy

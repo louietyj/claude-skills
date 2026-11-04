@@ -93,8 +93,7 @@ _timeout = 60
 
 
 def use_proxy(proxy, onion=False):
-    """Send archive.today traffic through proxy (socks5://, socks5h:// or http://),
-    and to its onion address if onion. The solver APIs keep the direct route."""
+    """Route archive.today traffic (not the solver APIs) through proxy, to its onion address if onion."""
     global _opener, _proxied, _timeout, HOST
     scheme = urllib.parse.urlsplit(proxy).scheme
     if scheme in ("socks5", "socks5h"):
@@ -104,8 +103,7 @@ def use_proxy(proxy, onion=False):
         except ImportError:
             raise SystemExit("--proxy socks5h://... needs PySocks: pip install PySocks (setup.sh installs it)")
         p = urllib.parse.urlsplit(proxy)
-        # It handles https itself, with the system CAs: TLS through it ends at the real
-        # server, not at the egress proxy that _ctx's bundle exists for.
+        # Does its own https with the system CAs: TLS ends at the real server, not the egress proxy.
         routes = [SocksiPyHandler(socks.SOCKS5, p.hostname, p.port or 1080, rdns=scheme == "socks5h")]
     elif scheme == "http":
         if onion:
@@ -291,8 +289,7 @@ def submit(url, fresh=False):
     parameter doesn't get round that. fresh is the "save again" button's anyway=1.
     """
     if HOST == ONION:
-        # Same captcha as the clearnet, but its clearance never takes over the onion
-        # (2026-11-04: cf_clearance set, next submit challenged again, both solvers).
+        # Its captcha clearance never takes there (2026-11-04, both solvers).
         raise Refused(f"can't submit {url} over Tor: archive.today's onion address gates submissions "
                       f"behind a captcha this script can't clear, so only existing snapshots are readable")
     status, hdrs, body = fetch(f"{HOST}/submit/?{'anyway=1&' if fresh else ''}url={urllib.parse.quote(url, safe='')}",

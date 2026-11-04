@@ -182,9 +182,8 @@ CLOUD_DIR=/tmp/.pinchtab-cloud
 CLOUD_PORT=9870
 CLOUD_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-cloud-shots}${AGENT:+/$AGENT}
 
-# A second local browser whose traffic goes through a proxy the caller names (the
-# tor-proxy skill, a paid proxy), so the main one never changes route under the
-# other agents sharing it.
+# A second local browser behind a proxy the caller names, so the main one never
+# changes route under the other agents sharing it.
 PROXY_SHIM=$BIN_DIR/pinchtab-proxy
 PROXY_DIR=/tmp/.pinchtab-proxy
 PROXY_PORT=9871
@@ -221,9 +220,7 @@ PY
 
 setup_proxy() {
   mkdir -p "$PROXY_DIR" && chmod 700 "$PROXY_DIR"
-  # Its own config, port and state dir, so it never touches the main server's
-  # profile. The proxy itself is set by `pinchtab-proxy start`, and a re-run of
-  # setup keeps the one it last had.
+  # Its own config, port and profile; a re-run keeps the proxy `start` last set.
   if ! python3 - "$("$REAL" config path)" "$PROXY_DIR" "$PROXY_PORT" <<'PY'
 import json, os, sys
 src, d, port = sys.argv[1:]
@@ -781,9 +778,8 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
   export PINCHTAB_SERVER PINCHTAB_TOKEN XDG_STATE_HOME
 fi
 
-# A second local browser behind a proxy the caller names. `start --proxy` (re)starts
-# its server with that proxy; any other command brings it back with the last one
-# when the sandbox was recycled in between.
+# `start --proxy` (re)starts the proxied browser; any other command relaunches it
+# with the last proxy if the sandbox was recycled.
 if [ "$TIER" = proxy ]; then
   export PINCHTAB_HINTS=off
   CONF=$PROXY_DIR/config.json

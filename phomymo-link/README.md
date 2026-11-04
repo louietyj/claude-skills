@@ -8,6 +8,7 @@ it at [phomymo.louietyj.me](https://phomymo.louietyj.me), his fork of
 SKILL.md      what a fresh Claude can't know: the link, where templates and format docs live, the scripts
 make_link.py  design JSON (+ optional Field=value pairs) -> link (stdlib only)
 preview.mjs   link -> PNG of the exact bitmap Print would send (headless Chromium)
+make_page.py  one or more links (+ optional previews) -> HTML page of "Open in Phomymo" buttons, published as an artifact
 ```
 
 The design JSON reference is reverse-engineered from the fork's source and lives beside it, at
@@ -29,6 +30,13 @@ is closest to his phone. It uses the first plain Chromium it finds (`/usr/bin/ch
 puppeteer's caches), else installs `chrome-headless-shell` into `~/.cache/phomymo-preview`. CloakBrowser
 is never used: its fingerprint patches add noise to canvas reads. Measured in the `dev/sandbox.sh`
 container: 2.3s warm, 8s first run, 14s when it has to download Chromium.
+
+## Handing over links
+
+Labels go out as a published artifact, never pasted in chat: a link with an image runs to tens of KB,
+too long to re-emit. It has to be an artifact. An HTML file sent with `SendUserFile` renders in the
+file preview, whose iframe is sandboxed without `allow-popups`, so its `target="_blank"` button silently
+does nothing; artifact frames allow popups. Checked in Chrome 2026-11-04.
 
 ## The link format
 

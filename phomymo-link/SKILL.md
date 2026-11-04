@@ -36,7 +36,17 @@ One bash call, since shell variables die between calls:
 SKILL_DIR="$(ls -1dt /mnt/skills/*/phomymo-link ~/.claude/skills/synced/*/phomymo-link 2>/dev/null | head -1)"
 python3 "$SKILL_DIR/make_link.py" design.json [Name=value ...] > link.txt
 node "$SKILL_DIR/preview.mjs" "$(cat link.txt)" preview.png [--tz America/Los_Angeles]
+python3 "$SKILL_DIR/make_page.py" --label "Roast beef" link.txt preview.png > labels.html
 ```
+
+Look at `preview.png` and iterate until the design is right. Then publish `labels.html` with the
+**Artifact** tool; never paste a link in chat. Each label on the page gets its preview, an "Open in
+Phomymo" button and "Copy link", so links (tens of KB with an image) go from file to file. For several
+labels, pass one `--label NAME LINK [PREVIEW]` each and a `--title`; leave out PREVIEW for any you didn't
+render. Republish the same path to keep the URL.
+
+Never deliver the page with `SendUserFile`: the file preview's sandbox lacks `allow-popups`, so the
+button silently does nothing there.
 
 - `make_link.py`: design JSON -> link. `\n` in a value is a line break; it warns about unfilled `{{...}}`
   and errors on a `Name=value` with no matching placeholder.
@@ -44,3 +54,4 @@ node "$SKILL_DIR/preview.mjs" "$(cat link.txt)" preview.png [--tz America/Los_An
   `--tz` (default his, Pacific). It loads the link in headless Chromium and asks the page for its print
   bitmap, so it is the only faithful view of the printed result. A few seconds warm; the first run in a
   sandbox installs `puppeteer-core`, plus `chrome-headless-shell` (~100 MB) if there is no Chromium.
+- `make_page.py`: links (+ previews) -> the page to publish. `--title` defaults to a lone label's name.

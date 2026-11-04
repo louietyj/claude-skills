@@ -44,9 +44,9 @@ of a batch, as pinchtab's instructions describe.
 If setup.sh's summary lists "Louie's Chrome", there is a second one,
 `pinchtab-windows`: his real Chrome on his laptop, logged in to his accounts.
 If it lists "cloud browser", there is `pinchtab-cloud`: a hosted browser on a
-residential IP, for sites that ban this sandbox. All take the same batches,
-with their own screenshot directories; see their sections below before
-touching either.
+residential IP, for sites that ban this sandbox. `pinchtab-proxy` is a second
+local browser behind a proxy you name. All take the same batches, with their
+own screenshot directories; see their sections below before touching any.
 
 The tab outlives the bash call: its page, DOM state and typed form values
 persist, so you never replay earlier steps. If the session goes stale pinchtab
@@ -258,6 +258,31 @@ EOF
 - Captchas are solved by pinchtab as usual, and screenshots, `--unscale` and
   subagents (`PINCHTAB_AGENT`, own tab with `nav --new-tab`) work as for
   `pinchtab`. There is one cloud browser per sandbox.
+
+## Through a proxy (pinchtab-proxy)
+
+A second browser in this sandbox whose traffic goes through a proxy you name,
+while plain `pinchtab` stays direct for every other agent. The usual case is a
+host this sandbox's egress proxy blocks, or a `.onion` address, through the
+tor-proxy skill:
+
+```bash
+pinchtab-proxy start --proxy socks5://127.0.0.1:9050   # socks5h:// works too; or http://host:port
+pinchtab-proxy execute-batch <<'EOF'
+nav <url> --block-images
+EOF
+```
+
+- `start --proxy <url>` (re)starts it with that proxy; the proxy must already be
+  running. Behind socks5 the proxy resolves names, so `.onion` works and lookups
+  stay off this sandbox's DNS.
+- It keeps the proxy: if the sandbox was recycled, the next command brings the
+  browser back through it, with no page loaded.
+- `pinchtab-proxy status`; `pinchtab-proxy stop` when the task is done, since it
+  is a second Chrome: about 0.4 GB, and on a 2-vCPU sandbox it competes with
+  the main browser for CPU.
+- Screenshots, captchas and subagents work as for `pinchtab`, in its own
+  shot directory.
 
 ## Logged-in accounts
 

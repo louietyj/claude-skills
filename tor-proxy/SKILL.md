@@ -28,6 +28,8 @@ curl --proxy http://127.0.0.1:9080 https://web.archive.org/...
   won't work with it.
 - Python: `requests` with `proxies={"https": "socks5h://127.0.0.1:9050"}` (needs `PySocks`), or
   PySocks' `sockshandler.SocksiPyHandler` for urllib.
+- A browser: the web-browser skill's `pinchtab-proxy start --proxy socks5://127.0.0.1:9050`,
+  a second browser behind Tor that leaves the main `pinchtab` direct.
 
 | Command | Does |
 |---|---|

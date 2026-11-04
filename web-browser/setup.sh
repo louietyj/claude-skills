@@ -94,6 +94,11 @@ finish() {
     printf 'bans this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
     printf 'Its shots: %s/latest-small.jpg\n' "$CLOUD_SHOT_DIR"
   fi
+  if [ -x "$PROXY_SHIM" ]; then
+    printf '\nA second local browser behind a proxy you name (e.g. tor-proxy) is\n'
+    printf '`pinchtab-proxy` -- see "Through a proxy" in SKILL.md. Its shots:\n'
+    printf '  %s/latest-small.jpg\n' "$PROXY_SHOT_DIR"
+  fi
 
   # Last, because it is what an agent reads right before its first command.
   prefix=${AGENT:+export PINCHTAB_AGENT=$AGENT; }
@@ -177,6 +182,14 @@ CLOUD_DIR=/tmp/.pinchtab-cloud
 CLOUD_PORT=9870
 CLOUD_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-cloud-shots}${AGENT:+/$AGENT}
 
+# A second local browser whose traffic goes through a proxy the caller names (the
+# tor-proxy skill, a paid proxy), so the main one never changes route under the
+# other agents sharing it.
+PROXY_SHIM=$BIN_DIR/pinchtab-proxy
+PROXY_DIR=/tmp/.pinchtab-proxy
+PROXY_PORT=9871
+PROXY_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-proxy-shots}${AGENT:+/$AGENT}
+
 setup_cloud() {
   if [ -z "$CLOUD_KEY" ]; then
     note 'cloud browser' 'not configured -- no browser-use.key in the skill'
@@ -204,6 +217,32 @@ PY
     return
   fi
   note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; use it only when pinchtab is blocked"
+}
+
+setup_proxy() {
+  mkdir -p "$PROXY_DIR" && chmod 700 "$PROXY_DIR"
+  # Its own config, port and state dir, so it never touches the main server's
+  # profile. The proxy itself is set by `pinchtab-proxy start`, and a re-run of
+  # setup keeps the one it last had.
+  if ! python3 - "$("$REAL" config path)" "$PROXY_DIR" "$PROXY_PORT" <<'PY'
+import json, os, sys
+src, d, port = sys.argv[1:]
+c = json.load(open(src))
+srv = c.setdefault("server", {})
+srv["port"], srv["stateDir"] = port, d + "/state"
+dst = d + "/config.json"
+kept = json.load(open(dst)).get("browser", {}).get("proxy") if os.path.exists(dst) else None
+c.setdefault("browser", {}).pop("proxy", None)
+if kept:
+    c["browser"]["proxy"] = kept
+json.dump(c, open(dst, "w"), indent=2)
+open(d + "/token", "w").write(srv["token"])
+PY
+  then
+    note 'proxied browser' 'FAILED -- could not write its config'
+    return
+  fi
+  note 'proxied browser' 'OK -- pinchtab-proxy, a second browser behind a proxy you name'
 }
 
 setup_windows() {
@@ -598,9 +637,9 @@ rm -f "$SHIM"
 ln -s "$GO_BIN" "$SHIM"
 ln -sf "$GO_BIN" "$BIN_DIR/pinchtab-local"
 
-# The remote tiers, `pinchtab-windows` and `pinchtab-cloud`: one body, two
-# headers. Each reaches its browser through its own server and token, then runs
-# the same binary, which keeps its shots apart by PINCHTAB_NAME.
+# The other tiers, `pinchtab-windows`, `pinchtab-cloud` and `pinchtab-proxy`: one
+# body, a header each. Each reaches its browser through its own server and token,
+# then runs the same binary, which keeps its shots apart by PINCHTAB_NAME.
 wrapper_header() {  # $1 tier, $2 command name
   cat <<SHIM_EOF
 #!/bin/sh
@@ -613,6 +652,8 @@ WIN_CONF=$WIN_CONF
 WIN_HEADERS=$WIN_HEADERS
 CLOUD_DIR=$CLOUD_DIR
 CLOUD_PORT=$CLOUD_PORT
+PROXY_DIR=$PROXY_DIR
+PROXY_PORT=$PROXY_PORT
 SHIM_EOF
 }
 SHIM_BODY=$(mktemp)
@@ -737,6 +778,66 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
   unset PINCHTAB_SESSION
   PINCHTAB_SERVER=http://127.0.0.1:$CLOUD_PORT PINCHTAB_TOKEN=$TOKEN
   XDG_STATE_HOME=/tmp/pinchtab-cloud-state${A:+-$A}
+  export PINCHTAB_SERVER PINCHTAB_TOKEN XDG_STATE_HOME
+fi
+
+# A second local browser behind a proxy the caller names. `start --proxy` (re)starts
+# its server with that proxy; any other command brings it back with the last one
+# when the sandbox was recycled in between.
+if [ "$TIER" = proxy ]; then
+  export PINCHTAB_HINTS=off
+  CONF=$PROXY_DIR/config.json
+  [ -s "$CONF" ] || { echo "$NAME: not set up -- run web-browser's setup.sh" >&2; exit 1; }
+  TOKEN=$(cat "$PROXY_DIR/token")
+  up() { curl -sf -m 5 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PROXY_PORT/health" >/dev/null; }
+  current() { PINCHTAB_CONFIG=$CONF "$REAL" config get browser.proxy.server 2>/dev/null; }
+  launch() {
+    PINCHTAB_CONFIG=$CONF "$REAL" server stop >/dev/null 2>&1
+    PINCHTAB_CONFIG=$CONF "$REAL" server --background --port "$PROXY_PORT" > "$PROXY_DIR/server.log" 2>&1 < /dev/null
+    i=0
+    until up; do
+      i=$((i + 1))
+      if [ $i -ge 30 ]; then
+        echo "$NAME: its server never came up. Log:" >&2
+        tail -5 "$PROXY_DIR/server.log" >&2
+        return 1
+      fi
+      sleep 1
+    done
+  }
+  case "${1:-}" in
+    start)
+      if [ "${2:-}" != --proxy ] || [ -z "${3:-}" ]; then
+        echo "usage: $NAME start --proxy socks5://127.0.0.1:9050 | http://host:port" >&2
+        exit 2
+      fi
+      # Chrome's socks5 already leaves name lookups to the proxy; it has no socks5h.
+      url=$3
+      case "$url" in socks5h://*) url=socks5://${url#socks5h://} ;; esac
+      case "$url" in
+        http://*|https://*|socks4://*|socks5://*) ;;
+        *) echo "$NAME: unsupported proxy $3: use socks5://, socks4://, http:// or https://" >&2; exit 2 ;;
+      esac
+      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null || exit 1
+      launch || exit 1
+      echo "$NAME: a second browser is up, its traffic going through $url; plain pinchtab is unaffected. A new browser has no page loaded: nav first."
+      exit 0 ;;
+    stop)
+      PINCHTAB_CONFIG=$CONF "$REAL" server stop >/dev/null 2>&1
+      echo "$NAME: stopped."
+      exit 0 ;;
+    status)
+      if up; then echo "$NAME: running, through $(current)"; else echo "$NAME: not running (last proxy: $(current))"; fi
+      exit 0 ;;
+  esac
+  if ! up; then
+    [ -n "$(current)" ] || { echo "$NAME: not started. Run: $NAME start --proxy <url>" >&2; exit 1; }
+    launch || exit 1
+    echo "$NAME: restarted its browser (the sandbox was recycled), through $(current). It has no page loaded: nav first." >&2
+  fi
+  unset PINCHTAB_SESSION
+  PINCHTAB_SERVER=http://127.0.0.1:$PROXY_PORT PINCHTAB_TOKEN=$TOKEN
+  XDG_STATE_HOME=/tmp/pinchtab-proxy-state${A:+-$A}
   export PINCHTAB_SERVER PINCHTAB_TOKEN XDG_STATE_HOME
 fi
 
@@ -865,10 +966,13 @@ if [ -n "$CLOUD_KEY" ]; then
   { wrapper_header cloud pinchtab-cloud; cat "$SHIM_BODY"; } > "$CLOUD_SHIM"
   chmod +x "$CLOUD_SHIM"
 fi
+{ wrapper_header proxy pinchtab-proxy; cat "$SHIM_BODY"; } > "$PROXY_SHIM"
+chmod +x "$PROXY_SHIM"
 rm -f "$SHIM_BODY"
 
 open_session
 setup_windows
 setup_cloud
+setup_proxy
 print_docs
 finish

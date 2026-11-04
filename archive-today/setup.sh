@@ -23,10 +23,11 @@ for name in python3 python; do
 done
 [ -n "$PY" ] || fail "no python 3.9+ interpreter found."
 
-if ! "$PY" -c 'import trafilatura' >/dev/null 2>&1; then
-  "$PY" -m pip install -q --break-system-packages trafilatura >/dev/null 2>&1 \
-    || "$PY" -m pip install -q trafilatura >/dev/null 2>&1 \
-    || fail "pip install trafilatura failed."
+# PySocks carries --tor and --proxy socks5h://.
+if ! "$PY" -c 'import trafilatura, socks' >/dev/null 2>&1; then
+  "$PY" -m pip install -q --break-system-packages trafilatura PySocks >/dev/null 2>&1 \
+    || "$PY" -m pip install -q trafilatura PySocks >/dev/null 2>&1 \
+    || fail "pip install trafilatura PySocks failed."
 fi
 
 BIN_DIR=""

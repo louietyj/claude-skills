@@ -1,0 +1,141 @@
+#!/bin/bash
+# tor-proxy: a local Tor client as a generic proxy for this sandbox.
+#
+#   tor-proxy start     download (once), configure and start tor; waits until it can carry traffic
+#   tor-proxy status    running? bootstrapped? (--check also asks check.torproject.org)
+#   tor-proxy newnym    switch to fresh circuits, so new connections get a new exit
+#   tor-proxy stop
+#
+# Behind an HTTP egress proxy ($HTTPS_PROXY, as in cloud Claude Code and Cowork),
+# tor reaches the network over Tor Browser's meek bridge, which looks like
+# ordinary HTTPS to a CDN. Without one, it connects directly.
+set -uo pipefail
+
+VERSION=16.0
+SHA256=cc950ebe9acb80188325c3a2cd8817def7dd7237d6fdcd861bb87b234a0cb2fd
+TARBALL="tor-expert-bundle-linux-x86_64-$VERSION.tar.gz"
+URLS=("https://dist.torproject.org/torbrowser/$VERSION/$TARBALL"
+      "https://archive.torproject.org/tor-package-archive/torbrowser/$VERSION/$TARBALL")
+
+SOCKS_PORT=${TOR_PROXY_SOCKS_PORT:-9050}
+HTTP_PORT=${TOR_PROXY_HTTP_PORT:-9080}
+CONTROL_PORT=${TOR_PROXY_CONTROL_PORT:-9051}
+HOME_DIR=${TOR_PROXY_HOME:-$HOME/.cache/tor-proxy}
+BUNDLE="$HOME_DIR/bundle-$VERSION"
+DATA="$HOME_DIR/data"
+TORRC="$HOME_DIR/torrc"
+LOG="$HOME_DIR/tor.log"
+PIDFILE="$HOME_DIR/tor.pid"
+
+die() { printf 'tor-proxy: %s\n' "$1" >&2; exit 1; }
+
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+bootstrap_line() { grep -oE 'Bootstrapped [0-9]+%[^"]*' "$LOG" 2>/dev/null | tail -1; }
+
+addresses() {
+  echo "  SOCKS5:       socks5h://127.0.0.1:$SOCKS_PORT   (socks5h: tor resolves names, so .onion works)"
+  echo "  HTTP CONNECT: http://127.0.0.1:$HTTP_PORT"
+}
+
+fetch_bundle() {
+  [ -x "$BUNDLE/tor/tor" ] && return 0
+  mkdir -p "$HOME_DIR"
+  local tmp="$HOME_DIR/$TARBALL.part" url ok=""
+  for url in "${URLS[@]}"; do
+    curl -sSfL --max-time 180 -o "$tmp" "$url" && { ok=1; break; }
+  done
+  [ -n "$ok" ] || die "could not download $TARBALL from dist.torproject.org or archive.torproject.org."
+  echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 \
+    || { rm -f "$tmp"; die "$TARBALL failed its SHA-256 check -- not using it."; }
+  rm -rf "$BUNDLE.tmp" && mkdir -p "$BUNDLE.tmp" && tar -xzf "$tmp" -C "$BUNDLE.tmp" \
+    && rm -rf "$BUNDLE" && mv "$BUNDLE.tmp" "$BUNDLE" && rm -f "$tmp" \
+    || die "could not unpack $TARBALL."
+}
+
+write_torrc() {
+  local pt="$BUNDLE/tor/pluggable_transports"
+  mkdir -p "$DATA" && chmod 700 "$DATA"
+  {
+    echo "DataDirectory $DATA"
+    echo "PidFile $PIDFILE"
+    echo "Log notice file $LOG"
+    echo "SocksPort 127.0.0.1:$SOCKS_PORT"
+    echo "HTTPTunnelPort 127.0.0.1:$HTTP_PORT"
+    echo "ControlPort 127.0.0.1:$CONTROL_PORT"
+    echo "CookieAuthentication 1"
+  } > "$TORRC"
+  local proxy=${HTTPS_PROXY:-${https_proxy:-}}
+  [ -n "$proxy" ] || return 0
+  # Tor's relays sit on bare IPs and odd ports, which an egress proxy won't pass.
+  # The meek bridge rides on HTTPS to a CDN instead; tor hands the proxy to lyrebird.
+  local hostport bridges
+  hostport=$(python3 -c 'import sys, urllib.parse; p = urllib.parse.urlsplit(sys.argv[1]); print(f"{p.hostname}:{p.port or 80}")' "$proxy") \
+    || die "could not parse HTTPS_PROXY ($proxy)."
+  bridges=$(python3 -c 'import json, sys; [print("Bridge " + b) for b in json.load(open(sys.argv[1]))["bridges"]["meek"]]' "$pt/pt_config.json") \
+    || die "no meek bridge in the bundle's pt_config.json."
+  {
+    echo "UseBridges 1"
+    echo "HTTPSProxy $hostport"
+    echo "ClientTransportPlugin meek_lite exec $pt/lyrebird"
+    echo "$bridges"
+  } >> "$TORRC"
+}
+
+cmd_start() {
+  if running && bootstrap_line | grep -q '100%'; then
+    echo "tor-proxy: already running."; addresses; return 0
+  fi
+  running && kill "$(cat "$PIDFILE")" 2>/dev/null
+  fetch_bundle
+  write_torrc
+  : > "$LOG"
+  LD_LIBRARY_PATH="$BUNDLE/tor" SSL_CERT_FILE="${SSL_CERT_FILE:-}" \
+    setsid "$BUNDLE/tor/tor" -f "$TORRC" > "$HOME_DIR/tor.stdout" 2>&1 < /dev/null &
+  local i line=""
+  for i in $(seq 1 60); do
+    sleep 2
+    line=$(bootstrap_line)
+    case "$line" in *100%*) echo "tor-proxy: ready after $((i * 2))s."; addresses; return 0 ;; esac
+    if [ "$i" -gt 3 ] && ! running; then break; fi
+  done
+  echo "tor-proxy: tor did not finish bootstrapping (last: ${line:-nothing}). Log tail:" >&2
+  tail -5 "$LOG" "$HOME_DIR/tor.stdout" >&2 2>/dev/null
+  exit 1
+}
+
+cmd_status() {
+  if ! running; then echo "tor-proxy: not running. Start it with: tor-proxy start"; return 3; fi
+  echo "tor-proxy: running (pid $(cat "$PIDFILE")), $(bootstrap_line)"
+  addresses
+  if [ "${1:-}" = "--check" ]; then
+    printf '  check.torproject.org: '
+    curl -sS --max-time 60 --proxy "socks5h://127.0.0.1:$SOCKS_PORT" https://check.torproject.org/api/ip; echo
+  fi
+}
+
+cmd_newnym() {
+  running || die "not running."
+  python3 - "$DATA/control_auth_cookie" "$CONTROL_PORT" <<'EOF'
+import socket, sys
+cookie = open(sys.argv[1], "rb").read().hex()
+s = socket.create_connection(("127.0.0.1", int(sys.argv[2])))
+s.sendall(f"AUTHENTICATE {cookie}\r\nSIGNAL NEWNYM\r\nQUIT\r\n".encode())
+reply = s.recv(512).decode()
+sys.exit(0 if reply.count("250") >= 2 else f"tor refused: {reply.strip()}")
+EOF
+  echo "tor-proxy: new circuits for new connections (tor allows this about every 10 s)."
+}
+
+cmd_stop() {
+  running || { echo "tor-proxy: not running."; return 0; }
+  kill "$(cat "$PIDFILE")" && echo "tor-proxy: stopped."
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  status) shift; cmd_status "$@" ;;
+  newnym) cmd_newnym ;;
+  stop) cmd_stop ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

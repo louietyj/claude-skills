@@ -8,6 +8,7 @@ fails. The server answers with a cf_clearance cookie.
 """
 
 import argparse
+import http.client
 import http.cookiejar
 import json
 import os
@@ -20,6 +21,9 @@ import urllib.parse
 import urllib.request
 
 HOST = "https://archive.ph"
+PUBLIC_HOST = HOST
+ONION = "http://archiveiya74codqgiixo33q62qlrqtkgmcitqx5u2oeqnmn5bpcbiyd.onion"
+TOR_PROXY = "socks5h://127.0.0.1:9050"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.expanduser("~/.cache/archive-today")
@@ -42,7 +46,7 @@ STUB_MARKERS = [
     "err_proxy", "verify you are human", "unusual activity",
 ]
 
-EXIT_FAIL, EXIT_NONE, EXIT_PENDING, EXIT_REFUSED = 1, 3, 4, 5
+EXIT_FAIL, EXIT_NONE, EXIT_PENDING, EXIT_REFUSED, EXIT_BLOCKED = 1, 3, 4, 5, 6
 
 
 class Broken(Exception):
@@ -55,6 +59,10 @@ class Broken(Exception):
 
 class Refused(Exception):
     """archive.today declined to capture the URL. A fact about the site, not a bug."""
+
+
+class Blocked(Exception):
+    """This environment's egress proxy refuses archive.today."""
 
 
 def log(msg):
@@ -80,22 +88,71 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 _opener = urllib.request.build_opener(
     urllib.request.HTTPCookieProcessor(_jar), urllib.request.HTTPSHandler(context=_ctx), _NoRedirect)
+_proxied = False
+_timeout = 60
+
+
+def use_proxy(proxy, onion=False):
+    """Send archive.today traffic through proxy (socks5://, socks5h:// or http://),
+    and to its onion address if onion. The solver APIs keep the direct route."""
+    global _opener, _proxied, _timeout, HOST
+    scheme = urllib.parse.urlsplit(proxy).scheme
+    if scheme in ("socks5", "socks5h"):
+        try:
+            import socks
+            from sockshandler import SocksiPyHandler
+        except ImportError:
+            raise SystemExit("--proxy socks5h://... needs PySocks: pip install PySocks (setup.sh installs it)")
+        p = urllib.parse.urlsplit(proxy)
+        # It handles https itself, with the system CAs: TLS through it ends at the real
+        # server, not at the egress proxy that _ctx's bundle exists for.
+        routes = [SocksiPyHandler(socks.SOCKS5, p.hostname, p.port or 1080, rdns=scheme == "socks5h")]
+    elif scheme == "http":
+        if onion:
+            raise SystemExit("the onion address needs a SOCKS proxy (socks5h://...); "
+                             "an HTTP CONNECT proxy can't carry its plain-http requests")
+        routes = [urllib.request.ProxyHandler({"http": proxy, "https": proxy}), urllib.request.HTTPSHandler(context=_ctx)]
+    else:
+        raise SystemExit(f"unsupported --proxy scheme {scheme!r}: use socks5h://, socks5:// or http://")
+    _opener = urllib.request.build_opener(*routes, urllib.request.HTTPCookieProcessor(_jar), _NoRedirect)
+    _proxied, _timeout = True, 180  # Tor runs at 30-90 KB/s; a big snapshot takes a minute or two.
+    if onion:
+        HOST = ONION
+
+
+def public(url):
+    """A snapshot URL as people share it: the clearnet host, not the onion one."""
+    return url.replace(ONION, PUBLIC_HOST) if url else url
+
+
+def blocked_here():
+    """True if the egress proxy refuses archive.today: over plain HTTP it says so in a
+    header, where over HTTPS it just drops the connection."""
+    try:
+        _opener.open(urllib.request.Request("http://archive.ph/", headers={"User-Agent": UA}), timeout=20)
+    except urllib.error.HTTPError as e:
+        return e.code == 403 and e.headers.get("x-block-reason") == "hostname_blocked"
+    except Exception:  # noqa: BLE001 -- an unanswered probe proves nothing either way
+        return False
+    return False
 
 
 def request(url, data=None, headers=None, tries=8):
-    """One request, no redirects followed. archive.today resets ~40% of TLS
-    handshakes from the sandbox's egress, so connection errors are retried."""
+    """One request, no redirects followed. archive.today resets some TLS handshakes
+    from the sandbox's egress, so connection errors are retried."""
     req = urllib.request.Request(url, data=data, headers={"User-Agent": UA, **(headers or {})})
     for attempt in range(tries):
         try:
-            with _opener.open(req, timeout=60) as resp:
+            with _opener.open(req, timeout=_timeout) as resp:
                 out = resp.status, resp.headers, resp.read()
             break
         except urllib.error.HTTPError as e:
             out = e.code, e.headers, e.read()
             break
-        except (urllib.error.URLError, ConnectionError, TimeoutError, ssl.SSLError) as e:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:  # incl. a body cut short
             last = e
+            if attempt == 0 and not _proxied and blocked_here():
+                raise Blocked()
             time.sleep(min(2 + 2 * attempt, 10))
     else:
         raise Broken("connection", f"{url}: {tries} connection attempts failed, last: {last}")
@@ -207,7 +264,13 @@ def normalize(url, keep_query=False):
 
 
 def is_snapshot(url):
-    return bool(re.match(r"https?://archive\.(ph|today|is|li|vn|md|fo)/(\d{14}/|(?!newest$|oldest$|submit$|search$)[A-Za-z0-9]{4,6}$)", url))
+    return bool(re.match(r"https?://(archive\.(ph|today|is|li|vn|md|fo)|[a-z2-7]{56}\.onion)/"
+                         r"(\d{14}/|(?!newest$|oldest$|submit$|search$)[A-Za-z0-9]{4,6}$)", url))
+
+
+def via_host(snapshot):
+    """A snapshot URL rewritten onto the host requests go to (the onion one under --tor)."""
+    return re.sub(r"^https?://[^/]+", HOST, snapshot)
 
 
 def newest(url):
@@ -227,6 +290,11 @@ def submit(url, fresh=False):
     archive.today matches it after normalizing the URL itself, so a cache-busting
     parameter doesn't get round that. fresh is the "save again" button's anyway=1.
     """
+    if HOST == ONION:
+        # Same captcha as the clearnet, but its clearance never takes over the onion
+        # (2026-11-04: cf_clearance set, next submit challenged again, both solvers).
+        raise Refused(f"can't submit {url} over Tor: archive.today's onion address gates submissions "
+                      f"behind a captcha this script can't clear, so only existing snapshots are readable")
     status, hdrs, body = fetch(f"{HOST}/submit/?{'anyway=1&' if fresh else ''}url={urllib.parse.quote(url, safe='')}",
                                headers={"Referer": HOST + "/"})
     target = hdrs.get("Location") or ""
@@ -275,7 +343,7 @@ def read_snapshot(snapshot, html_out=None):
     meta = trafilatura.extract_metadata(html)
     when = re.search(r'itemprop="pubdate" datetime="([^"]+)"', html)
     print(f"# {meta.title if meta and meta.title else '(untitled)'}")
-    print(f"snapshot: {snapshot}" + (f"  (archived {when.group(1)})" if when else ""))
+    print(f"snapshot: {public(snapshot)}" + (f"  (archived {when.group(1)})" if when else ""))
     print()
     print(text)
     words = len(text.split())
@@ -295,22 +363,22 @@ def cmd_newest(a):
     if not snap:
         log("no snapshot")
         return EXIT_NONE
-    print(snap)
+    print(public(snap))
     return 0
 
 
 def cmd_submit(a):
     kind, val = submit(normalize(a.url, a.keep_query), a.fresh)
-    print(val if kind == "done" else f"wip {val}")
+    print(public(val) if kind == "done" else f"wip {val}")
     return 0
 
 
 def _finish(snap, wip_id, a):
     if snap:
         if a.url_only:
-            print(snap)
+            print(public(snap))
         else:
-            read_snapshot(snap, a.html)
+            read_snapshot(via_host(snap), a.html)
         return 0
     log(f"still capturing after {a.budget}s. Resume with: archive-today wait {wip_id}")
     return EXIT_PENDING
@@ -350,11 +418,17 @@ def main():
     p = argparse.ArgumentParser(prog="archive-today", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def route(sp):
+        sp.add_argument("--tor", action="store_true",
+                        help=f"read over archive.today's onion address through the tor-proxy skill ({TOR_PROXY})")
+        sp.add_argument("--proxy", help="send archive.today traffic through this proxy: socks5h://, socks5:// or http://")
+
     def common(sp, fresh=False):
         sp.add_argument("url")
         sp.add_argument("--keep-query", action="store_true", help="don't strip tracking parameters")
         if fresh:
             sp.add_argument("--fresh", action="store_true", help="capture again even if a snapshot exists")
+        route(sp)
 
     def reading(sp):
         sp.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="seconds to wait for a capture")
@@ -374,15 +448,26 @@ def main():
     sp = sub.add_parser("wait", help="resume waiting on a capture, then read it")
     sp.add_argument("id", help="wip id from submit/read")
     reading(sp)
+    route(sp)
     sp.set_defaults(fn=cmd_wait)
 
     a = p.parse_args()
+    if a.tor or a.proxy:
+        use_proxy(a.proxy or TOR_PROXY, onion=a.tor)
     try:
         return a.fn(a)
     except Refused as e:
-        log(f"archive-today: {e}. It refuses submissions for some sites (wsj.com as of 2026-11-02), "
-            f"from anyone; retrying won't help. Move on to a wire-syndicated copy or ghostarchive.")
+        if HOST == ONION:
+            log(f"archive-today: {e}.")
+        else:
+            log(f"archive-today: {e}. It refuses submissions for some sites (wsj.com as of 2026-11-02), "
+                f"from anyone; retrying won't help. Move on to a wire-syndicated copy or ghostarchive.")
         return EXIT_REFUSED
+    except Blocked:
+        log("archive-today: this environment's egress proxy blocks archive.today (x-block-reason: "
+            "hostname_blocked). Start the tor-proxy skill, then rerun with --tor: that reads existing "
+            "snapshots over archive.today's onion address, though it can't make new ones.")
+        return EXIT_BLOCKED
     except Broken as e:
         log(f"archive-today FAILED ({e.section}): {e}")
         log(f"Read the '{e.section}' section of {TROUBLE} before retrying or working around it.")

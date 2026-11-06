@@ -39,6 +39,8 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
   waterproof earbuds in the shower had Louie's own voice turned down 11-56 dB
   and whole sentences dropped. Louie can flip it in the page's settings (an
   event tells you), and `intercom set --isolate off|on` switches it mid-session.
+  For the shower, the better setup is the phone's mic with Claude in the
+  earbuds: settings, "Claude's voice: Media audio", and Mic "Speakerphone".
 - `--label` shows under the id on the device: a few words.
 - `--default-terms` adds Louie's standing list, for when there is no topic
   yet (he rang you from the power button). A failed fetch still starts the

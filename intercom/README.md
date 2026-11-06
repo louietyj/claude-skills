@@ -51,6 +51,7 @@ video call to join.
 | `dev/watch_shot.py` | adb screenshot of the watch with its round face drawn on, or of the phone |
 | `dev/page_shot.py` | headless-Chrome screenshots of the page at watch and phone sizes, live and with settings open |
 | `dev/page_resume.py` | drops the real page's socket in headless Chromium (closed, silent, too long) and checks no audio is lost |
+| `dev/page_settings.py` | flips the talk page's isolation and separate-channels switches in headless Chromium and checks each takes effect |
 
 ## Setup
 
@@ -123,6 +124,7 @@ python test_intercom.py                 # offline, instant
 python worker/test_session.py         # starts wrangler dev + fakes, ~2 min
 python dev/page_resume.py             # the page itself, headless; CHROME=<path> for a preinstalled one
 python dev/page_launch.py             # the page opening a quick room, headless
+python dev/page_settings.py           # the isolation and separate-channels switches, headless
 ```
 
 End to end against the real providers, no phone:
@@ -422,6 +424,18 @@ reopens the mic and starts a new recorder run, so a new transcriber stream.
 Picks last one room, since a remembered earpiece would beat Louie's earbuds the
 next time. Web pages get no proximity sensor, so the screen stays on against
 his cheek.
+
+**Separate channels: the phone's mic, Claude in the earbuds.** Any mic Chrome
+opens on Android starts call mode, and with Bluetooth earbuds as the mic their
+audio drops to the call codec: 16 kHz, and in the shower so filtered (by the
+earbuds or Android's headset path) that short syllables vanish. With
+"Speakerphone" as the mic, media keeps going to the earbuds at full quality
+(tested 2026-11-06 with music). So the sheet's "Claude's voice: Media audio"
+plays Claude through an AudioContext opened before the mic, which Android
+treats as media, and switches the page to its own AEC3, since the phone's echo
+canceller ignores media. The switch closes the mic and waits 500 ms for call
+mode to end before opening that context; whether 500 ms is enough, and whether
+Claude's voice really lands in the earbuds, is untested on a phone.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

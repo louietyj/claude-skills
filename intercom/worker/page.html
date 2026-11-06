@@ -130,6 +130,11 @@ button:active{background:#2a2a2a}
     <button id="isolate" class="pill"></button>
     <div class="hint">off for a muffled mic, like earbuds in the shower</div>
   </div>
+  <div id="seprow" class="devrow hide">
+    <div class="label">Claude's voice</div>
+    <button id="separate" class="pill"></button>
+    <div class="hint">media keeps earbuds at full quality: pair it with the phone's mic (Speakerphone)</div>
+  </div>
   <button id="callme2" class="pill hide">Switch to phone</button>
   <button id="hangup" class="pill hide">Hang up the phone</button>
   <button id="usehere2" class="pill hide">Switch to web here</button>
@@ -183,6 +188,8 @@ const MIME = ["audio/webm;codecs=opus", "audio/webm"].find(
 // phone's own on Android), AEC3 in the page everywhere else (README).
 const OWN_AEC = (new URLSearchParams(location.search).get("aec")
   || (navigator.userAgentData?.brands?.some((b) => b.brand === "Google Chrome") ? "off" : "on")) === "on";
+// The phone's echo canceller ignores media streams, so separate channels need ours.
+const ownAec = () => OWN_AEC || separate;
 
 let mode = "idle", sid = null, session = null, ws = null, stream = null, rec = null, lock = null;
 let sendStream = null, muted = false, raw = null, aec = null;
@@ -190,6 +197,10 @@ let sendStream = null, muted = false, raw = null, aec = null;
 // which ("watch", "phone"), null for none, undefined until the relay says.
 let holding = false, roomAudio, roomCall = null, roomSince = null;
 let talk = false, voice = null, voiceEl = null, claudeTalking = false;
+// Separate channels: Claude's voice plays through mediaCtx, opened before the mic
+// so Android treats it as media, not call audio (README: "Separate channels").
+let separate = false, mediaCtx = null, mediaOut = null, mediaSrc = null;
+let voiceMuted = false, voiceVolume = 1;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null;
 let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
@@ -394,6 +405,7 @@ async function takeAudio() {
     voiceEl.play().catch(() => {});
     applySink();
   }
+  if (talk && separate) openMedia();
   muted = false;
   if (!await openMic()) return status("Microphone blocked", "red");
   holding = true;
@@ -422,13 +434,13 @@ async function openMic() {
   // Only after the mic, which puts Android in call mode: a context opened earlier
   // gets a media stream, Chrome plays Claude's voice through it, and the phone's
   // echo canceller ignores media streams. AEC3 runs at 48 kHz.
-  try { meterCtx = new AudioContext(talk && OWN_AEC ? { sampleRate: 48000 } : {}); meterCtx.resume(); } catch {}
+  try { meterCtx = new AudioContext(talk && ownAec() ? { sampleRate: 48000 } : {}); meterCtx.resume(); } catch {}
   // A blocked resume() neither resolves nor rejects, so give it a moment.
   if (meterCtx && meterCtx.state !== "running") {
     await Promise.race([meterCtx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
     if (meterCtx.state !== "running") needTap(() => meterCtx && meterCtx.resume());
   }
-  if (talk && OWN_AEC && meterCtx) await startAec();
+  if (talk && ownAec() && meterCtx) await startAec();
   applyMute();
   if (talk) startMeter();
   startProbe();
@@ -636,9 +648,9 @@ function onMessage(m) {
   else if (m.type === "resume") resume(m.have);
   else if (m.type === "note") showNote(m.text, m.age_ms);
   else if (m.type === "ended") finish("Session ended");
-  else if (m.type === "tts_start") { claudeTalking = true; if (voiceEl) voiceEl.muted = false; syncReference(); }
+  else if (m.type === "tts_start") { claudeTalking = true; setVoice(false); }
   // Muting drops what is still in flight, so the interruption is heard at once.
-  else if (m.type === "tts_stop") { claudeTalking = false; if (voiceEl) voiceEl.muted = true; syncReference(); }
+  else if (m.type === "tts_stop") { claudeTalking = false; setVoice(true); }
   else if (m.type === "tts_done") claudeTalking = false;
   else if (m.type === "voice_offer") answerVoice(m.sdp);
   else if (m.type === "voice_restart" && talk) startVoice();
@@ -689,6 +701,8 @@ function renderSheet() {
   $("savenum").classList.toggle("hide", !editing);
   $("isorow").classList.toggle("hide", !talk || isolateOn == null);
   $("isolate").textContent = isolateOn ? "On" : "Off";
+  $("seprow").classList.toggle("hide", !talk);
+  $("separate").textContent = separate ? "Media audio" : "Call audio";
   if (holdMs == null) { $("holdval").textContent = "…"; return; }
   $("holdval").textContent = `${holdMs / 1000}s`;
   $("holddown").disabled = holdMs <= HOLD_STEPS[0];
@@ -767,9 +781,11 @@ async function pickMic(id) {
 }
 
 async function applySink() {
-  if (!voiceEl || !voiceEl.setSinkId) return;
-  try { await voiceEl.setSinkId(sinkId === "default" ? "" : sinkId); }
-  catch { status("Couldn't use that speaker", "red"); }
+  const id = sinkId === "default" ? "" : sinkId;
+  try {
+    if (voiceEl && voiceEl.setSinkId) await voiceEl.setSinkId(id);
+    if (mediaCtx && mediaCtx.setSinkId) await mediaCtx.setSinkId(id);
+  } catch { status("Couldn't use that speaker", "red"); }
 }
 
 function pickSpeaker(id) {
@@ -835,6 +851,7 @@ $("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
 $("isolate").onclick = () => { if (isolateOn != null) send({ type: "set", isolate: !isolateOn }); };
+$("separate").onclick = () => setSeparate(!separate);
 $("mic").onchange = (e) => pickMic(e.target.value);
 $("speaker").onchange = (e) => pickSpeaker(e.target.value);
 
@@ -860,6 +877,7 @@ const AEC_VOICE_MIN = 0.2;
 const GATE_WINDOW = 20;
 const GATE_MIN_FRAMES = 12;
 const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
+const MEDIA_SETTLE_MS = 500;   // for Android to leave call mode once the mic closes; untested
 // Like claude.ai's voice mode: a moment of Louie's voice turns Claude down, here
 // on the device, so he can be heard while the gate decides whether he is interrupting.
 const DUCK_FRAMES = 2;
@@ -911,7 +929,64 @@ function aecReference() {
 
 // The reference must be what the speaker plays: ducked, or silent when muted.
 function syncReference() {
-  if (aec && voiceEl) aec.gain.gain.value = voiceEl.muted ? 0 : voiceEl.volume;
+  if (aec) aec.gain.gain.value = voiceMuted ? 0 : voiceVolume;
+}
+
+// Muted between lines, ducked while Louie talks. In separate mode voiceEl stays
+// silent but playing: Chrome feeds a remote track to Web Audio only while an
+// element plays it.
+function setVoice(muted, volume = voiceVolume) {
+  voiceMuted = muted;
+  voiceVolume = volume;
+  if (voiceEl) { voiceEl.muted = muted || !!mediaOut; voiceEl.volume = volume; }
+  if (mediaOut) mediaOut.gain.value = muted ? 0 : volume;
+  syncReference();
+}
+
+// Must run before the mic opens: a context opened during a call gets call audio.
+function openMedia() {
+  if (mediaCtx) return;
+  try {
+    mediaCtx = new AudioContext();
+    mediaCtx.resume();
+    mediaOut = mediaCtx.createGain();
+    mediaOut.connect(mediaCtx.destination);
+  } catch { mediaCtx = mediaOut = null; }
+  applySink();
+  routeVoice();
+  setVoice(voiceMuted);
+}
+
+function closeMedia() {
+  try { mediaCtx && mediaCtx.close(); } catch {}
+  mediaCtx = mediaOut = mediaSrc = null;
+  setVoice(voiceMuted);
+}
+
+// Claude's track into mediaCtx, again whenever the voice reconnects.
+function routeVoice() {
+  if (!mediaCtx || !voiceEl || !voiceEl.srcObject) return;
+  try { mediaSrc && mediaSrc.disconnect(); } catch {}
+  mediaSrc = mediaCtx.createMediaStreamSource(voiceEl.srcObject);
+  mediaSrc.connect(mediaOut);
+}
+
+// Switching reopens the mic in between, so the context opens with no call running.
+async function setSeparate(on) {
+  if (on === separate) return;
+  separate = on;
+  if (holding) {
+    await flushRecorder();
+    closeMic();
+    closeMedia();
+    if (on) {
+      await new Promise((r) => setTimeout(r, MEDIA_SETTLE_MS));
+      openMedia();
+    }
+    if (!await openMic()) return status("Microphone blocked", "red");
+    segment();
+  }
+  renderSheet();
 }
 
 // The mic's level after echo cancellation, every 100 ms, drives the echo gate:
@@ -941,9 +1016,8 @@ function startMeter() {
     hotRun = hot ? hotRun + 1 : 0;
     quietRun = hot ? 0 : quietRun + 1;
     if (!voiceEl) return;
-    if (!claudeTalking || quietRun >= UNDUCK_FRAMES) voiceEl.volume = 1;
-    else if (hotRun >= DUCK_FRAMES) voiceEl.volume = DUCK_VOLUME;
-    syncReference();
+    if (!claudeTalking || quietRun >= UNDUCK_FRAMES) setVoice(voiceMuted, 1);
+    else if (hotRun >= DUCK_FRAMES) setVoice(voiceMuted, DUCK_VOLUME);
   }, 100);
 }
 
@@ -1037,6 +1111,7 @@ function startVoice() {
     try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
     voiceEl.srcObject = new MediaStream([e.track]);
     aecReference();
+    routeVoice();
     const play = () => voiceEl.play().then(() => { playing = true; ready(); },
       (err) => err.name === "NotAllowedError" ? needTap(play) : voiceFailed(`won't play (${err.name})`));
     play();
@@ -1114,10 +1189,11 @@ function releaseAudio() {
   holding = false;
   closeVoice();
   claudeTalking = false;
-  if (voiceEl) voiceEl.muted = true;
+  setVoice(true);
   closePip();
   stopRecorder();
   closeMic();
+  closeMedia();
   renderRoom();
   renderSheet();
 }
@@ -1159,7 +1235,7 @@ $("stop").onclick = async () => {
 // Leaving audio keeps this screen in the room; the choice comes back.
 $("pause").onclick = async () => {
   if (!holding) return;
-  if (voiceEl) voiceEl.muted = true;
+  setVoice(true);
   await flushRecorder();
   send({ type: "leave" });
   releaseAudio();

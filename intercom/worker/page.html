@@ -76,6 +76,7 @@ button:active{background:#2a2a2a}
 .srow{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*2);
       padding:calc(var(--u)*2.5) 0;border-bottom:1px solid #222;font-size:calc(var(--u)*5);text-align:left}
 .srow:last-child{border-bottom:0}
+.srow select:disabled{appearance:none;background:none;border-color:transparent;opacity:1;cursor:default}
 /* Sized to the picked option, not the longest one (Chrome 123+). */
 .srow select{field-sizing:content;font-size:calc(var(--u)*5);border-radius:calc(var(--u)*3);padding:calc(var(--u)*1.5) calc(var(--u)*2.5);
              max-width:58%;min-width:0;text-overflow:ellipsis}
@@ -138,7 +139,7 @@ button:active{background:#2a2a2a}
 </div>
 <div id="sheet" class="hide">
   <div class="rows">
-    <div id="microw" class="srow"><span>Mic</span><select id="mic" aria-label="microphone"></select></div>
+    <div class="srow"><span>Mic</span><select id="mic" aria-label="microphone"></select></div>
     <div id="speakerrow" class="srow hide"><span>Speaker</span><select id="speaker" aria-label="speaker"></select></div>
     <div id="seprow" class="srow hide"><span>Audio</span>
       <div class="seg"><button id="sepcall">Call</button><button id="sepmedia">Media</button></div></div>
@@ -699,9 +700,7 @@ function renderSheet() {
   $("hangup").classList.toggle("hide", !roomCall);
   $("usehere2").classList.toggle("hide", holding || !(roomAudio || roomCall));
   $("pip").classList.toggle("hide", !PIP_OK || !holding);
-  // A list with one choice (Chrome on Android's outputs) has nothing to pick.
-  $("microw").classList.toggle("hide", mics.length < 2);
-  $("speakerrow").classList.toggle("hide", !talk || speakers.length < 2);
+  $("speakerrow").classList.toggle("hide", !talk);
   fillSelect($("mic"), mics, micId);
   fillSelect($("speaker"), speakers, sinkId);
   const editing = editingNumber || !myNumber;
@@ -814,6 +813,7 @@ function fillSelect(sel, items, value) {
     sel.dataset.key = key;
   }
   sel.value = value;
+  sel.disabled = items.length < 2;   // shown as plain text: nothing to pick
 }
 
 // ---- the phone line ------------------------------------------------------------------

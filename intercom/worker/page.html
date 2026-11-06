@@ -62,7 +62,7 @@ button:active{background:#2a2a2a}
 .pill{border-radius:8vmin;padding:2vmin 6vmin;font-size:6vmin}
 /* Over the whole stage, and inside the middle of a round face. One row per
    setting, label left, control right. --u is the sheet's unit: a phone's CSS px
-   are nearly twice the watch's on the wrist, so a portrait screen scales it down. */
+   are nearly twice the watch's on the wrist, so bigger screens get fixed sizes. */
 #sheet{--u:1vmin;position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
        justify-content:center;justify-content:safe center;gap:calc(var(--u)*5);z-index:1;overflow-y:auto;padding:14vmin 0}
 #sheet .pill{font-size:calc(var(--u)*5.5);padding:calc(var(--u)*2) calc(var(--u)*6)}
@@ -72,7 +72,9 @@ button:active{background:#2a2a2a}
 .srow{flex-wrap:wrap}
 .srow>span{white-space:nowrap}
 .srow>:last-child{margin-left:auto}
-@media (max-aspect-ratio:3/4){#sheet{--u:.75vmin} .rows{width:min(84vmin,380px)}}
+/* Anything bigger than a watch (a phone, a desktop) gets fixed sizes. */
+@media (min-width:500px), (min-height:500px){#sheet{--u:3.1px} .rows{width:min(90vw,380px)}
+  #sheet button,#sheet select,#sheet input{border-width:1.5px}}
 .srow{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*2);
       padding:calc(var(--u)*2.5) 0;border-bottom:1px solid #222;font-size:calc(var(--u)*5);text-align:left}
 .srow:last-child{border-bottom:0}

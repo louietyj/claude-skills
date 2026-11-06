@@ -10,10 +10,10 @@ bash "$(ls -1dt /mnt/skills/*/home-exit ~/.claude/skills/synced/*/home-exit 2>/d
 ```
 
 It downloads Tailscale once (about 30 MB, checked against a pinned SHA-256), joins
-Louie's tailnet with a reusable, ephemeral auth key, and sends traffic out through
-whichever device offers itself as an exit node: a phone on his home Wi-Fi. About 10 s cold. Idempotent;
-re-run it rather than checking whether it ran. tailscaled keeps running after the call
-returns, and it prints the exit IP so you can see it worked.
+Louie's tailnet with an ephemeral auth key, and sends traffic out through whichever
+device offers itself as an exit node: a phone on his home Wi-Fi. About 12 s cold, and
+it prints the exit IP. Idempotent; re-run it rather than checking whether it ran.
+tailscaled keeps running after the call returns.
 
 Then point anything at it:
 
@@ -24,9 +24,7 @@ ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:1055 %h %p' user@host
 ```
 
 - A browser: the web-browser skill's `pinchtab-proxy start --proxy home` starts this
-  and a second browser behind it, presenting as Linux in the exit's timezone. The
-  connections are made by an Android phone, and DataDome hard-blocks a browser that
-  claims Windows over them.
+  and a second browser behind it, with a fingerprint matched to the phone.
 - Any port works, not just 443, and the egress proxy's host blocks don't apply.
 - Unset `HTTPS_PROXY` for tools you point at it, or they go to the egress proxy first.
 

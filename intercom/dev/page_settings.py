@@ -43,21 +43,22 @@ def main():
             page.click("#usehere")
             ts.wait_streams(n + 1)
             page.click("#menu")
-            page.wait_for_function("document.getElementById('isolate').textContent === 'On'")
+            page.wait_for_function("document.getElementById('isoon').classList.contains('on')")
             check(page.is_visible("#isorow") and page.is_visible("#seprow"), "both settings show in a talk room")
 
-            page.click("#isolate")
-            page.wait_for_function("document.getElementById('isolate').textContent === 'Off'", timeout=8000)
+            page.click("#isooff")
+            page.wait_for_function("document.getElementById('isooff').classList.contains('on')", timeout=8000)
             ts.wait_streams(n + 2)
             check(ts.http("/status", id=sid)[1]["isolate"] is False, "isolation off at the relay, on a fresh stream")
             es = ts.wait_entries(sid, lambda es: any("turned voice isolation off" in t for t in ts.texts(es, "event")))
             check(bool(es), "Claude is told")
 
-            check(page.text_content("#separate") == "Call audio", "voice starts as call audio")
-            page.click("#separate")
+            lit = "[...document.querySelectorAll('#seprow .on')].map((b) => b.id).join()"
+            check(page.evaluate(lit) == "sepcall", "voice starts as call audio")
+            page.click("#sepmedia")
             ts.wait_streams(n + 3)
             page.wait_for_function("mediaCtx !== null && aec !== null", timeout=8000)
-            check(page.text_content("#separate") == "Media audio", "switched to media audio, on a fresh stream")
+            check(page.evaluate(lit) == "sepmedia", "switched to media audio, on a fresh stream")
             page.evaluate("onMessage({type: 'tts_start'})")
             check(page.evaluate("voiceEl.muted && mediaOut.gain.value === 1"),
                   "Claude speaks through the media context, the element silent")
@@ -65,11 +66,11 @@ def main():
             check(page.evaluate("mediaOut.gain.value === 0 && aec.gain.gain.value === 0"),
                   "stopped: media and the echo reference both silent")
 
-            page.click("#separate")
+            page.click("#sepcall")
             ts.wait_streams(n + 4)
             page.wait_for_function("mediaCtx === null", timeout=8000)
             page.evaluate("onMessage({type: 'tts_start'})")
-            check(page.evaluate("!voiceEl.muted") and page.text_content("#separate") == "Call audio",
+            check(page.evaluate("!voiceEl.muted") and page.evaluate(lit) == "sepcall",
                   "back to call audio on the element")
             page.click("#done")
             page.click("#stop")

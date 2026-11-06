@@ -72,6 +72,12 @@ button:active{background:#2a2a2a}
 .stepper button{width:15vmin;height:15vmin;border-radius:50%;padding:0;font-size:9vmin;line-height:1}
 #holdval{font-size:11vmin;min-width:20vmin;font-variant-numeric:tabular-nums}
 .pill{border-radius:8vmin;padding:2vmin 6vmin;font-size:6vmin}
+/* Two choices side by side; the lit one is the current state. */
+.seg{display:flex}
+.seg button{font-size:6vmin;padding:2vmin 5vmin;color:var(--dim)}
+.seg button:first-child{border-radius:8vmin 0 0 8vmin;border-right-width:0}
+.seg button:last-child{border-radius:0 8vmin 8vmin 0}
+.seg button.on{background:var(--fg);color:#000;border-color:var(--fg)}
 #list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
 .row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
 .row small{display:block;color:var(--dim);font-size:5vmin}
@@ -127,13 +133,13 @@ button:active{background:#2a2a2a}
   </div>
   <div id="isorow" class="devrow hide">
     <div class="label">Voice isolation</div>
-    <button id="isolate" class="pill"></button>
+    <div class="seg"><button id="isoon">On</button><button id="isooff">Off</button></div>
     <div class="hint">off for a muffled mic, like earbuds in the shower</div>
   </div>
   <div id="seprow" class="devrow hide">
     <div class="label">Claude's voice</div>
-    <button id="separate" class="pill"></button>
-    <div class="hint">media keeps earbuds at full quality: pair it with the phone's mic (Speakerphone)</div>
+    <div class="seg"><button id="sepcall">Call</button><button id="sepmedia">Media</button></div>
+    <div class="hint">Media: Claude plays like music, so earbuds stay full quality; pick Speakerphone as the mic</div>
   </div>
   <button id="callme2" class="pill hide">Switch to phone</button>
   <button id="hangup" class="pill hide">Hang up the phone</button>
@@ -700,9 +706,11 @@ function renderSheet() {
   $("phonenum").classList.toggle("hide", !editing);
   $("savenum").classList.toggle("hide", !editing);
   $("isorow").classList.toggle("hide", !talk || isolateOn == null);
-  $("isolate").textContent = isolateOn ? "On" : "Off";
+  $("isoon").classList.toggle("on", !!isolateOn);
+  $("isooff").classList.toggle("on", isolateOn === false);
   $("seprow").classList.toggle("hide", !talk);
-  $("separate").textContent = separate ? "Media audio" : "Call audio";
+  $("sepcall").classList.toggle("on", !separate);
+  $("sepmedia").classList.toggle("on", separate);
   if (holdMs == null) { $("holdval").textContent = "…"; return; }
   $("holdval").textContent = `${holdMs / 1000}s`;
   $("holddown").disabled = holdMs <= HOLD_STEPS[0];
@@ -850,8 +858,11 @@ $("usehere").onclick = takeAudio;
 $("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
-$("isolate").onclick = () => { if (isolateOn != null) send({ type: "set", isolate: !isolateOn }); };
-$("separate").onclick = () => setSeparate(!separate);
+const setIsolate = (on) => { if (isolateOn != null && on !== isolateOn) send({ type: "set", isolate: on }); };
+$("isoon").onclick = () => setIsolate(true);
+$("isooff").onclick = () => setIsolate(false);
+$("sepcall").onclick = () => setSeparate(false);
+$("sepmedia").onclick = () => setSeparate(true);
 $("mic").onchange = (e) => pickMic(e.target.value);
 $("speaker").onchange = (e) => pickSpeaker(e.target.value);
 

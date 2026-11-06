@@ -41,12 +41,25 @@ and view `latest-small.jpg` in the same message. Every browser step is a line
 of a batch, as pinchtab's instructions describe.
 
 `pinchtab` is this sandbox's own browser, also callable as `pinchtab-local`.
-If setup.sh's summary lists "Louie's Chrome", there is a second one,
-`pinchtab-windows`: his real Chrome on his laptop, logged in to his accounts.
-If it lists "cloud browser", there is `pinchtab-cloud`: a hosted browser on a
-residential IP, for sites that ban this sandbox. `pinchtab-proxy` is a second
-local browser behind a proxy you name. All take the same batches, with their
-own screenshot directories; see their sections below before touching any.
+The others take the same batches, with their own screenshot directories; see
+their sections below before touching any.
+
+**Louie's logins: `pinchtab-windows`**, his real Chrome on his laptop (if
+setup.sh lists "Louie's Chrome"). Its own lane: for a page that needs his
+login or a tab he hands you, not a fallback for blocked sites.
+
+**Everything else, cheapest first.** Move down only when the step above came
+back blocked:
+
+1. **`pinchtab`**: free. The default.
+2. **`pinchtab-proxy start --proxy home`**: free. Louie's home IP, for a site
+   that bans this sandbox's datacenter IP. Skip it when the site shouldn't
+   see his home IP.
+3. **`pinchtab-cloud start --country none`**: cheap ($0.20/GB). A Browser Use
+   cloud browser on its own datacenter IP, for a site blocked only from this
+   sandbox, or a browser that must outlive it.
+4. **`pinchtab-cloud`** with its default US residential proxy: EXPENSIVE
+   ($5/GB). Last resort, when 1-3 failed.
 
 The tab outlives the bash call: its page, DOM state and typed form values
 persist, so you never replay earlier steps. If the session goes stale pinchtab
@@ -216,15 +229,14 @@ and it gets its own tab here too.
 
 This sandbox browses from a datacenter IP, and some sites ban those outright
 whatever the fingerprint: Yelp (DataDome) and anything behind Akamai's "Access
-Denied". `pinchtab-cloud` is a Browser Use cloud browser on a residential IP,
-driven like `pinchtab`. It costs money ($5 per GB, $0.02 an hour), so use it
-only after `pinchtab` came back blocked, never as the default. Louie's home IP
-(`pinchtab-proxy start --proxy home`, below) is free and gets past the same
-bans; reach for the cloud browser when the site shouldn't see his home IP, or
-the browser must outlive this sandbox.
+Denied". `pinchtab-cloud` is a Browser Use cloud browser, driven like
+`pinchtab`. It is steps 3 and 4 of the ladder above: try the free home IP
+first. By default it starts on a US residential IP at $5 per GB (plus $0.02
+an hour); `start --country none` puts it on Browser Use's datacenter IP at
+$0.20 per GB, which is the one to try first.
 
 ```bash
-# Starts one if none is running (US IP).
+# Starts one if none is running: US residential, the expensive one.
 pinchtab-cloud execute-batch <<'EOF'
 nav <url> --block-images
 text
@@ -239,9 +251,7 @@ EOF
   an unattended scheduled task.
 - **Keep `--block-images` on.** Traffic is the cost: a page with images is
   several MB, a few cents each.
-- `pinchtab-cloud start --country gb` for another country. `--country none` drops the
-  residential proxy for Browser Use's own datacenter egress, at $0.20/GB instead of $5:
-  for a site that is blocked only from this sandbox, not one that bans datacenter IPs.
+- `pinchtab-cloud start --country gb` for another country's residential IP.
 - **A login that lasts: almost never what you want.** A profile keeps a
   login usable by any later session, which is a very different risk from a
   one-off login. Logging in to check something once (a Cigna policy

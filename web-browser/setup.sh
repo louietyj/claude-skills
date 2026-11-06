@@ -90,8 +90,8 @@ finish() {
     fi
   fi
   if [ -x "$CLOUD_SHIM" ]; then
-    printf '\nA cloud browser on a residential IP is `pinchtab-cloud`, for a site that\n'
-    printf 'bans this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
+    printf '\nA Browser Use cloud browser is `pinchtab-cloud`, for a site that bans\n'
+    printf 'this sandbox outright -- see "Cloud browser" in SKILL.md; it bills.\n'
     printf 'Its shots: %s/latest-small.jpg\n' "$CLOUD_SHOT_DIR"
   fi
   if [ -x "$PROXY_SHIM" ]; then
@@ -174,8 +174,8 @@ WIN_CONF=/tmp/.pinchtab-windows.conf
 WIN_HEADERS=/tmp/.pinchtab-windows-headers
 WIN_SHOT_DIR=${PINCHTAB_SHOT_DIR:-$HOME/pinchtab-windows-shots}${AGENT:+/$AGENT}
 
-# A Browser Use cloud browser on a residential IP, for a site that bans this
-# sandbox's datacenter IP outright; installed only when there is a key.
+# A Browser Use cloud browser, for a site that bans this sandbox outright;
+# installed only when there is a key.
 CLOUD_KEY=${BROWSER_USE_API_KEY:-$(cat "$SKILL_DIR/browser-use.key" 2>/dev/null | tr -d '\r\n')}
 CLOUD_SHIM=$BIN_DIR/pinchtab-cloud
 CLOUD_DIR=/tmp/.pinchtab-cloud
@@ -663,7 +663,7 @@ PINCHTAB_NAME=$NAME; export PINCHTAB_NAME
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1]) or '')" "$1" 2>/dev/null; }
 
-# A Browser Use cloud browser on a residential IP, through a bridge in this
+# A Browser Use cloud browser, through a bridge in this
 # sandbox. Any command starts one when none is running. It ends itself
 # CLOUD_MINUTES after it started: Browser Use can't extend a browser, and a
 # timer here would not survive the sandbox being suspended between turns.
@@ -747,15 +747,15 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
   ensure() {
     if [ -s "$B" ] && [ "$(date +%s)" -lt "$(cat "$END" 2>/dev/null || echo 0)" ] &&
        [ "$PROFILE" = "$(cat "$CLOUD_DIR/profile" 2>/dev/null)" ]; then
-      bridge_up || attach || start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
+      bridge_up || attach || start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo none)"
     else
-      start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo us)"
+      start_cloud "$(cat "$CLOUD_DIR/country" 2>/dev/null || echo none)"
     fi
   }
   case "${1:-}" in
     start)
-      country=us
-      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country us|gb|...|none]}
+      country=none
+      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country none|us|gb|...]}
       if [ "$country" = "$(cat "$CLOUD_DIR/country" 2>/dev/null)" ]; then ensure; else start_cloud "$country"; fi
       exit $? ;;
     stop)

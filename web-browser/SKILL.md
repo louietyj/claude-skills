@@ -302,8 +302,8 @@ EOF
 
 - `--proxy home` starts the home-exit skill itself and presents the browser as
   Linux in the exit's timezone, matching the Android phone the connections leave
-  from; a "Windows" browser arriving that way gets a hard DataDome 403. It also
-  lets navigation reach his home network (his router is `http://172.16.0.1/`).
+  from; a "Windows" browser arriving that way gets a hard DataDome 403. His
+  home network is reachable through it too (his router is `http://172.16.0.1/`).
   It is his real IP: don't keep retrying a site that blocks it.
 - Any other `start --proxy <url>` (re)starts it with that proxy, which must
   already be running, and the usual Windows fingerprint. Behind socks5 the proxy

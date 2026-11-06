@@ -432,7 +432,9 @@ function micConstraints(processing) {
 // The mic and everything that reads it; the recorder and Claude's voice are separate.
 async function openMic() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(talk) });
+    // Separate channels open the mic raw: a processed one starts Android's full call
+    // mode, which pulls even Spotify onto the call device (tested 2026-11-06).
+    stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(talk && !separate) });
   } catch { return false; }
   // Mute disables only this clone: the transcriber gets silence on the same
   // stream, and the probe still reads the real mic, so Claude isn't told it died.
@@ -899,16 +901,17 @@ function voiceFailed(why) { status(`No voice: ${why}`, "red"); }
 
 // AEC3 (../aec) on the raw mic against Claude's voice; its output becomes
 // sendStream. The processed mic stays open, unsent, to keep Android in call
-// mode. Any failure leaves the browser's echo cancellation in place.
+// mode, except with separate channels, whose only mic is the raw one. Any failure
+// leaves the browser's echo cancellation in place (none, with separate channels).
 async function startAec() {
   try {
     const [module] = await Promise.all([
       WebAssembly.compileStreaming(fetch("/aec/aec3.wasm")),
       meterCtx.audioWorklet.addModule("/aec/worklet.js"),
     ]);
-    raw = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(false) });
+    if (!separate) raw = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(false) });
     const into = meterCtx.createChannelMerger(2);
-    meterCtx.createMediaStreamSource(raw).connect(into, 0, 0);
+    meterCtx.createMediaStreamSource(raw || stream).connect(into, 0, 0);
     const gain = meterCtx.createGain();
     gain.connect(into, 0, 1);
     const node = new AudioWorkletNode(meterCtx, "aec3", { numberOfInputs: 1, numberOfOutputs: 1,

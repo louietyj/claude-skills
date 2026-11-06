@@ -59,6 +59,8 @@ def main():
             ts.wait_streams(n + 3)
             page.wait_for_function("mediaCtx !== null && aec !== null", timeout=8000)
             check(page.evaluate(lit) == "sepmedia", "switched to media audio, on a fresh stream")
+            check(page.evaluate("raw === null && stream.getAudioTracks()[0].getSettings().echoCancellation === false"),
+                  "one mic, opened raw: no processed mic to start full call mode")
             page.evaluate("onMessage({type: 'tts_start'})")
             check(page.evaluate("voiceEl.muted && mediaOut.gain.value === 1"),
                   "Claude speaks through the media context, the element silent")

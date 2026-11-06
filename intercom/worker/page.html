@@ -8,73 +8,73 @@
 <style>
 /* One layout for watch and phone: the stage fills the screen (on a round
    watch, exactly the face), and the middle sits near the centre, where a
-   circle is widest. Sizes are in vmin; Samsung Internet on a Pixel Watch 3
-   lays out 456 CSS px at a pixel ratio of 1, though screen.width says 228. */
-:root{--fg:#e8e8e8;--clock:#b4b4b4;--dim:#8a8a8a;--amber:#e0a030;--red:#e05040}
+   circle is widest. Sizes are in --u: 1vmin on a watch (Samsung Internet on a
+   Pixel Watch 3 lays out 456 CSS px at a pixel ratio of 1, though screen.width
+   says 228). A phone's or desktop's CSS px are nearly twice the watch's on the
+   wrist, so anything bigger than a watch gets a fixed --u instead. */
+:root{--fg:#e8e8e8;--clock:#b4b4b4;--dim:#8a8a8a;--amber:#e0a030;--red:#e05040;--u:1vmin;--line:calc(var(--u)*.6)}
+@media (min-width:500px), (min-height:500px){:root{--u:3.4px;--line:1.5px}}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:#000;color:var(--fg);font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
 body{display:flex;align-items:center;justify-content:center;overflow:hidden;text-align:center}
 #stage{position:relative;width:100vw;height:100vh;height:100dvh}
-button,input,select{font:inherit;color:var(--fg);background:#161616;border:0.6vmin solid #3a3a3a;cursor:pointer}
+button,input,select{font:inherit;color:var(--fg);background:#161616;border:var(--line) solid #3a3a3a;cursor:pointer}
 button:active{background:#2a2a2a}
 .hide{display:none!important}
 /* A circle narrows toward the top: the ~48vmin-wide clock clears the edge
    only below ~8%. */
 #top{position:absolute;top:9%;left:0;right:0;display:flex;flex-direction:column;align-items:center}
-#clock{color:var(--clock);font-size:20vmin;line-height:1;font-variant-numeric:tabular-nums}
-#sidrow{display:flex;align-items:center;gap:2.5vmin}
-#sid{color:var(--dim);font-size:6vmin;letter-spacing:.15em}
+#clock{color:var(--clock);font-size:calc(var(--u)*20);line-height:1;font-variant-numeric:tabular-nums}
+#sidrow{display:flex;align-items:center;gap:calc(var(--u)*2.5)}
+#sid{color:var(--dim);font-size:calc(var(--u)*6);letter-spacing:.15em}
 /* Centred between the clock and stop, not on the face, so a tall block
    never rides up into the clock. */
 #mid{position:absolute;top:56%;left:10%;right:10%;transform:translateY(-50%)}
 /* In a room the audio line sits under the id, so the notes start lower. */
 #stage.inroom #mid{top:62%}
-#pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:4vmin}
+#pair,#idle,#live{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*4)}
 /* Three buttons clear a round face's edge only this close together. */
-#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:4vmin}
+#bot{position:absolute;bottom:6%;left:0;right:0;display:flex;justify-content:center;gap:calc(var(--u)*4)}
 #debug{position:absolute;bottom:0;left:0;right:0;font-size:12px;color:#5f5;white-space:pre-line}
-#msg{color:var(--dim);font-size:8vmin}
-#status{font-size:7vmin;font-weight:600}
-#choices{display:flex;gap:3vmin;margin-top:2vmin}
-#choices .pill{font-size:5.5vmin;padding:1.2vmin 5vmin}
-#where{color:var(--dim);font-size:5.5vmin;margin-top:2vmin;font-variant-numeric:tabular-nums}
+#msg{color:var(--dim);font-size:calc(var(--u)*8)}
+#status{font-size:calc(var(--u)*7);font-weight:600}
+#choices{display:flex;gap:calc(var(--u)*3);margin-top:calc(var(--u)*2)}
+#choices .pill{font-size:calc(var(--u)*5.5);padding:calc(var(--u)*1.2) calc(var(--u)*5)}
+#where{color:var(--dim);font-size:calc(var(--u)*5.5);margin-top:calc(var(--u)*2);font-variant-numeric:tabular-nums}
 #status.amber{color:var(--amber)} #status.red{color:var(--red)}
-#note{color:#fff;font-weight:700;font-size:6.5vmin;line-height:1.2}
+#note{color:#fff;font-weight:700;font-size:calc(var(--u)*6.5);line-height:1.2}
 /* Between the session id and the bottom row; what doesn't fit scrolls (the crown on the watch). */
 #live{max-height:28vh;max-height:28dvh;overflow-y:auto;width:100%;scrollbar-width:none}
 #live::-webkit-scrollbar{display:none}
 #note.flash{animation:flash .5s ease-in-out 6 alternate}
 #note.old{color:var(--dim);font-weight:600}
 @keyframes flash{from{opacity:1}to{opacity:.35}}
-.big{width:44vmin;height:44vmin;border-radius:50%;display:flex;flex-direction:column;
-     align-items:center;justify-content:center;font-size:7vmin}
-.big b{font-size:10vmin;letter-spacing:.04em}
-.big small{font-size:5vmin;color:var(--amber);letter-spacing:.15em}
-#stop,#pause,#mute{width:17vmin;height:17vmin;border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
-#bot svg{width:7vmin;height:7vmin;fill:var(--clock)}
+.big{width:calc(var(--u)*44);height:calc(var(--u)*44);border-radius:50%;display:flex;flex-direction:column;
+     align-items:center;justify-content:center;font-size:calc(var(--u)*7)}
+.big b{font-size:calc(var(--u)*10);letter-spacing:.04em}
+.big small{font-size:calc(var(--u)*5);color:var(--amber);letter-spacing:.15em}
+#stop,#pause,#mute{width:calc(var(--u)*17);height:calc(var(--u)*17);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center}
+#bot svg{width:calc(var(--u)*7);height:calc(var(--u)*7);fill:var(--clock)}
 #stop{border-color:#4a2a2a}
 #mute path{fill:none;stroke:var(--clock);stroke-width:1;stroke-linecap:round}
 #mute:not(.on) .slash{display:none}
 #mute.on{border-color:var(--amber)}
 #mute.on rect{fill:var(--amber)} #mute.on path{stroke:var(--amber)}
-#menu{width:8vmin;height:8vmin;border-width:0.4vmin}
-#menu svg{width:4vmin;height:4vmin;fill:var(--dim)}
-.pill{border-radius:8vmin;padding:2vmin 6vmin;font-size:6vmin}
+#menu{width:calc(var(--u)*8);height:calc(var(--u)*8);border-width:calc(var(--line)*.67)}
+#menu svg{width:calc(var(--u)*4);height:calc(var(--u)*4);fill:var(--dim)}
+.pill{border-radius:calc(var(--u)*8);padding:calc(var(--u)*2) calc(var(--u)*6);font-size:calc(var(--u)*6)}
 /* Over the whole stage, and inside the middle of a round face. One row per
-   setting, label left, control right. --u is the sheet's unit: a phone's CSS px
-   are nearly twice the watch's on the wrist, so bigger screens get fixed sizes. */
-#sheet{--u:1vmin;position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
-       justify-content:center;justify-content:safe center;gap:calc(var(--u)*5);z-index:1;overflow-y:auto;padding:14vmin 0}
+   setting, label left, control right. */
+#sheet{position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;justify-content:safe center;gap:calc(var(--u)*5);z-index:1;overflow-y:auto;padding:calc(var(--u)*14) 0}
 #sheet .pill{font-size:calc(var(--u)*5.5);padding:calc(var(--u)*2) calc(var(--u)*6)}
 /* 70vmin clears a round face for ±35vmin around the centre. */
 .rows{width:70vmin;display:flex;flex-direction:column}
+@media (min-width:500px), (min-height:500px){.rows{width:min(90vw,380px)}}
 /* A control that doesn't fit beside its label drops below it: the watch's font is wider than desktop Chrome's. */
 .srow{flex-wrap:wrap}
 .srow>span{white-space:nowrap}
 .srow>:last-child{margin-left:auto}
-/* Anything bigger than a watch (a phone, a desktop) gets fixed sizes. */
-@media (min-width:500px), (min-height:500px){#sheet{--u:3.1px} .rows{width:min(90vw,380px)}
-  #sheet button,#sheet select,#sheet input{border-width:1.5px}}
 .srow{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*2);
       padding:calc(var(--u)*2.5) 0;border-bottom:1px solid #222;font-size:calc(var(--u)*5);text-align:left}
 .srow:last-child{border-bottom:0}
@@ -85,7 +85,7 @@ button:active{background:#2a2a2a}
 .actions{display:flex;flex-wrap:wrap;justify-content:center;gap:calc(var(--u)*3)}
 .actions:not(:has(button:not(.hide))){display:none}
 #phonenum{width:min(62vmin,300px);font-size:calc(var(--u)*5.5);text-align:center;border-radius:calc(var(--u)*3);padding:calc(var(--u)*1.5)}
-#numrow button{font-size:calc(var(--u)*4.5);border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 1vmin}
+#numrow button{font-size:calc(var(--u)*4.5);border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 var(--u)}
 .hint{color:var(--dim);font-size:calc(var(--u)*4.5)}
 .stepper{display:flex;align-items:center;gap:calc(var(--u)*2)}
 .stepper button{width:calc(var(--u)*9);height:calc(var(--u)*9);border-radius:50%;padding:0;font-size:calc(var(--u)*5.5);line-height:1}
@@ -93,15 +93,15 @@ button:active{background:#2a2a2a}
 /* Two choices side by side; the lit one is the current state. */
 .seg{display:flex;flex-shrink:0}
 .seg button{font-size:calc(var(--u)*5);padding:calc(var(--u)*1.5) calc(var(--u)*2.2);color:var(--dim)}
-.seg button:first-child{border-radius:8vmin 0 0 8vmin;border-right-width:0}
-.seg button:last-child{border-radius:0 8vmin 8vmin 0}
+.seg button:first-child{border-radius:calc(var(--u)*8) 0 0 calc(var(--u)*8);border-right-width:0}
+.seg button:last-child{border-radius:0 calc(var(--u)*8) calc(var(--u)*8) 0}
 .seg button.on{background:var(--fg);color:#000;border-color:var(--fg)}
-#list{display:flex;flex-direction:column;align-items:center;gap:2vmin;max-height:40vmin;overflow-y:auto;width:100%}
-.row{width:70vmin;border-radius:4vmin;padding:1.5vmin;font-size:9vmin}
-.row small{display:block;color:var(--dim);font-size:5vmin}
-#pairmsg{color:var(--dim);font-size:7vmin}
-#code{width:62vmin;font-size:11vmin;text-align:center;letter-spacing:.2em;border-radius:3vmin;padding:1vmin}
-#pairbtn{border-radius:4vmin;padding:1vmin 6vmin;font-size:8vmin}
+#list{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*2);max-height:calc(var(--u)*40);overflow-y:auto;width:100%}
+.row{width:calc(var(--u)*70);border-radius:calc(var(--u)*4);padding:calc(var(--u)*1.5);font-size:calc(var(--u)*9)}
+.row small{display:block;color:var(--dim);font-size:calc(var(--u)*5)}
+#pairmsg{color:var(--dim);font-size:calc(var(--u)*7)}
+#code{width:calc(var(--u)*62);font-size:calc(var(--u)*11);text-align:center;letter-spacing:.2em;border-radius:calc(var(--u)*3);padding:var(--u)}
+#pairbtn{border-radius:calc(var(--u)*4);padding:var(--u) calc(var(--u)*6);font-size:calc(var(--u)*8)}
 </style>
 </head><body>
 <div id="stage">
@@ -1177,10 +1177,10 @@ function fitNote(n) {
     if (!el.classList.contains("hide")) room -= el.offsetHeight + $("stage").clientHeight * 0.04;
   }
   let size = 6.5;
-  n.style.fontSize = size + "vmin";
+  n.style.fontSize = `calc(var(--u)*${size})`;
   while (n.scrollHeight > room && size > 4) {
     size -= 0.5;
-    n.style.fontSize = size + "vmin";
+    n.style.fontSize = `calc(var(--u)*${size})`;
   }
 }
 

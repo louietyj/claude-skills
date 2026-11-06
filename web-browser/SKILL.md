@@ -61,17 +61,19 @@ back blocked:
 4. **`pinchtab-cloud start --country us`**: EXPENSIVE ($5/GB). The same browser
    on a US residential IP. Last resort, when 1-3 failed.
 
-**Images: your call.** `nav --block-images` skips them. Images make
-screenshots readable and image captchas (sliders, tile pickers) need them;
-skipping them saves traffic and load time. A rule of thumb, by what traffic
-costs where:
+**Images: your call.** `nav --block-images` skips them; `nav --block-media`
+also skips audio and video, streamed video included, which is where most of a
+heavy page's bytes go (a streaming player pulls tens of MB in seconds). Images
+make screenshots readable and image captchas (sliders, tile pickers) need them;
+skipping them saves traffic and load time. Under `--block-media` video players
+show an error instead. A rule of thumb, by what traffic costs where:
 
 - `pinchtab`, `pinchtab-windows`: leave images on. Traffic is free.
-- `pinchtab-proxy --proxy home`: block them for text-only reading. The relay
-  runs at about 5 Mbps over Louie's home line, so an image-heavy page loads
-  several seconds slower.
-- `pinchtab-cloud`: block them unless you need them. Traffic is billed, and a
-  page with images runs to several MB.
+- `pinchtab-proxy --proxy home`: `--block-media` for text-only reading. The
+  relay runs at about 5 Mbps over Louie's home line, so an image-heavy page
+  loads several seconds slower.
+- `pinchtab-cloud`: `--block-media` unless you need images or video. Traffic
+  is billed, and a page with images runs to several MB.
 
 The tab outlives the bash call: its page, DOM state and typed form values
 persist, so you never replay earlier steps. If the session goes stale pinchtab
@@ -250,7 +252,7 @@ per GB. A browser keeps its country until you `start` it with another.
 ```bash
 # Starts one if none is running, on Browser Use's datacenter IP.
 pinchtab-cloud execute-batch <<'EOF'
-nav <url> --block-images
+nav <url> --block-media
 text
 EOF
 ```
@@ -261,8 +263,9 @@ EOF
   after that starts a fresh one, and says so: nav again. `pinchtab-cloud stop`
   is only for when you are certain nothing follows, such as the last step of
   an unattended scheduled task.
-- **Default to `--block-images`.** Traffic is the cost: a page with images is
-  several MB, a few cents each on a residential IP.
+- **Default to `--block-media`.** Traffic is the cost: a page with images is
+  several MB, a few cents each on a residential IP, and one with a video
+  player far more.
 - `pinchtab-cloud start --country gb` for another country's residential IP;
   `--country none` goes back to the datacenter IP.
 - **A login that lasts: almost never what you want.** A profile keeps a
@@ -296,7 +299,7 @@ a host this sandbox's egress proxy blocks or a `.onion` address:
 pinchtab-proxy start --proxy home                      # Louie's home IP, via the home-exit skill
 pinchtab-proxy start --proxy socks5://127.0.0.1:9050   # tor-proxy; socks5h:// works too; or http://host:port
 pinchtab-proxy execute-batch <<'EOF'
-nav <url> --block-images
+nav <url> --block-media
 EOF
 ```
 

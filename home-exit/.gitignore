@@ -1,0 +1,4 @@
+# Built by package.py; embeds the auth key.
+*.zip
+# Joins Louie's tailnet.
+tailscale-authkey

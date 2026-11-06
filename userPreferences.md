@@ -53,6 +53,7 @@ Run it unconditionally; it's idempotent.
 - General fetches: web_fetch → web-browser → mcp-firecrawl → mcp-apify → mcp-jina → claude-in-chrome
 - Paywalled articles (WSJ, NYT, FT, Bloomberg…): the **archive-today** skill, `archive-today read <url>`, which reads or captures an archive.today snapshot with no browser (where the sandbox blocks archive.today it says so: start **tor-proxy** and add `--tor`) → a wire-syndicated copy (search the headline on AOL/Yahoo/MSN) → ghostarchive.org → my logged-in Chrome, for sites I subscribe to.
 - A host the sandbox's egress proxy blocks (every try fails with curl exit 35, or plain `http://` gets `403 x-block-reason: hostname_blocked`; web.archive.org is one): the **tor-proxy** skill runs a local SOCKS5/HTTP proxy that gets through. Slow, and many sites refuse Tor exits, so only for what's otherwise unreachable.
+- A site that bans the sandbox's datacenter IP, or a port other than 443: the **home-exit** skill sends traffic out through my home internet over Tailscale, free (`pinchtab-proxy start --proxy home` for a browser). Prefer it over pinchtab-cloud, unless the site shouldn't see my home IP.
 </web_research>
 
 <browser_delegation>

@@ -218,7 +218,10 @@ This sandbox browses from a datacenter IP, and some sites ban those outright
 whatever the fingerprint: Yelp (DataDome) and anything behind Akamai's "Access
 Denied". `pinchtab-cloud` is a Browser Use cloud browser on a residential IP,
 driven like `pinchtab`. It costs money ($5 per GB, $0.02 an hour), so use it
-only after `pinchtab` came back blocked, never as the default.
+only after `pinchtab` came back blocked, never as the default. Louie's home IP
+(`pinchtab-proxy start --proxy home`, below) is free and gets past the same
+bans; reach for the cloud browser when the site shouldn't see his home IP, or
+the browser must outlive this sandbox.
 
 ```bash
 # Starts one if none is running (US IP).
@@ -262,22 +265,28 @@ EOF
 ## Through a proxy (pinchtab-proxy)
 
 A second browser in this sandbox whose traffic goes through a proxy you name,
-while plain `pinchtab` stays direct for every other agent. The usual case is a
-host this sandbox's egress proxy blocks, or a `.onion` address, through the
-tor-proxy skill:
+while plain `pinchtab` stays direct for every other agent. The usual cases are
+Louie's home IP, for a site that bans this sandbox's datacenter IP, and Tor, for
+a host this sandbox's egress proxy blocks or a `.onion` address:
 
 ```bash
-pinchtab-proxy start --proxy socks5://127.0.0.1:9050   # socks5h:// works too; or http://host:port
+pinchtab-proxy start --proxy home                      # Louie's home IP, via the home-exit skill
+pinchtab-proxy start --proxy socks5://127.0.0.1:9050   # tor-proxy; socks5h:// works too; or http://host:port
 pinchtab-proxy execute-batch <<'EOF'
 nav <url> --block-images
 EOF
 ```
 
-- `start --proxy <url>` (re)starts it with that proxy; the proxy must already be
-  running. Behind socks5 the proxy resolves names, so `.onion` works and lookups
-  stay off this sandbox's DNS.
+- `--proxy home` starts the home-exit skill itself and presents the browser as
+  Linux in the exit's timezone, matching the Android phone the connections leave
+  from; a "Windows" browser arriving that way gets a hard DataDome 403. It is his
+  real IP: don't keep retrying a site that blocks it.
+- Any other `start --proxy <url>` (re)starts it with that proxy, which must
+  already be running, and the usual Windows fingerprint. Behind socks5 the proxy
+  resolves names, so `.onion` works and lookups stay off this sandbox's DNS.
+- `CLOAK_PLATFORM` and `CLOAK_TIMEZONE` on `start` override the fingerprint.
 - It keeps the proxy: if the sandbox was recycled, the next command brings the
-  browser back through it, with no page loaded.
+  browser back through it (restarting home-exit if needed), with no page loaded.
 - `pinchtab-proxy status`; `pinchtab-proxy stop` when the task is done, since it
   is a second Chrome: about 0.4 GB, and on a 2-vCPU sandbox it competes with
   the main browser for CPU.

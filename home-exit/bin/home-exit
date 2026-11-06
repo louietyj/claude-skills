@@ -1,0 +1,155 @@
+#!/bin/bash
+# home-exit: route this sandbox's traffic out through Louie's home internet.
+#
+#   home-exit start     install (once), join his tailnet, use the home exit node; waits until traffic flows
+#   home-exit status    joined? which exit node? (--check also asks ipinfo.io for the exit IP)
+#   home-exit tz        the exit IP's IANA timezone, for matching a browser's timezone to it
+#   home-exit stop      leave the tailnet (the ephemeral device disappears) and stop tailscaled
+#
+# A phone on his home Wi-Fi runs Tailscale as an exit node. This sandbox can't open
+# network interfaces or send UDP, so tailscaled runs in userspace mode, reaches
+# Tailscale's DERP relays over HTTPS on 443 (through $HTTPS_PROXY where there is
+# one), and offers the tailnet as a local SOCKS5 and HTTP proxy.
+set -uo pipefail
+
+VERSION=1.104.5
+SHA256=720cbbccbfc03d8b55df72afc19e5a72e31b0f65934700aa6fa38074d4ad7bf7
+TARBALL="tailscale_${VERSION}_amd64.tgz"
+URL="https://pkgs.tailscale.com/stable/$TARBALL"
+
+SOCKS_PORT=${HOME_EXIT_SOCKS_PORT:-1055}
+HTTP_PORT=${HOME_EXIT_HTTP_PORT:-1056}
+EXIT_NODE=${HOME_EXIT_NODE:-}
+HOME_DIR=${HOME_EXIT_HOME:-$HOME/.cache/home-exit}
+BIN="$HOME_DIR/tailscale_${VERSION}_amd64"
+STATE="$HOME_DIR/state"
+SOCK="$HOME_DIR/tailscaled.sock"
+LOG="$HOME_DIR/tailscaled.log"
+PIDFILE="$HOME_DIR/tailscaled.pid"
+INFO="$HOME_DIR/exit.json"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+die() { printf 'home-exit: %s\n' "$1" >&2; exit 1; }
+
+ts() { "$BIN/tailscale" --socket="$SOCK" "$@"; }
+
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+backend() { ts status --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("BackendState", ""))' 2>/dev/null; }
+
+# Through the tailnet only: the agent proxy must not catch these requests.
+via_exit() { env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+  curl -sS --max-time 30 --socks5-hostname "127.0.0.1:$SOCKS_PORT" "$@"; }
+
+addresses() {
+  echo "  SOCKS5: socks5h://127.0.0.1:$SOCKS_PORT"
+  echo "  HTTP:   http://127.0.0.1:$HTTP_PORT"
+}
+
+describe_exit() {
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("  exit IP: %s (%s, %s), timezone %s" % (d.get("ip"), d.get("org"), d.get("city"), d.get("timezone")))
+' "$INFO"
+}
+
+auth_key() {
+  local f
+  for f in "${HOME_EXIT_AUTHKEY:-}" "${TS_AUTHKEY:-}"; do [ -n "$f" ] && { echo "$f"; return; }; done
+  for f in "$SKILL_DIR/tailscale-authkey" "$HOME/dot-claude/secrets/tailscale-authkey"; do
+    [ -s "$f" ] && { tr -d '\r\n ' < "$f"; return; }
+  done
+  if command -v cfs >/dev/null 2>&1; then
+    local tmp="$HOME_DIR/authkey.tmp"
+    cfs download /_devfiles/dot-claude/secrets/tailscale-authkey --to "$tmp" >/dev/null 2>&1 \
+      && { tr -d '\r\n ' < "$tmp"; rm -f "$tmp"; return; }
+    rm -f "$tmp"
+  fi
+}
+
+fetch_tailscale() {
+  [ -x "$BIN/tailscaled" ] && return 0
+  mkdir -p "$HOME_DIR"
+  local tmp="$HOME_DIR/$TARBALL.part"
+  curl -sSfL --max-time 180 -o "$tmp" "$URL" || die "could not download $TARBALL from pkgs.tailscale.com."
+  echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 \
+    || { rm -f "$tmp"; die "$TARBALL failed its SHA-256 check -- not using it."; }
+  tar -xzf "$tmp" -C "$HOME_DIR" && rm -f "$tmp" || die "could not unpack $TARBALL."
+}
+
+# Whichever online peer offers itself as an exit node; $HOME_EXIT_NODE picks one by
+# name when there are several.
+pick_exit_node() {
+  ts status --json | python3 -c '
+import json, sys
+want = sys.argv[1]
+peers = (json.load(sys.stdin).get("Peer") or {}).values()
+offer = [p for p in peers if p.get("ExitNodeOption") and p.get("Online")]
+name = lambda p: p.get("DNSName", "").split(".")[0]
+if want:
+    offer = [p for p in offer if want in (name(p), p.get("HostName"))]
+if len(offer) != 1:
+    found = ", ".join(name(p) for p in offer) or "none online"
+    sys.exit(f"need exactly one exit node, found: {found}" + ("" if want else "; set HOME_EXIT_NODE to pick one"))
+print(offer[0]["TailscaleIPs"][0])
+' "$EXIT_NODE"
+}
+
+cmd_start() {
+  mkdir -p "$HOME_DIR" "$STATE"
+  if running && [ "$(backend)" = Running ] && via_exit -o "$INFO" https://ipinfo.io/json 2>/dev/null; then
+    echo "home-exit: already up."; addresses; describe_exit; return 0
+  fi
+  running && kill "$(cat "$PIDFILE")" 2>/dev/null
+  fetch_tailscale
+  local key; key=$(auth_key)
+  [ -n "$key" ] || die "no auth key: put it in $SKILL_DIR/tailscale-authkey, set HOME_EXIT_AUTHKEY, or keep it in the store at /_devfiles/dot-claude/secrets/tailscale-authkey."
+  # tailscaled verifies TLS itself: give it the egress proxy's CA where there is one.
+  local ca=${SSL_CERT_FILE:-}
+  [ -z "$ca" ] && [ -f /root/.ccr/ca-bundle.crt ] && ca=/root/.ccr/ca-bundle.crt
+  SSL_CERT_FILE=$ca setsid "$BIN/tailscaled" --tun=userspace-networking --statedir="$STATE" --socket="$SOCK" \
+    --socks5-server="127.0.0.1:$SOCKS_PORT" --outbound-http-proxy-listen="127.0.0.1:$HTTP_PORT" \
+    > "$LOG" 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+  local i
+  for i in $(seq 1 20); do [ -S "$SOCK" ] && break; sleep 0.5; done
+  ts up --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --timeout=60s >/dev/null 2>&1 \
+    || { tail -5 "$LOG" >&2; die "could not join the tailnet (is the auth key expired? it was made 2026-11-06 for 90 days)."; }
+  local node; node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
+  ts set --exit-node="$node" --exit-node-allow-lan-access=false || die "could not set the exit node."
+  for i in $(seq 1 15); do
+    via_exit -o "$INFO" https://ipinfo.io/json 2>/dev/null && { echo "home-exit: up after ~$((i * 2))s of checks."; addresses; describe_exit; return 0; }
+    sleep 2
+  done
+  die "the exit node is set but no traffic comes back through it. Is the phone online and on Wi-Fi?"
+}
+
+cmd_status() {
+  running || { echo "home-exit: not running. Start it with: home-exit start"; return 3; }
+  echo "home-exit: tailscaled running, state $(backend)"
+  ts status 2>/dev/null | head -5 | sed 's/^/  /'
+  addresses
+  if [ "${1:-}" = --check ]; then via_exit -o "$INFO" https://ipinfo.io/json && describe_exit; fi
+}
+
+cmd_tz() {
+  [ -s "$INFO" ] || via_exit -o "$INFO" https://ipinfo.io/json 2>/dev/null || die "not up; run home-exit start."
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["timezone"])' "$INFO"
+}
+
+cmd_stop() {
+  running || { echo "home-exit: not running."; return 0; }
+  ts logout >/dev/null 2>&1
+  kill "$(cat "$PIDFILE")" 2>/dev/null
+  rm -f "$PIDFILE" "$INFO"
+  echo "home-exit: stopped; this sandbox left the tailnet."
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  status) shift; cmd_status "$@" ;;
+  tz) cmd_tz ;;
+  stop) cmd_stop ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

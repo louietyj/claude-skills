@@ -228,10 +228,13 @@ c = json.load(open(src))
 srv = c.setdefault("server", {})
 srv["port"], srv["stateDir"] = port, d + "/state"
 dst = d + "/config.json"
-kept = json.load(open(dst)).get("browser", {}).get("proxy") if os.path.exists(dst) else None
+old = json.load(open(dst)).get("browser", {}) if os.path.exists(dst) else {}
 c.setdefault("browser", {}).pop("proxy", None)
-if kept:
-    c["browser"]["proxy"] = kept
+if old.get("proxy"):
+    # `start` matched the fingerprint to the proxy; keep both together.
+    c["browser"]["proxy"] = old["proxy"]
+    if old.get("cloak"):
+        c["browser"]["cloak"] = old["cloak"]
 json.dump(c, open(dst, "w"), indent=2)
 open(d + "/token", "w").write(srv["token"])
 PY
@@ -801,20 +804,39 @@ if [ "$TIER" = proxy ]; then
       sleep 1
     done
   }
+  # `--proxy home` is the home-exit skill: Louie's home IP over Tailscale.
+  HOME_URL=socks5://127.0.0.1:${HOME_EXIT_SOCKS_PORT:-1055}
+  home_exit() {
+    if ! command -v home-exit >/dev/null 2>&1; then
+      s=$(ls -1dt /mnt/skills/*/home-exit ~/.claude/skills/synced/*/home-exit 2>/dev/null | head -1)
+      [ -n "$s" ] || { echo "$NAME: --proxy home needs the home-exit skill, which isn't installed" >&2; return 1; }
+      bash "$s/setup.sh" >/dev/null || return 1
+    fi
+    home-exit start >/dev/null || return 1
+  }
   case "${1:-}" in
     start)
       if [ "${2:-}" != --proxy ] || [ -z "${3:-}" ]; then
-        echo "usage: $NAME start --proxy socks5://127.0.0.1:9050 | http://host:port" >&2
+        echo "usage: $NAME start --proxy home | socks5://127.0.0.1:9050 | http://host:port" >&2
         exit 2
       fi
       # Chrome's socks5 already leaves name lookups to the proxy; it has no socks5h.
       url=$3
       case "$url" in socks5h://*) url=socks5://${url#socks5h://} ;; esac
+      platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-America/New_York}
+      if [ "$url" = home ]; then
+        home_exit || exit 1
+        # The home exit is an Android phone: sites read its TCP/IP fingerprint as
+        # Linux-like, and DataDome hard-blocks a "Windows" browser arriving that way.
+        url=$HOME_URL platform=${CLOAK_PLATFORM:-linux} tz=${CLOAK_TIMEZONE:-$(home-exit tz)}
+      fi
       case "$url" in
         http://*|https://*|socks4://*|socks5://*) ;;
-        *) echo "$NAME: unsupported proxy $3: use socks5://, socks4://, http:// or https://" >&2; exit 2 ;;
+        *) echo "$NAME: unsupported proxy $3: use home, socks5://, socks4://, http:// or https://" >&2; exit 2 ;;
       esac
-      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null || exit 1
+      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null 2>&1 || exit 1
+      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.platform "$platform" >/dev/null 2>&1 || exit 1
+      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 || exit 1
       launch || exit 1
       echo "$NAME: a second browser is up, its traffic going through $url; plain pinchtab is unaffected. A new browser has no page loaded: nav first."
       exit 0 ;;
@@ -828,6 +850,7 @@ if [ "$TIER" = proxy ]; then
   esac
   if ! up; then
     [ -n "$(current)" ] || { echo "$NAME: not started. Run: $NAME start --proxy <url>" >&2; exit 1; }
+    if [ "$(current)" = "$HOME_URL" ]; then home_exit || exit 1; fi
     launch || exit 1
     echo "$NAME: restarted its browser (the sandbox was recycled), through $(current). It has no page loaded: nav first." >&2
   fi

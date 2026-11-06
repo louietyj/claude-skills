@@ -59,22 +59,33 @@ button:active{background:#2a2a2a}
 #mute.on rect{fill:var(--amber)} #mute.on path{stroke:var(--amber)}
 #menu{width:8vmin;height:8vmin;border-width:0.4vmin}
 #menu svg{width:4vmin;height:4vmin;fill:var(--dim)}
-/* Over the whole stage, and inside the middle of a round face. */
-#sheet{position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
-       justify-content:center;justify-content:safe center;gap:4vmin;z-index:1;overflow-y:auto;padding:14vmin 0}
-#phonenum{width:62vmin;font-size:6vmin;text-align:center;border-radius:3vmin;padding:1.5vmin}
-#numrow button{font-size:4.5vmin;border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 1vmin}
-#holdrow,.devrow{display:flex;flex-direction:column;align-items:center;gap:2vmin}
-.devrow select{font-size:6vmin;border-radius:3vmin;padding:1.5vmin 3vmin;min-width:45vmin;max-width:80vmin;text-align:center}
-.label{font-size:7vmin}
-.hint{color:var(--dim);font-size:4.5vmin;max-width:60vmin}
-.stepper{display:flex;align-items:center;gap:5vmin}
-.stepper button{width:15vmin;height:15vmin;border-radius:50%;padding:0;font-size:9vmin;line-height:1}
-#holdval{font-size:11vmin;min-width:20vmin;font-variant-numeric:tabular-nums}
 .pill{border-radius:8vmin;padding:2vmin 6vmin;font-size:6vmin}
+/* Over the whole stage, and inside the middle of a round face. One row per
+   setting, label left, control right. --u is the sheet's unit: a phone's CSS px
+   are nearly twice the watch's on the wrist, so a portrait screen scales it down. */
+#sheet{--u:1vmin;position:absolute;top:0;left:0;right:0;bottom:0;background:#000;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;justify-content:safe center;gap:calc(var(--u)*5);z-index:1;overflow-y:auto;padding:14vmin 0}
+#sheet .pill{font-size:calc(var(--u)*5.5);padding:calc(var(--u)*2) calc(var(--u)*6)}
+/* 70vmin clears a round face for ±35vmin around the centre. */
+.rows{width:70vmin;display:flex;flex-direction:column}
+.srow>span{white-space:nowrap}
+@media (max-aspect-ratio:3/4){#sheet{--u:.75vmin} .rows{width:min(84vmin,380px)}}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*2);
+      padding:calc(var(--u)*2.5) 0;border-bottom:1px solid #222;font-size:calc(var(--u)*5);text-align:left}
+.srow:last-child{border-bottom:0}
+.srow select{font-size:calc(var(--u)*5);border-radius:calc(var(--u)*3);padding:calc(var(--u)*1.5) calc(var(--u)*2.5);
+             max-width:58%;min-width:0;text-overflow:ellipsis}
+.actions{display:flex;flex-wrap:wrap;justify-content:center;gap:calc(var(--u)*3)}
+.actions:not(:has(button:not(.hide))){display:none}
+#phonenum{width:min(62vmin,300px);font-size:calc(var(--u)*5.5);text-align:center;border-radius:calc(var(--u)*3);padding:calc(var(--u)*1.5)}
+#numrow button{font-size:calc(var(--u)*4.5);border:0;background:none;color:var(--fg);text-decoration:underline;padding:0 1vmin}
+.hint{color:var(--dim);font-size:calc(var(--u)*4.5)}
+.stepper{display:flex;align-items:center;gap:calc(var(--u)*2)}
+.stepper button{width:calc(var(--u)*9);height:calc(var(--u)*9);border-radius:50%;padding:0;font-size:calc(var(--u)*5.5);line-height:1}
+#holdval{min-width:calc(var(--u)*9);text-align:center;font-variant-numeric:tabular-nums}
 /* Two choices side by side; the lit one is the current state. */
-.seg{display:flex}
-.seg button{font-size:6vmin;padding:2vmin 5vmin;color:var(--dim)}
+.seg{display:flex;flex-shrink:0}
+.seg button{font-size:calc(var(--u)*5);padding:calc(var(--u)*1.5) calc(var(--u)*2.2);color:var(--dim)}
 .seg button:first-child{border-radius:8vmin 0 0 8vmin;border-right-width:0}
 .seg button:last-child{border-radius:0 8vmin 8vmin 0}
 .seg button.on{background:var(--fg);color:#000;border-color:var(--fg)}
@@ -122,36 +133,21 @@ button:active{background:#2a2a2a}
   <button id="stop" class="hide" aria-label="stop"><svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8"/></svg></button>
 </div>
 <div id="sheet" class="hide">
-  <div id="holdrow" class="hide">
-    <div class="label">Turn wait</div>
-    <div class="stepper">
-      <button id="holddown" aria-label="shorter">−</button>
-      <span id="holdval"></span>
-      <button id="holdup" aria-label="longer">+</button>
-    </div>
-    <div class="hint">silence before your turn goes to Claude</div>
+  <div class="rows">
+    <div class="srow"><span>Mic</span><select id="mic" aria-label="microphone"></select></div>
+    <div id="speakerrow" class="srow hide"><span>Speaker</span><select id="speaker" aria-label="speaker"></select></div>
+    <div id="seprow" class="srow hide"><span>Claude's voice</span>
+      <div class="seg"><button id="sepcall">Call</button><button id="sepmedia">Media</button></div></div>
+    <div id="isorow" class="srow hide"><span>Voice isolation</span>
+      <div class="seg"><button id="isoon">On</button><button id="isooff">Off</button></div></div>
+    <div id="holdrow" class="srow hide"><span>Turn wait</span>
+      <div class="stepper"><button id="holddown" aria-label="shorter">−</button><span id="holdval"></span><button id="holdup" aria-label="longer">+</button></div></div>
   </div>
-  <div id="isorow" class="devrow hide">
-    <div class="label">Voice isolation</div>
-    <div class="seg"><button id="isoon">On</button><button id="isooff">Off</button></div>
-    <div class="hint">off for a muffled mic, like earbuds in the shower</div>
-  </div>
-  <div id="seprow" class="devrow hide">
-    <div class="label">Claude's voice</div>
-    <div class="seg"><button id="sepcall">Call</button><button id="sepmedia">Media</button></div>
-    <div class="hint">Media: Claude plays like music, so earbuds stay full quality; pick Speakerphone as the mic</div>
-  </div>
-  <button id="callme2" class="pill hide">Switch to phone</button>
-  <button id="hangup" class="pill hide">Hang up the phone</button>
-  <button id="usehere2" class="pill hide">Switch to web here</button>
-  <button id="pip" class="pill hide">Picture in picture</button>
-  <div class="devrow">
-    <div class="label">Mic</div>
-    <select id="mic" aria-label="microphone"></select>
-  </div>
-  <div id="speakerrow" class="devrow hide">
-    <div class="label">Speaker</div>
-    <select id="speaker" aria-label="speaker"></select>
+  <div class="actions">
+    <button id="callme2" class="pill hide">Switch to phone</button>
+    <button id="hangup" class="pill hide">Hang up the phone</button>
+    <button id="usehere2" class="pill hide">Switch to web here</button>
+    <button id="pip" class="pill hide">Picture in picture</button>
   </div>
   <div id="numrow" class="hint"></div>
   <input id="phonenum" class="hide" type="tel" autocomplete="tel" placeholder="+1 415 555 0123">

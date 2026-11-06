@@ -1030,7 +1030,9 @@ function startMeter() {
     hotRun = hot ? hotRun + 1 : 0;
     quietRun = hot ? 0 : quietRun + 1;
     if (!voiceEl) return;
-    if (!claudeTalking || quietRun >= UNDUCK_FRAMES) setVoice(voiceMuted, 1);
+    // Not with separate channels: a shower by the phone's mic reads as Louie and
+    // ducked Claude throughout, and in earbuds Claude can't drown him out.
+    if (separate || !claudeTalking || quietRun >= UNDUCK_FRAMES) setVoice(voiceMuted, 1);
     else if (hotRun >= DUCK_FRAMES) setVoice(voiceMuted, DUCK_VOLUME);
   }, 100);
 }

@@ -64,6 +64,9 @@ def main():
             page.evaluate("onMessage({type: 'tts_start'})")
             check(page.evaluate("voiceEl.muted && mediaOut.gain.value === 1"),
                   "Claude speaks through the media context, the element silent")
+            page.evaluate("claudeTalking = true; setVoice(false, DUCK_VOLUME)")
+            time.sleep(0.5)
+            check(page.evaluate("mediaOut.gain.value === 1"), "no ducking with separate channels")
             page.evaluate("onMessage({type: 'tts_stop'})")
             check(page.evaluate("mediaOut.gain.value === 0 && aec.gain.gain.value === 0"),
                   "stopped: media and the echo reference both silent")

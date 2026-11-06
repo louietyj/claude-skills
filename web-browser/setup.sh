@@ -105,7 +105,7 @@ finish() {
   printf '\nNext -- every browser step is a line of a batch, even a single one, and\n'
   printf 'you view latest-small.jpg in the same message:\n\n'
   printf "%spinchtab execute-batch <<'EOF'\n" "$prefix"
-  printf 'nav <url> --block-images\nEOF\n'
+  printf 'nav <url>\nEOF\n'
 
   if [ $failed -ne 0 ]; then
     printf '\nSome steps did not complete -- the summary above is the authority on\n'

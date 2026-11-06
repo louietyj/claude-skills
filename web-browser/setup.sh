@@ -227,6 +227,8 @@ src, d, port = sys.argv[1:]
 c = json.load(open(src))
 srv = c.setdefault("server", {})
 srv["port"], srv["stateDir"] = port, d + "/state"
+# Its Chrome's own range: the shared default (9868-9968) holds pinchtab-cloud's bridge port.
+c.setdefault("multiInstance", {}).update({"instancePortStart": 9972, "instancePortEnd": 9990})
 dst = d + "/config.json"
 old = json.load(open(dst)).get("browser", {}) if os.path.exists(dst) else {}
 c.setdefault("browser", {}).pop("proxy", None)

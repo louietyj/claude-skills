@@ -228,13 +228,17 @@ c = json.load(open(src))
 srv = c.setdefault("server", {})
 srv["port"], srv["stateDir"] = port, d + "/state"
 dst = d + "/config.json"
-old = json.load(open(dst)).get("browser", {}) if os.path.exists(dst) else {}
+prev = json.load(open(dst)) if os.path.exists(dst) else {}
+old = prev.get("browser", {})
 c.setdefault("browser", {}).pop("proxy", None)
 if old.get("proxy"):
     # `start` matched the fingerprint to the proxy; keep both together.
     c["browser"]["proxy"] = old["proxy"]
     if old.get("cloak"):
         c["browser"]["cloak"] = old["cloak"]
+    lan = (prev.get("security") or {}).get("trustedResolveCIDRs")
+    if lan:
+        c.setdefault("security", {})["trustedResolveCIDRs"] = lan
 json.dump(c, open(dst, "w"), indent=2)
 open(d + "/token", "w").write(srv["token"])
 PY
@@ -823,12 +827,14 @@ if [ "$TIER" = proxy ]; then
       # Chrome's socks5 already leaves name lookups to the proxy; it has no socks5h.
       url=$3
       case "$url" in socks5h://*) url=socks5://${url#socks5h://} ;; esac
-      platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-America/New_York}
+      platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-America/New_York} lan=
       if [ "$url" = home ]; then
         home_exit || exit 1
         # The home exit is an Android phone: sites read its TCP/IP fingerprint as
         # Linux-like, and DataDome hard-blocks a "Windows" browser arriving that way.
         url=$HOME_URL platform=${CLOAK_PLATFORM:-linux} tz=${CLOAK_TIMEZONE:-$(home-exit tz)}
+        # Louie's home network sits behind the same tunnel; let navigation reach it.
+        lan=$(home-exit routes 2>/dev/null)
       fi
       case "$url" in
         http://*|https://*|socks4://*|socks5://*) ;;
@@ -837,6 +843,7 @@ if [ "$TIER" = proxy ]; then
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null 2>&1 || exit 1
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.platform "$platform" >/dev/null 2>&1 || exit 1
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 || exit 1
+      PINCHTAB_CONFIG=$CONF "$REAL" config set security.trustedResolveCIDRs "$lan" >/dev/null 2>&1 || exit 1
       launch || exit 1
       echo "$NAME: a second browser is up, its traffic going through $url; plain pinchtab is unaffected. A new browser has no page loaded: nav first."
       exit 0 ;;

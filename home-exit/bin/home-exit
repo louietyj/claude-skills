@@ -4,6 +4,7 @@
 #   home-exit start     install (once), join his tailnet, use the home exit node; waits until traffic flows
 #   home-exit status    joined? which exit node? (--check also asks ipinfo.io for the exit IP)
 #   home-exit tz        the exit IP's IANA timezone, for matching a browser's timezone to it
+#   home-exit routes    Louie's home network ranges the exit node advertises, comma-separated
 #   home-exit stop      leave the tailnet (the ephemeral device disappears) and stop tailscaled
 #
 # A phone on his home Wi-Fi runs Tailscale as an exit node. This sandbox can't open
@@ -114,7 +115,8 @@ cmd_start() {
   echo $! > "$PIDFILE"
   local i
   for i in $(seq 1 20); do [ -S "$SOCK" ] && break; sleep 0.5; done
-  ts up --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --timeout=60s >/dev/null 2>&1 \
+  # --accept-routes: Louie's home network, advertised by the exit phone as a subnet route.
+  ts up --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --accept-routes --timeout=60s >/dev/null 2>&1 \
     || { tail -5 "$LOG" >&2; die "could not join the tailnet (is the auth key expired? it was made 2026-11-06 for 90 days)."; }
   local node; node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
   ts set --exit-node="$node" --exit-node-allow-lan-access=false || die "could not set the exit node."
@@ -138,6 +140,16 @@ cmd_tz() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["timezone"])' "$INFO"
 }
 
+cmd_routes() {
+  running || die "not running; run home-exit start."
+  ts status --json | python3 -c '
+import json, sys
+peers = (json.load(sys.stdin).get("Peer") or {}).values()
+routes = {r for p in peers if p.get("ExitNodeOption") and p.get("Online") for r in (p.get("PrimaryRoutes") or [])}
+print(",".join(sorted(r for r in routes if r not in ("0.0.0.0/0", "::/0"))))
+'
+}
+
 cmd_stop() {
   running || { echo "home-exit: not running."; return 0; }
   ts logout >/dev/null 2>&1
@@ -150,6 +162,7 @@ case "${1:-}" in
   start) cmd_start ;;
   status) shift; cmd_status "$@" ;;
   tz) cmd_tz ;;
+  routes) cmd_routes ;;
   stop) cmd_stop ;;
-  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

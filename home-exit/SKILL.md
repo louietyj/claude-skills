@@ -27,11 +27,17 @@ ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:1055 %h %p' user@host
   and a second browser behind it, with a fingerprint matched to the phone.
 - Any port works, not just 443, and the egress proxy's host blocks don't apply.
 - Unset `HTTPS_PROXY` for tools you point at it, or they go to the egress proxy first.
+- **His home network is reachable too**, e.g. the Xfinity gateway at `172.16.0.1`:
+  the exit phone advertises it as a subnet route (`home-exit routes` lists it). The
+  sandbox's `NO_PROXY` lists every private range, and curl and most libraries skip
+  any proxy for those, so unset `NO_PROXY`/`no_proxy` too, or a LAN request goes to
+  the egress proxy and comes back `403 private_dest_ip`.
 
 | Command | Does |
 |---|---|
 | `home-exit status [--check]` | joined? which exit? `--check` asks ipinfo.io for the exit IP |
 | `home-exit tz` | the exit IP's timezone |
+| `home-exit routes` | his home network ranges, as the exit node advertises them |
 | `home-exit stop` | leaves the tailnet and stops tailscaled |
 
 ## What to expect

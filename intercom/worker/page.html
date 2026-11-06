@@ -125,6 +125,11 @@ button:active{background:#2a2a2a}
     </div>
     <div class="hint">silence before your turn goes to Claude</div>
   </div>
+  <div id="isorow" class="devrow hide">
+    <div class="label">Voice isolation</div>
+    <button id="isolate" class="pill"></button>
+    <div class="hint">off for a muffled mic, like earbuds in the shower</div>
+  </div>
   <button id="callme2" class="pill hide">Switch to phone</button>
   <button id="hangup" class="pill hide">Hang up the phone</button>
   <button id="usehere2" class="pill hide">Switch to web here</button>
@@ -638,7 +643,7 @@ function onMessage(m) {
   else if (m.type === "voice_offer") answerVoice(m.sdp);
   else if (m.type === "voice_restart" && talk) startVoice();
   else if (m.type === "voice_failed") voiceFailed(m.error);
-  else if (m.type === "settings") { holdMs = m.hold_ms; renderSheet(); }
+  else if (m.type === "settings") { holdMs = m.hold_ms; isolateOn = m.isolate ?? null; renderSheet(); }
   else if (m.type === "release") releaseAudio();
   else if (m.type === "call_failed") status(`Call failed: ${m.error}`, "red");
   else if (m.type === "room") {
@@ -660,6 +665,9 @@ function onMessage(m) {
 const HOLD_KEY = "intercom-hold";
 const HOLD_STEPS = Array.from({ length: 21 }, (_, i) => i * 500);   // 0-10 s
 let holdMs = null, holdPref = null;
+// Per session, not remembered: isolation left off after the shower would let the
+// commute's chatter in.
+let isolateOn = null;
 try {
   const v = localStorage.getItem(HOLD_KEY);
   if (v !== null && HOLD_STEPS.includes(Number(v))) holdPref = Number(v);
@@ -679,6 +687,8 @@ function renderSheet() {
   if ($("changenum")) $("changenum").onclick = () => { editingNumber = true; renderSheet(); };
   $("phonenum").classList.toggle("hide", !editing);
   $("savenum").classList.toggle("hide", !editing);
+  $("isorow").classList.toggle("hide", !talk || isolateOn == null);
+  $("isolate").textContent = isolateOn ? "On" : "Off";
   if (holdMs == null) { $("holdval").textContent = "…"; return; }
   $("holdval").textContent = `${holdMs / 1000}s`;
   $("holddown").disabled = holdMs <= HOLD_STEPS[0];
@@ -824,6 +834,7 @@ $("usehere").onclick = takeAudio;
 $("usehere2").onclick = takeAudio;
 $("holddown").onclick = () => stepHold(-1);
 $("holdup").onclick = () => stepHold(1);
+$("isolate").onclick = () => { if (isolateOn != null) send({ type: "set", isolate: !isolateOn }); };
 $("mic").onchange = (e) => pickMic(e.target.value);
 $("speaker").onchange = (e) => pickSpeaker(e.target.value);
 

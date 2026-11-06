@@ -1647,6 +1647,34 @@ class Isolation(unittest.TestCase):
         turn = next(e for e in es if e["kind"] == "turn")
         self.assertEqual((turn["text"], turn["conf"], turn["drop_db"]), ("Last call.", 0.9, 40))
 
+    def test_louie_can_turn_isolation_off_mid_session_and_claude_hears_of_it(self):
+        sid = create(mode="talk", isolate=True)
+        ws, s = self.page_audio(sid)
+        self.assertEqual(s["config"]["audio_format"], "pcm_s16le")
+        self.assertTrue(recv_until(ws, lambda m: m.get("type") == "settings")["isolate"])
+        ws.send(json.dumps({"type": "set", "isolate": False}))
+        self.assertFalse(recv_until(ws, lambda m: m.get("type") == "settings")["isolate"])
+        recv_until(ws, lambda m: m.get("type") == "restart")     # isolation is chosen per segment
+        n = stream_count()
+        ws.send(json.dumps({"type": "seg"}))
+        ws.send(b"WEBM-HEADER")
+        s2 = wait_streams(n + 1)
+        self.assertEqual(s2["config"]["audio_format"], "auto")
+        self.assertEqual(self.heard(s2, 11), b"WEBM-HEADER")
+        wait_entries(sid, lambda es: any("Louie turned voice isolation off" in t for t in texts(es, "event")))
+        self.assertFalse(http("/status", id=sid)[1]["isolate"])
+        ws.close()
+
+    def test_claude_can_switch_isolation_and_listen_sessions_cannot(self):
+        sid = create(mode="talk")
+        self.assertEqual(http("/set", "POST", {"isolate": True}, id=sid), (200, {"ok": True, "isolate": True}))
+        self.assertTrue(http("/status", id=sid)[1]["isolate"])
+        self.assertFalse(any("isolation" in t for t in texts(entries(sid), "event")))
+        self.assertEqual(http("/set", "POST", {"isolate": False, "hold_s": 2}, id=sid),
+                         (200, {"ok": True, "hold_s": 2, "isolate": False}))
+        self.assertEqual(http("/set", "POST", {"isolate": True}, id=create())[0], 400)
+        self.assertEqual(http("/set", "POST", {}, id=sid)[0], 400)
+
     def test_listen_sessions_cannot_isolate_and_talk_sessions_need_not(self):
         status, out = http("/session", "POST", {"label": "t", "mode": "listen", "isolate": True})
         self.assertEqual(status, 400, out)

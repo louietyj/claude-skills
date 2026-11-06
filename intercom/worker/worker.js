@@ -23,7 +23,7 @@
 //   GET  /watch?id    long-poll for entries past ?since
 //   POST /note?id     a short note for the device (vibrates the watch)
 //   POST /speak?id    talk mode: say {text} through the device; blocks until played or interrupted
-//   POST /set?id      talk mode: {hold_s}, the silence that closes Louie's turn
+//   POST /set?id      talk mode: {hold_s}, the silence that closes Louie's turn; {isolate}, voice isolation on or off
 //   POST /call?id     {to}: Telnyx rings that number for the room's phone line
 //   POST /hangup?id   end the phone line
 // Monitor (the session's event_key as ?k=):
@@ -692,8 +692,28 @@ export class Session {
     const when = s ? `after ${s}s of silence` : "as soon as the transcriber hears him finish";
     if (byLouie) await this.addEntry("setting", { text: `Louie set the turn wait to ${s}s: his turns reach you ${when}` });
     else await this.saveMeta();
-    this.toScreens({ type: "settings", hold_ms: this.meta.hold_ms });
+    this.toScreens(this.settingsMsg());
     return { ok: true, hold_s: s };
+  }
+
+  settingsMsg() { return { type: "settings", hold_ms: this.holdMs(), isolate: !!this.meta.isolate }; }
+
+  // Unlike the turn wait, Louie's change is news: it changes what Claude hears.
+  // A fresh segment applies it, since isolation is chosen per segment.
+  async setIsolate(on, byLouie) {
+    if (!this.talk()) return { ok: false, error: "a listen session never isolates" };
+    if (on && !this.env.KRISP_API_KEY) return { ok: false, error: "the relay has no KRISP_API_KEY" };
+    if (on === !!this.meta.isolate) return { ok: true, isolate: on };
+    this.meta.isolate = on;
+    if (byLouie) {
+      await this.addEntry("event", { text: on
+        ? "Louie turned voice isolation on: only his voice is transcribed"
+        : "Louie turned voice isolation off: the transcriber hears the room as it is" });
+    } else await this.saveMeta();
+    this.toScreens(this.settingsMsg());
+    if (this.holder === this.phone && this.phone) await this.startSegment(this.phoneFormat);
+    else if (this.holder) this.toHolder({ type: "restart" });
+    return { ok: true, isolate: on };
   }
 
   // The open turn's finished words plus those still being recognised.
@@ -1322,7 +1342,7 @@ export class Session {
         const pref = msg.hold_ms == null ? NaN : Number(msg.hold_ms);
         const seeded = this.meta.hold_ms == null && Number.isFinite(pref) && pref !== this.holdMs() &&
                        (await this.setHold(pref, true)).ok;
-        if (!seeded) { try { ws.send(JSON.stringify({ type: "settings", hold_ms: this.holdMs() })); } catch {} }
+        if (!seeded) { try { ws.send(JSON.stringify(this.settingsMsg())); } catch {} }
       }
       // The latest note, without the buzz: it was news when it was sent.
       const last = this.meta.last_note;
@@ -1342,7 +1362,10 @@ export class Session {
     }
     if (msg.type === "hangup") return this.hangUp();
     if (msg.type === "gap") return this.addEntry("net", { text: `${this.ui(ws)} heard nothing from the relay for ${(Number(msg.ms) / 1000).toFixed(1)}s${netNote(msg)}` });
-    if (msg.type === "set") return this.setHold(Number(msg.hold_ms), true);
+    if (msg.type === "set") {
+      if ("isolate" in msg) return this.setIsolate(!!msg.isolate, true);
+      return this.setHold(Number(msg.hold_ms), true);
+    }
     if (msg.type === "stop") { this.stopping = true; return this.end("stopped on the device"); }
     if (ws !== this.holder) return;
     if (msg.type === "resumed" || msg.type === "seg") {
@@ -1952,8 +1975,17 @@ export class Session {
     }
     if (path === "/speak") return this.speak(await req.json().catch(() => null));
     if (path === "/set") {
-      const b = await req.json().catch(() => ({}));
-      const out = await this.setHold(Number(b?.hold_s) * 1000, false);
+      const b = (await req.json().catch(() => null)) ?? {};
+      let out = { ok: false, error: "nothing to set: give hold_s or isolate" };
+      if (b.isolate != null) {
+        out = await this.setIsolate(!!b.isolate, false);
+        if (!out.ok) return json(out, 400);
+      }
+      if (b.hold_s != null) {
+        const iso = out.isolate;
+        out = await this.setHold(Number(b.hold_s) * 1000, false);
+        if (out.ok && iso != null) out.isolate = iso;
+      }
       return json(out, out.ok ? 200 : 400);
     }
     if (path === "/call") {

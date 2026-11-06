@@ -501,11 +501,15 @@ def cmd_hangup(cfg, args):
 
 
 def cmd_set(cfg, args):
+    if args.hold is None and args.isolate is None:
+        die("give --hold or --isolate")
     sid = current_id(args)
-    status, body = relay(cfg, "/set", method="POST", id=sid, body={"hold_s": args.hold}, timeout=15)
+    req = {**({"hold_s": args.hold} if args.hold is not None else {}),
+           **({"isolate": args.isolate == "on"} if args.isolate is not None else {})}
+    status, body = relay(cfg, "/set", method="POST", id=sid, body=req, timeout=15)
     if status != 200 or not isinstance(body, dict):
         die(f"not set: {status} {error_text(body)}")
-    emit({"id": sid, "hold_s": body.get("hold_s")})
+    emit({"id": sid, **{k: body[k] for k in ("hold_s", "isolate") if k in body}})
 
 
 def cmd_monitor_url(cfg, args):
@@ -1045,8 +1049,10 @@ def main():
     hu.set_defaults(fn=cmd_hangup)
 
     se = sub.add_parser("set", help="talk mode: change a live session's settings")
-    se.add_argument("--hold", type=float, required=True,
+    se.add_argument("--hold", type=float,
                     help=f"seconds of silence that close Louie's turn ({HOLD_RANGE})")
+    se.add_argument("--isolate", choices=["on", "off"],
+                    help="Krisp's voice isolation; off for a muffled mic (earbuds in the shower)")
     se.add_argument("--id")
     se.set_defaults(fn=cmd_set)
 

@@ -35,7 +35,10 @@ intercom start --mode listen --label "estate lawyer" --terms-file terms.txt [--a
 - Talk mode keeps only Louie's voice: music, chatter and other people's voices
   around him are dropped before transcription. `--no-isolate` turns that off,
   for when he wants you to hear someone else in the room. If isolation fails,
-  an event says so and you hear everything.
+  an event says so and you hear everything. It also fails on a muffled mic:
+  waterproof earbuds in the shower had Louie's own voice turned down 11-56 dB
+  and whole sentences dropped. Louie can flip it in the page's settings (an
+  event tells you), and `intercom set --isolate off|on` switches it mid-session.
 - `--label` shows under the id on the device: a few words.
 - `--default-terms` adds Louie's standing list, for when there is no topic
   yet (he rang you from the power button). A failed fetch still starts the

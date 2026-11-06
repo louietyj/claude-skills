@@ -240,6 +240,13 @@ phone leg alone, at $0.005/min. Listen mode never isolates: it would keep only
 the nearest voice of a conversation. Session tokens last 5 hours; whether an
 open stream outlives its token is untested.
 
+**Isolation can be switched off mid-session**, from the page's settings or
+`intercom set --isolate`, and a fresh recorder segment applies it. On Tozo T6
+earbuds in the shower (2026-11-06) Krisp took Louie's own voice down 11-56 dB
+and dropped whole sentences, water running or not; unfiltered, every line came
+through at confidence .83-.96. The page doesn't remember the choice: left off
+after the shower, it would let the commute's chatter in.
+
 **A turn carries clues, not a verdict.** Isolation leaves leaks: a loud PA
 announcement while Louie is silent is the only voice there, so it comes
 through turned down but audible, and gets transcribed. Each turn therefore

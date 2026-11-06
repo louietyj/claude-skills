@@ -430,12 +430,17 @@ opens on Android starts call mode, and with Bluetooth earbuds as the mic their
 audio drops to the call codec: 16 kHz, and in the shower so filtered (by the
 earbuds or Android's headset path) that short syllables vanish. With
 "Speakerphone" as the mic, media keeps going to the earbuds at full quality
-(tested 2026-11-06 with music). So the sheet's "Claude's voice: Media audio"
-plays Claude through an AudioContext opened before the mic, which Android
-treats as media, and switches the page to its own AEC3, since the phone's echo
-canceller ignores media. The switch closes the mic and waits 500 ms for call
-mode to end before opening that context; whether 500 ms is enough, and whether
-Claude's voice really lands in the earbuds, is untested on a phone.
+(tested 2026-11-06 with music) as long as the mic opens raw: a processed one
+starts full call mode, which pulled even Spotify onto the phone's speaker. So
+the sheet's Audio "Media" opens only the raw mic, runs the page's own AEC3 on
+it (the phone's echo canceller ignores media), and plays Claude through an
+AudioContext opened before the mic, which Android treats as media. It doesn't
+duck Claude: a shower by the phone's mic read as Louie and kept Claude at a
+quarter volume. Tested on his phone 2026-11-06 with the settings picked before
+tapping Web: Spotify and Claude both in the earbuds, the counter-top phone mic
+at confidence .97 under the shower. Switching mid-room closes the mic and waits
+500 ms first; that path once left Claude on the phone's speaker, before the
+raw-mic fix, and hasn't been retried.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

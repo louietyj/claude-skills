@@ -68,7 +68,10 @@ button:active{background:#2a2a2a}
 #sheet .pill{font-size:calc(var(--u)*5.5);padding:calc(var(--u)*2) calc(var(--u)*6)}
 /* 70vmin clears a round face for ±35vmin around the centre. */
 .rows{width:70vmin;display:flex;flex-direction:column}
+/* A control that doesn't fit beside its label drops below it: the watch's font is wider than desktop Chrome's. */
+.srow{flex-wrap:wrap}
 .srow>span{white-space:nowrap}
+.srow>:last-child{margin-left:auto}
 @media (max-aspect-ratio:3/4){#sheet{--u:.75vmin} .rows{width:min(84vmin,380px)}}
 .srow{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*2);
       padding:calc(var(--u)*2.5) 0;border-bottom:1px solid #222;font-size:calc(var(--u)*5);text-align:left}
@@ -136,9 +139,9 @@ button:active{background:#2a2a2a}
   <div class="rows">
     <div class="srow"><span>Mic</span><select id="mic" aria-label="microphone"></select></div>
     <div id="speakerrow" class="srow hide"><span>Speaker</span><select id="speaker" aria-label="speaker"></select></div>
-    <div id="seprow" class="srow hide"><span>Claude's voice</span>
+    <div id="seprow" class="srow hide"><span>Audio</span>
       <div class="seg"><button id="sepcall">Call</button><button id="sepmedia">Media</button></div></div>
-    <div id="isorow" class="srow hide"><span>Voice isolation</span>
+    <div id="isorow" class="srow hide"><span>Isolation</span>
       <div class="seg"><button id="isoon">On</button><button id="isooff">Off</button></div></div>
     <div id="holdrow" class="srow hide"><span>Turn wait</span>
       <div class="stepper"><button id="holddown" aria-label="shorter">−</button><span id="holdval"></span><button id="holdup" aria-label="longer">+</button></div></div>

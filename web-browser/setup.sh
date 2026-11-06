@@ -840,7 +840,8 @@ if [ "$TIER" = proxy ]; then
       esac
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null 2>&1 || exit 1
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.platform "$platform" >/dev/null 2>&1 || exit 1
-      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 || exit 1      launch || exit 1
+      PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 || exit 1
+      launch || exit 1
       echo "$NAME: a second browser is up, its traffic going through $url; plain pinchtab is unaffected. A new browser has no page loaded: nav first."
       exit 0 ;;
     stop)

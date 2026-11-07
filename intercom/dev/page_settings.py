@@ -71,9 +71,12 @@ def main():
             check(page.evaluate("mediaOut.gain.value === 0 && aec.gain.gain.value === 0"),
                   "stopped: media and the echo reference both silent")
 
+            page.evaluate("window.oldVoice = voice")
             page.click("#sepcall")
             ts.wait_streams(n + 4)
             page.wait_for_function("mediaCtx === null", timeout=8000)
+            check(page.evaluate("voice !== null && voice !== oldVoice && oldVoice.connectionState === 'closed'"),
+                  "a new voice connection after the switch, the old one closed")
             page.evaluate("onMessage({type: 'tts_start'})")
             check(page.evaluate("!voiceEl.muted") and page.evaluate(lit) == "sepcall",
                   "back to call audio on the element")

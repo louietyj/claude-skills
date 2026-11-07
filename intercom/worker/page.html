@@ -775,8 +775,8 @@ async function findDevices() {
 }
 navigator.mediaDevices?.addEventListener?.("devicechange", findDevices);
 
-// A new mic means a new recorder run, so a new transcriber stream; the room and
-// Claude's voice carry on.
+// A new mic means a new recorder run, so a new transcriber stream, and a new voice
+// track (see reopenVoice); the room carries on.
 async function pickMic(id) {
   if (id === micId) return;
   micId = id;
@@ -789,6 +789,7 @@ async function pickMic(id) {
       status("Couldn't open that mic", "red");
     }
     segment();
+    reopenVoice();
   }
   renderSheet();
 }
@@ -1003,8 +1004,18 @@ async function setSeparate(on) {
     }
     if (!await openMic()) return status("Microphone blocked", "red");
     segment();
+    reopenVoice();
   }
   renderSheet();
+}
+
+// Switching Media to Call mid-talk killed ducking and interrupting until a fresh
+// take (2026-11-07): Android seems to pick call or media audio for Claude's voice
+// when its playback starts, from the mic open then. So a fresh track after the new mic.
+function reopenVoice() {
+  if (!talk) return;
+  if (voiceEl) voiceEl.srcObject = null;
+  startVoice();
 }
 
 // The mic's level after echo cancellation, every 100 ms, drives the echo gate:

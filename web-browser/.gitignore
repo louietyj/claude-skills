@@ -9,4 +9,6 @@ windows.json
 browser-use.key
 # CloakBrowser licence (latest binary).
 cloakbrowser.key
+# cloakbrowser-offline's tarball URL + version (Dropbox link, rlkeyed).
+offline.json
 *.zip

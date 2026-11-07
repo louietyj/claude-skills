@@ -439,60 +439,51 @@ BROWSER_NOTE=''
 if [ $CLOAK -eq 1 ]; then
   t0=$SECONDS
 
-  # npm is the expensive call, not the download: 215s to conclude "up to date"
-  # on a complete tree, against 1s for ensureBinary() to return the cached
-  # binary. Every branch below exists to avoid reaching npm.
-  for c in /root/.cloakbrowser/*/chrome "$HOME"/.cloakbrowser/*/chrome; do
-    [ -x "$c" ] && { CLOAK_BIN=$c; break; }
-  done
+  if [ -f "$SKILL_DIR/offline.json" ] &&
+     read -r CLOAK_VERSION BROWSER_URL < <(python3 -c '
+import json, sys
+c = json.load(open(sys.argv[1]))
+print(c["version"], c["browser_url"])' "$SKILL_DIR/offline.json"); then
+    OFFLINE_DIR=/root/.cloakbrowser-offline
+    CLOAK_BIN="$OFFLINE_DIR/browser-wrapper.sh"
 
-  if [ -n "${CLOAK_BIN:-}" ]; then
-    echo "cloakbrowser binary already downloaded in this sandbox"
-  else
-    mkdir -p /tmp/pinchtab-cloak && cd /tmp/pinchtab-cloak
-    npm_ok=1
-    if [ -d node_modules/cloakbrowser ]; then
-      echo "cloakbrowser package already installed; skipping npm"
+    if [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+      echo "cloakbrowser-offline already installed in this sandbox"
     else
-      echo "installing cloakbrowser: npm, then a few hundred MB of patched"
-      echo "Chromium, cached in this sandbox afterwards. Budget ~${SETUP_TIMEOUT:-300}s; past"
-      echo "that this step gives up and the boot continues on plain Chrome."
-      echo "It is not hung."
-      # `npm ci` fetches the 7 pinned tarballs and resolves nothing. Without a
-      # lockfile npm re-solves the tree on every run -- that was the 215s.
-      cp "$SKILL_DIR/cloak/package.json" "$SKILL_DIR/cloak/package-lock.json" . 2>/dev/null
-      # Timed, and progress left on stderr: a silenced multi-minute step is
-      # indistinguishable from a wedged one, and reads as a hang.
-      timeout "${SETUP_TIMEOUT:-300}" npm ci --prefer-offline --no-fund --no-audit || npm_ok=0
-      if [ $npm_ok -eq 0 ]; then
-        # A yanked version or an npm too old for lockfileVersion 3 should cost
-        # time, not cloak mode.
-        echo "npm ci failed -- retrying unpinned, which is the slow path" >&2
-        npm_ok=1
-        rm -f package-lock.json
-        timeout "${SETUP_TIMEOUT:-300}" npm install --prefer-offline --no-fund --no-audit \
-          cloakbrowser || npm_ok=0
+      mkdir -p "$OFFLINE_DIR" && cd "$OFFLINE_DIR"
+      echo "downloading cloakbrowser-offline $CLOAK_VERSION (~190MB, cached afterwards)"
+      echo "Budget ~${SETUP_TIMEOUT:-300}s; past that this step gives up and the"
+      echo "boot continues on plain Chrome. It is not hung."
+      ok=1
+      curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" -o browser.tar.bz2 "$BROWSER_URL" || ok=0
+      if [ $ok -eq 1 ]; then
+        tar xjf browser.tar.bz2
+        [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ] || { ok=0; echo "extracted tree missing chrome" >&2; }
       fi
-      echo "npm: $((SECONDS - t0))s elapsed"
+      rm -f browser.tar.bz2
+      if [ $ok -ne 1 ]; then
+        echo "cloakbrowser-offline install failed; falling back to ordinary Chrome" >&2
+        CLOAK=0
+      fi
     fi
-    if [ $npm_ok -eq 1 ]; then
-      # binaryInfo()'s shape is not contractual, so take whichever string field
-      # names an existing file rather than assuming a key.
-      CLOAK_BIN=$(timeout "${SETUP_TIMEOUT:-300}" node -e '
-        import("cloakbrowser").then(async m => {
-          await m.ensureBinary();
-          const info = m.binaryInfo() || {};
-          const fs = require("fs");
-          for (const v of Object.values(info))
-            if (typeof v === "string" && fs.existsSync(v) && fs.statSync(v).isFile())
-              return console.log(v);
-          process.exit(1);
-        }).catch(e => { console.error(String(e)); process.exit(1); });
-      ' | tail -1)
+
+    if [ $CLOAK -eq 1 ] && [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+      cat > "$CLOAK_BIN" <<WRAPPER
+#!/bin/bash
+BROWSER_DIR="\${BROWSER_DIR:-\$(dirname "\$0")/cloakbrowser-offline-$CLOAK_VERSION}"
+export CLOAKBROWSER_LICENSE_API="\${CLOAKBROWSER_LICENSE_API:-https://cloak-license.louietyj.workers.dev}"
+export CLOAKBROWSER_LICENSE_KEY="\${CLOAKBROWSER_LICENSE_KEY:-cb_14f9767c54143fd714eb15bbc5acefcd}"
+exec "\$BROWSER_DIR/chrome" --license-route=proxy \${HTTPS_PROXY:+--proxy-server=\$HTTPS_PROXY} "\$@"
+WRAPPER
+      chmod +x "$CLOAK_BIN"
     fi
+  else
+    echo "no readable offline.json beside the skill; continuing on plain Chrome" >&2
+    CLOAK=0
   fi
   echo "cloak stage: $((SECONDS - t0))s elapsed"
-  if [ -n "${CLOAK_BIN:-}" ] && [ -x "$CLOAK_BIN" ]; then
+
+  if [ $CLOAK -eq 1 ] && [ -x "$CLOAK_BIN" ]; then
     # A fixed seed makes every sandbox the same device on a different IP. Random per
     # sandbox, kept across re-runs so one conversation stays one device to a site.
     SEED_FILE=/tmp/.web-browser-seed

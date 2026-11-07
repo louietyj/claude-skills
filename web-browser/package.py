@@ -28,6 +28,21 @@ MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
 WINDOWS = "windows.json"
 # Optional: the Browser Use key behind pinchtab-cloud.
 BROWSER_USE_KEY = "browser-use.key"
+# Optional: cloakbrowser-offline's version + tarball URL (gitignored, so the
+# Dropbox link stays out of this public repo).
+OFFLINE_JSON = "offline.json"
+
+
+def read_offline() -> dict:
+    path = os.path.join(HERE, OFFLINE_JSON)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    for field in ("version", "browser_url"):
+        if not str(cfg.get(field, "")).strip():
+            raise SystemExit(f"{OFFLINE_JSON} lacks {field}.")
+    return cfg
 
 
 def read_browser_use_key() -> str:
@@ -72,10 +87,12 @@ def main() -> int:
         none_key = read_nonecap_key()
     windows = read_windows()
     bu_key = read_browser_use_key()
+    offline = read_offline()
 
     members = (list(MEMBERS) + ([KEY] if with_key else []) + ([TWOCAPTCHA_KEY] if two_key else [])
                + ([NONECAP_KEY] if none_key else [])
-               + ([WINDOWS] if windows else []) + ([BROWSER_USE_KEY] if bu_key else []))
+               + ([WINDOWS] if windows else []) + ([BROWSER_USE_KEY] if bu_key else [])
+               + ([OFFLINE_JSON] if offline else []))
     out = os.path.join(HERE, f"{NAME}.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for member in members:
@@ -105,6 +122,10 @@ def main() -> int:
         print(f"Contains {BROWSER_USE_KEY} in plaintext (ending ...{bu_key[-4:]}) -- pinchtab-cloud is on.")
     else:
         print(f"No {BROWSER_USE_KEY}: pinchtab-cloud is off.")
+    if offline:
+        print(f"Contains {OFFLINE_JSON} (cloakbrowser-offline {offline['version']}).")
+    else:
+        print(f"No {OFFLINE_JSON}: the cloak stage falls back to plain Chrome.")
     return 0
 
 

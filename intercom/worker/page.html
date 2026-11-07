@@ -210,7 +210,7 @@ let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 // so Android treats it as media, not call audio (README: "Separate channels").
 let separate = false, mediaCtx = null, mediaOut = null, mediaSrc = null;
 let voiceMuted = false, voiceVolume = 1;
-let meterCtx = null, meterTimer = null, probe = null, chirp = null;
+let meterCtx = null, meterTimer = null, probe = null, chirp = null, meterSeen = null;
 let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
 // new socket can resend whatever the relay didn't get (README: "A dropped page").
@@ -1027,6 +1027,7 @@ function startMeter() {
     const db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);
     // No VAD reading (AEC3 paused or just starting) counts as no voice.
     const hot = db > floor && (!aec || (aec.voice ?? 0) >= AEC_VOICE_MIN);
+    meterSeen = { db: Math.round(db), floor, hot, loud };
     recent.push(hot);
     if (recent.length > gateWindow) recent.shift();
     const now = recent.filter(Boolean).length >= gateMin;
@@ -1338,16 +1339,22 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-// ?debug: the viewport this browser reports, for fitting a new device.
+// ?debug: the viewport this browser reports, for fitting a new device, and what
+// the talk-mode meter hears, which drives both ducking and interrupting.
 if (new URLSearchParams(location.search).has("debug")) {
   const d = $("debug");
   d.classList.remove("hide");
   const report = () => {
     const vv = window.visualViewport;
+    const m = meterSeen, s = stream?.getAudioTracks()[0]?.getSettings() ?? {};
     d.textContent = `inner ${innerWidth}x${innerHeight} screen ${screen.width}x${screen.height}\n` +
-      `dpr ${devicePixelRatio} vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}@${vv.scale}` : "-"} ui ${UI}`;
+      `dpr ${devicePixelRatio} vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}@${vv.scale}` : "-"} ui ${UI}` +
+      (talk ? `\nctx ${meterCtx?.state ?? "-"} aec ${aec ? "page" : "browser"} ec ${s.echoCancellation} ns ${s.noiseSuppression}` +
+        `\nmic ${m ? `${m.db} dB (floor ${m.floor}) ${m.hot ? "HOT" : "quiet"} gate ${m.loud ? "OPEN" : "shut"}` : "-"}` +
+        `\nclaude ${claudeTalking ? "talking" : "silent"} vol ${voiceEl ? voiceEl.volume : "-"} sink "${voiceEl?.sinkId ?? "-"}"` : "");
   };
   report(); addEventListener("resize", report);
+  setInterval(report, 250);
 }
 
 // The watch's browser opens a new tab on every bookmark tap and has no tab

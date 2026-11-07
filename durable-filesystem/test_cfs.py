@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin"))
 
@@ -1024,6 +1025,8 @@ class FakeStore:
         self.files = {}  # path_lower -> (bytes, rev)
         self.calls = []  # (endpoint, path_lower)
         self.broken = set()  # paths whose download fails
+        self.zip_broken = set()  # folders whose zip fails
+        self.zip_stale = {}  # path_lower -> older bytes a zip serves instead
         self._revs = itertools.count(1)
 
     def put(self, path, content):
@@ -1054,8 +1057,9 @@ class FakeStore:
             prefix = path + "/"
             entries = [{".tag": "folder", "path_lower": d} for d in self._dirs() if d.startswith(prefix)]
             entries += [
-                {".tag": "file", "path_lower": p, "rev": rev}
-                for p, (_, rev) in self.files.items() if p.startswith(prefix)
+                {".tag": "file", "path_lower": p, "rev": rev, "size": len(data),
+                 "content_hash": cfs.content_hash(data)}
+                for p, (data, rev) in self.files.items() if p.startswith(prefix)
             ]
             return {"entries": entries, "has_more": False}
         raise AssertionError(f"unexpected endpoint {endpoint}")
@@ -1069,6 +1073,23 @@ class FakeStore:
             raise cfs.CfsError(NOT_FOUND)
         data, rev = self.files[path]
         return data, {"rev": rev}
+
+    def download_zip(self, payload):
+        """Named from the folder's last component down, as Dropbox does."""
+        path = payload["path"].lower()
+        self.calls.append(("download_zip", path))
+        if path in self.zip_broken:
+            raise cfs.CfsError("too_large")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            parent = path.rsplit("/", 1)[0]
+            for p, (data, _) in self.files.items():
+                if p.startswith(path + "/"):
+                    archive.writestr(p[len(parent) + 1 :].upper(), self.zip_stale.get(p, data))
+        return buf.getvalue()
+
+    def zips(self):
+        return sorted(p for e, p in self.calls if e == "download_zip")
 
     def downloads(self):
         return sorted(p for e, p in self.calls if e == "download")
@@ -1096,6 +1117,7 @@ class TestGrep(unittest.TestCase):
         self._patch("mirror_root", lambda: self.root)
         self._patch("rpc", self.store.rpc)
         self._patch("content_download", self.store.download)
+        self._patch("content_download_zip", self.store.download_zip)
         self._patch("access_token", lambda: "token")
 
     def _patch(self, name, replacement):
@@ -1271,6 +1293,65 @@ class TestGrep(unittest.TestCase):
         self.assertNotIn("/records/scan.pdf", self.store.downloads())
         code, out, _ = self.run_grep(["-c", "alpha", "/records/scan.pdf"])
         self.assertEqual((code, out), (0, "1\n"))
+
+    # zipping a cold tree
+
+    def zip_always(self):
+        self._patch("ZIP_SETUP_SECONDS", 0)
+
+    def test_small_trees_are_fetched_per_file(self):
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.assertEqual(self.store.zips(), [])
+
+    def test_a_cold_tree_comes_in_one_zip(self):
+        self.zip_always()
+        code, out, _ = self.run_grep(["-rl", "alpha", "/memory"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(out.split()), ["/memory/a.md", "/memory/b.md", "/memory/notes.txt"])
+        self.assertEqual((self.store.zips(), self.store.downloads()), (["/memory"], []))
+
+    def test_only_the_named_subtree_is_zipped(self):
+        self.zip_always()
+        self.store.put("/memory/x/y/deep.md", "alpha deep\n")
+        _, out, _ = self.run_grep(["-r", "alpha", "/memory/x/y"])
+        self.assertEqual(out, "/memory/x/y/deep.md:alpha deep\n")
+        self.assertEqual(self.store.zips(), ["/memory/x/y"])
+
+    def test_a_tree_inside_another_is_not_zipped_twice(self):
+        self.zip_always()
+        self.store.put("/memory/x/deep.md", "alpha deep\n")
+        self.run_grep(["-r", "alpha", "/memory/x", "/memory"])
+        self.assertEqual((self.store.zips(), self.store.downloads()), (["/memory"], []))
+
+    def test_the_root_is_zipped_folder_by_folder(self):
+        self.zip_always()
+        self.store.put("/top.md", "alpha top\n")
+        _, out, _ = self.run_grep(["-rl", "alpha", "/"])
+        self.assertIn("/top.md", out)
+        self.assertEqual(self.store.zips(), ["/memory", "/records"])
+        self.assertEqual(self.store.downloads(), ["/top.md"])
+
+    def test_a_zipped_copy_that_fails_its_hash_is_fetched_alone(self):
+        self.zip_always()
+        self.store.zip_stale["/memory/b.md"] = b"delta\nalpha OLD\n"
+        _, out, _ = self.run_grep(["-r", "alpha", "/memory/b.md", "/memory"])
+        self.assertIn("alpha again", out)
+        self.assertNotIn("OLD", out)
+        self.assertEqual(self.store.downloads(), ["/memory/b.md"])
+
+    def test_a_failed_zip_falls_back_to_per_file(self):
+        self.zip_always()
+        self.store.zip_broken.add("/memory")
+        self.assertEqual(self.run_grep(["-rl", "gamma", "/memory"])[:2], (0, "/memory/a.md\n"))
+        self.assertEqual(len(self.store.downloads()), 3)
+
+    def test_a_warm_mirror_refetches_a_change_without_zipping(self):
+        self.zip_always()
+        self.run_grep(["-r", "alpha", "/memory"])
+        self.store.put("/memory/b.md", "epsilon\n")
+        self._patch("ZIP_SETUP_SECONDS", 1.8)
+        self.assertEqual(self.run_grep(["-r", "epsilon", "/memory"])[1], "/memory/b.md:epsilon\n")
+        self.assertEqual((self.store.zips(), self.store.downloads()), ([], ["/memory/b.md"]))
 
 
 if __name__ == "__main__":

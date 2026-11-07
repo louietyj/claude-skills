@@ -62,7 +62,7 @@ Both read stdin raw *by default*, and the symmetry is load-bearing: a caller who
 
 `grep` fetches files and matches locally rather than using Dropbox's search index, because that index is asynchronous and cannot find a file written moments ago — precisely when a mid-conversation search is most likely.
 
-The local mirror follows the same rule as revs: correctness never rests on local state. Every operand is checked against Dropbox on every run. A named file is checked by its metadata. A recursive directory gets a fresh listing, which also prunes anything on disk that has left the store. The rev manifest only decides what need not be downloaded again. The mirror is laid out by `path_lower` because Dropbox's display casing can disagree between siblings above the last path component, which would split one folder in two locally. As a result, grep reports lowercased paths.
+The local mirror follows the same rule as revs: correctness never rests on local state. Every operand is checked against Dropbox on every run. A named file is checked by its metadata. A recursive directory gets a fresh listing, which also prunes anything on disk that has left the store. The rev manifest only decides what need not be downloaded again. A cold tree, the usual case in a fresh sandbox, comes down as one `download_zip` per tree operand rather than a request per file. The zip carries no revs, so a file in it is used only if it hashes to the listing's `content_hash`; anything else is downloaded on its own. The mirror is laid out by `path_lower` because Dropbox's display casing can disagree between siblings above the last path component, which would split one folder in two locally. As a result, grep reports lowercased paths.
 
 ## Security posture
 

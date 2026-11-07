@@ -21,6 +21,7 @@ import argparse
 import base64
 import difflib
 import hashlib
+import io
 import json
 import os
 import random
@@ -35,6 +36,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -176,8 +179,16 @@ def content_upload(payload: dict, data: bytes) -> dict:
 
 
 def content_download(payload: dict) -> tuple[bytes, dict]:
+    return _download("/2/files/download", payload)
+
+
+def content_download_zip(payload: dict) -> bytes:
+    return _download("/2/files/download_zip", payload)[0]
+
+
+def _download(endpoint: str, payload: dict) -> tuple[bytes, dict]:
     req = urllib.request.Request(
-        f"{CONTENT}/2/files/download",
+        f"{CONTENT}{endpoint}",
         data=b"",
         headers={
             "Authorization": f"Bearer {access_token()}",
@@ -186,7 +197,8 @@ def content_download(payload: dict) -> tuple[bytes, dict]:
     )
     for attempt in range(MAX_RETRIES + 1):
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            # Sized for a folder zip.
+            with urllib.request.urlopen(req, timeout=120) as resp:
                 return resp.read(), json.loads(resp.headers["Dropbox-API-Result"])
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")
@@ -1230,6 +1242,7 @@ def cmd_search(args) -> str:
 BINARY_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".pdf", ".zip",
     ".gz", ".tar", ".mp3", ".mp4", ".mov", ".wav", ".bin", ".woff", ".woff2",
+    ".apk", ".keystore", ".jks", ".webm", ".m4a", ".ogg", ".docx", ".xlsx", ".pptx",
 }
 
 # `grep` is GNU grep, not an imitation of it: the store is mirrored to a temp
@@ -1381,8 +1394,26 @@ def mirror_path(lower: str) -> str:
     return mirror_root() + ("/" if lower == "/" else lower)
 
 
-MIRROR_WORKERS = 8
+MIRROR_WORKERS = 32
 MANIFEST_CHECKPOINT_SECONDS = 2.0
+
+# Measured 2026-11-07 from a cloud sandbox: a file download takes about a second
+# however small the file, while a folder zip costs about 1.8 s plus 0.3 s per MB,
+# binaries included. A tree is zipped when that beats fetching its stale files
+# one by one, which in practice means a cold or mostly cold mirror.
+DOWNLOAD_SECONDS = 1.0
+ZIP_SETUP_SECONDS = 1.8
+ZIP_SECONDS_PER_BYTE = 0.3 / 1e6
+DROPBOX_HASH_BLOCK = 4 * 1024 * 1024
+
+
+def content_hash(data: bytes) -> str:
+    """Dropbox's content_hash: SHA-256 over the SHA-256 of each 4 MiB block."""
+    blocks = b"".join(
+        hashlib.sha256(data[i : i + DROPBOX_HASH_BLOCK]).digest()
+        for i in range(0, len(data), DROPBOX_HASH_BLOCK)
+    )
+    return hashlib.sha256(blocks).hexdigest()
 
 
 class Mirror:
@@ -1399,6 +1430,8 @@ class Mirror:
         self.revs: dict[str, str] = {}
         self.wanted: dict[str, str] = {}  # path_lower -> rev
         self.failed: list[tuple[str, str]] = []  # (path_lower, reason)
+        self.trees: list[str] = []
+        self.listed: dict[str, dict] = {}  # path_lower -> listing entry, binaries too
 
     def __enter__(self) -> "Mirror":
         os.makedirs(mirror_root(), exist_ok=True)
@@ -1431,12 +1464,20 @@ class Mirror:
         os.replace(partial, manifest_file())
         self._saved_at = time.monotonic()
 
-    def add_tree(self, lower: str) -> None:
+    def add_trees(self, lowers: list[str]) -> None:
+        with ThreadPoolExecutor(MIRROR_WORKERS) as pool:
+            listings = list(pool.map(list_tree, lowers))
+        for lower, entries in zip(lowers, listings):
+            self._add_tree(lower, entries)
+
+    def _add_tree(self, lower: str, entries: list[dict]) -> None:
+        self.trees.append(lower)
         files, dirs = {}, {lower}
-        for entry in list_tree(lower):
+        for entry in entries:
             if entry[".tag"] == "folder":
                 dirs.add(entry["path_lower"])
             elif entry[".tag"] == "file":
+                self.listed[entry["path_lower"]] = entry
                 if os.path.splitext(entry["path_lower"])[1] not in BINARY_SUFFIXES:
                     files[entry["path_lower"]] = entry["rev"]
         prune(lower, files, dirs)
@@ -1461,7 +1502,14 @@ class Mirror:
         progress for the next attempt."""
         if not self.wanted:
             return
-        access_token()  # mint once here, not in eight threads at once
+        access_token()  # mint once here, not in every thread at once
+        units = [u for u in self._zip_units() if self._worth_zipping(u)]
+        # A unit inside another chosen one would only download its files twice.
+        units = [u for u in units if not any(u.startswith(o + "/") for o in units)]
+        with ThreadPoolExecutor(MIRROR_WORKERS) as pool:
+            for unit, archive in zip(units, pool.map(download_zip, units)):
+                if archive is not None:
+                    self._take_from_zip(unit, archive)
         with ThreadPoolExecutor(MIRROR_WORKERS) as pool:
             futures = {
                 pool.submit(content_download, {"path": lower}): lower
@@ -1479,16 +1527,68 @@ class Mirror:
                     if "not_found" not in str(exc):  # deleted since listing: gone is right
                         self.failed.append((lower, str(exc).splitlines()[0]))
                     continue
-                make_room(local, is_dir=False)
-                # Renamed into place, so a killed run never leaves a truncated
-                # file; a leftover .partial is pruned like anything else.
-                with open(local + ".partial", "wb") as fh:
-                    fh.write(data)
-                os.replace(local + ".partial", local)
                 # The downloaded rev: the file may have changed since listing.
-                self.revs[lower] = meta["rev"]
-                if time.monotonic() - self._saved_at > MANIFEST_CHECKPOINT_SECONDS:
-                    self._save()
+                self._store(lower, data, meta["rev"])
+
+    def _zip_units(self) -> list[str]:
+        """Folders that could be fetched whole: each tree operand, or for the
+        root, which Dropbox will not zip, each top-level folder."""
+        units = set()
+        for tree in self.trees:
+            if tree != "/":
+                units.add(tree)
+            else:
+                units.update("/" + p.split("/")[1] for p in self.listed if p.count("/") > 1)
+        return sorted(units)
+
+    def _worth_zipping(self, unit: str) -> bool:
+        # A zip carries everything under the folder, fresh copies and binaries
+        # included; a per-file fetch carries only what is stale.
+        prefix = unit + "/"
+        stale = sum(1 for p in self.wanted if p.startswith(prefix) and p in self.listed)
+        size = sum(e["size"] for p, e in self.listed.items() if p.startswith(prefix))
+        per_file = stale * DOWNLOAD_SECONDS / MIRROR_WORKERS
+        return ZIP_SETUP_SECONDS + size * ZIP_SECONDS_PER_BYTE < per_file
+
+    def _take_from_zip(self, unit: str, archive: zipfile.ZipFile) -> None:
+        """Take every stale file the zip holds intact; whatever it does not
+        is left in `wanted` for the per-file fetch."""
+        # Entries are named from the folder's own last component down.
+        parent = unit.rsplit("/", 1)[0]
+        for info in archive.infolist():
+            lower = f"{parent}/{info.filename}".lower()
+            entry = self.listed.get(lower)
+            if info.is_dir() or entry is None or lower not in self.wanted:
+                continue
+            try:
+                data = archive.read(info)
+            except (zipfile.BadZipFile, zlib.error):
+                continue
+            # The zip carries no revs. Content matching the listing's hash
+            # proves this is the listed rev; anything else is fetched alone.
+            if content_hash(data) == entry.get("content_hash"):
+                self._store(lower, data, entry["rev"])
+                del self.wanted[lower]
+
+    def _store(self, lower: str, data: bytes, rev: str) -> None:
+        local = mirror_path(lower)
+        make_room(local, is_dir=False)
+        # Renamed into place, so a killed run never leaves a truncated
+        # file; a leftover .partial is pruned like anything else.
+        with open(local + ".partial", "wb") as fh:
+            fh.write(data)
+        os.replace(local + ".partial", local)
+        self.revs[lower] = rev
+        if time.monotonic() - self._saved_at > MANIFEST_CHECKPOINT_SECONDS:
+            self._save()
+
+
+def download_zip(lower: str) -> zipfile.ZipFile | None:
+    """None on any failure: per-file fetching still covers every file."""
+    try:
+        return zipfile.ZipFile(io.BytesIO(content_download_zip({"path": api_path(lower)})))
+    except (CfsError, OSError, zipfile.BadZipFile):
+        return None
 
 
 def resolve_operand(path: str) -> dict | None:
@@ -1594,9 +1694,8 @@ def cmd_grep(raw_argv: list[str]) -> int:
                     raise CfsError(f"No such path in the store: {argv[i]}{hint}")
             # Trees first: a tree's prune would otherwise delete a named file
             # below it that was already in place, such as a binary.
-            for meta in metas:
-                if meta[".tag"] == "folder" and parsed.recursive:
-                    mirror.add_tree(meta["path_lower"])
+            if parsed.recursive:
+                mirror.add_trees([m["path_lower"] for m in metas if m[".tag"] == "folder"])
             for meta in metas:
                 if meta[".tag"] == "file":
                     mirror.add_file(meta)
@@ -1608,7 +1707,7 @@ def cmd_grep(raw_argv: list[str]) -> int:
             # Real grep would read stdin here. There is no stdin worth reading,
             # so the whole store is the corpus instead -- the one deliberate
             # deviation.
-            mirror.add_tree("/")
+            mirror.add_trees(["/"])
             if not parsed.recursive:
                 argv.insert(0, "-r")
             argv.append(mirror_root())

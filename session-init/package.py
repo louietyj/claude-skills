@@ -11,7 +11,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "session-init"
-MEMBERS = ["SKILL.md", "session-init.sh"]
+MEMBERS = ["SKILL.md", "session-init.sh", "subagent-header.md"]
 
 
 def main() -> int:

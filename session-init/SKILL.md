@@ -30,6 +30,10 @@ or `/mnt/skills/plugins/`, Cowork and cloud Claude Code under
 Its output is a transcript of work already done. Do not re-run the commands it
 shows or re-read the files it prints.
 
+It also writes `/tmp/subagent-briefing.md` for subagents, which see neither the
+user's preferences nor this output: `subagent-header.md`, then `userPreferences.md`
+fetched from this repo on GitHub, then the whole transcript.
+
 If a stage fails the script keeps going and says so in its closing summary --
 one failure never costs you the other half of the boot. Report what is down
 rather than re-running the script or routing around it.

@@ -197,7 +197,7 @@ Every agent here starts with zero context (forks aren't available). Brief the ag
 - Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
 - If you need a short response, say so ("report in under 200 words").
 - Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
-Clearly tell the agent whether you expect it to write or change things or just to do research (search, file reads, web fetches, etc.), since a fresh agent is not aware of the user's intent. Subagents don't see my preferences either; pass on the ones that apply.
+Clearly tell the agent whether you expect it to write or change things or just to do research (search, file reads, web fetches, etc.), since a fresh agent is not aware of the user's intent. Subagents don't see my preferences or the boot. Begin every brief with "Read /tmp/subagent-briefing.md in full before anything else.": session-init writes it, and it carries my preferences and the whole session-init output, lmcps catalogue included. Leave it out only for a narrow lookup that needs none of it. If session-init reported it could not write the file, pass on the preferences that apply by hand.
 Terse command-style prompts produce shallow, generic work.
 Never delegate understanding. Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, URLs, line numbers, what specifically to change.
 

@@ -12,6 +12,50 @@
 # being printed, and the caller has to be able to see which half worked. Each
 # stage records its own status and the summary at the end reports all of them.
 
+# --- subagent briefing ---------------------------------------------------------
+# Subagents see neither userPreferences nor this transcript, so this outer pass
+# runs the boot below as a child and bundles its output with the preferences.
+# Those come from GitHub, so editing them never means re-uploading this skill.
+if [ -z "${SESSION_INIT_INNER:-}" ]; then
+  BRIEFING=${SESSION_INIT_BRIEFING:-/tmp/subagent-briefing.md}
+  PREFS_URL=${SESSION_INIT_PREFS_URL:-https://raw.githubusercontent.com/louietyj/claude-skills/main/userPreferences.md}
+  here=$(dirname "$(readlink -f "$0")")
+  bw=$(mktemp -d)
+  trap 'rm -rf "$bw"' EXIT
+
+  curl -fsS --max-time 10 -o "$bw/prefs.md" "$PREFS_URL" 2>"$bw/curl.err" &
+  curl_pid=$!
+  SESSION_INIT_INNER=1 bash "$0" "$@" | tee "$bw/transcript"
+  rc=${PIPESTATUS[0]}
+  wait "$curl_pid"
+  curl_rc=$?
+
+  # Written beside its destination and renamed, so a reader never sees half a file.
+  tmp=$(mktemp "$BRIEFING.XXXXXX") && {
+    cat "$here/subagent-header.md" || printf '# Subagent briefing\n\n(header file missing)\n'
+    printf '\n## userPreferences\n\n'
+    if [ "$curl_rc" -eq 0 ]; then
+      cat "$bw/prefs.md"
+    else
+      printf '(could not fetch %s: %s)\n' "$PREFS_URL" "$(cat "$bw/curl.err")"
+    fi
+    printf '\n## Session-init transcript\n\n'
+    cat "$bw/transcript"
+  } >"$tmp" && mv "$tmp" "$BRIEFING"
+
+  # Older than the transcript = left over from an earlier boot.
+  if [ ! -s "$BRIEFING" ] || [ "$BRIEFING" -ot "$bw/transcript" ]; then
+    printf '\nSubagent briefing could NOT be written to %s: pass subagents the\n' "$BRIEFING"
+    printf 'preferences that apply by hand.\n'
+  elif [ "$curl_rc" -ne 0 ]; then
+    printf '\nSubagent briefing written to %s, but WITHOUT userPreferences\n' "$BRIEFING"
+    printf '(fetch failed: %s). Pass subagents the preferences that apply by hand.\n' "$(cat "$bw/curl.err")"
+  else
+    printf '\nSubagent briefing written to %s. Start every subagent brief with it.\n' "$BRIEFING"
+  fi
+  exit "$rc"
+fi
+
 TOTAL=7
 step=0
 summary=()

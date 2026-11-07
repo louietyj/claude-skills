@@ -7,4 +7,6 @@ nonecap.key
 windows.json
 # Browser Use, behind pinchtab-cloud.
 browser-use.key
+# CloakBrowser licence (latest binary).
+cloakbrowser.key
 *.zip

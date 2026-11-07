@@ -775,23 +775,11 @@ async function findDevices() {
 }
 navigator.mediaDevices?.addEventListener?.("devicechange", findDevices);
 
-// A new mic means a new recorder run, so a new transcriber stream, and a new voice
-// track (see reopenVoice); the room carries on.
 async function pickMic(id) {
   if (id === micId) return;
   micId = id;
-  if (holding) {
-    await flushRecorder();
-    closeMic();
-    if (!await openMic()) {
-      micId = "default";
-      if (!await openMic()) return status("Microphone blocked", "red");
-      status("Couldn't open that mic", "red");
-    }
-    segment();
-    reopenVoice();
-  }
   renderSheet();
+  await restartAudio();
 }
 
 async function applySink() {
@@ -802,10 +790,11 @@ async function applySink() {
   } catch { status("Couldn't use that speaker", "red"); }
 }
 
-function pickSpeaker(id) {
+async function pickSpeaker(id) {
+  if (id === sinkId) return;
   sinkId = id;
-  applySink();
   renderSheet();
+  await restartAudio();
 }
 
 // Rebuilt only on change: renderSheet runs often, and rebuilding would close an open picker.
@@ -895,7 +884,7 @@ const AEC_VOICE_MIN = 0.2;
 const GATE_WINDOW = 20;
 const GATE_MIN_FRAMES = 12;
 const JITTER_MS = 500;   // smoothness over latency: Claude doesn't need call-grade timing
-const MEDIA_SETTLE_MS = 500;   // for Android to leave call mode once the mic closes; untested
+const OUTPUT_CLOSE_MS = 6000;   // for Chrome to close its idle outputs (restartAudio)
 // Like claude.ai's voice mode: a moment of Louie's voice turns Claude down, here
 // on the device, so he can be heard while the gate decides whether he is interrupting.
 const DUCK_FRAMES = 2;
@@ -990,32 +979,44 @@ function routeVoice() {
   mediaSrc.connect(mediaOut);
 }
 
-// Switching reopens the mic in between, so the context opens with no call running.
 async function setSeparate(on) {
   if (on === separate) return;
   separate = on;
-  if (holding) {
-    await flushRecorder();
-    closeMic();
-    closeMedia();
-    if (on) {
-      await new Promise((r) => setTimeout(r, MEDIA_SETTLE_MS));
-      openMedia();
-    }
-    if (!await openMic()) return status("Microphone blocked", "red");
-    segment();
-    reopenVoice();
-  }
   renderSheet();
+  await restartAudio();
 }
 
-// Switching Media to Call mid-talk killed ducking and interrupting until a fresh
-// take (2026-11-07): Android seems to pick call or media audio for Claude's voice
-// when its playback starts, from the mic open then. So a fresh track after the new mic.
-function reopenVoice() {
-  if (!talk) return;
+// Any audio setting changed mid-session: tear everything down and bring it up as
+// a fresh take does. Chrome on Android fixes an output as call or media audio when
+// it opens and keeps an idle one open a few seconds for reuse, so switching Media
+// to Call straight through left Claude's voice on the media output, which the
+// phone's echo canceller ignores: Claude's echo interrupted Claude (dumpsys,
+// 2026-11-07). Hence the wait for the idle outputs to close.
+let restarts = 0;
+async function restartAudio() {
+  if (!holding) return;
+  const mine = ++restarts;
+  await flushRecorder();
+  closeVoice();
   if (voiceEl) voiceEl.srcObject = null;
-  startVoice();
+  closeMic();
+  closeMedia();
+  if (talk) {   // listen mode plays nothing, so it has no outputs to wait on
+    status("Switching audio…", "amber");
+    await new Promise((r) => setTimeout(r, OUTPUT_CLOSE_MS));
+    if (mine !== restarts || !holding) return;   // another change came in meanwhile
+    status("");
+  }
+  applySink();
+  if (talk && separate) openMedia();
+  if (!await openMic()) {
+    micId = "default";
+    if (!await openMic()) return status("Microphone blocked", "red");
+    status("Couldn't open that mic", "red");
+  }
+  segment();
+  if (talk) startVoice();
+  renderSheet();
 }
 
 // The mic's level after echo cancellation, every 100 ms, drives the echo gate:

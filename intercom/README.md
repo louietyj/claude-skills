@@ -438,9 +438,17 @@ AudioContext opened before the mic, which Android treats as media. It doesn't
 duck Claude: a shower by the phone's mic read as Louie and kept Claude at a
 quarter volume. Tested on his phone 2026-11-06 with the settings picked before
 tapping Web: Spotify and Claude both in the earbuds, the counter-top phone mic
-at confidence .97 under the shower. Switching mid-room closes the mic and waits
-500 ms first; that path once left Claude on the phone's speaker, before the
-raw-mic fix, and hasn't been retried.
+at confidence .97 under the shower.
+
+**Any audio setting changed mid-room rebuilds all the audio.** Chrome on
+Android fixes an output as call or media audio when it opens, and reuses an
+idle one for a few seconds. Switching Media to Call straight through left
+Claude's voice on the media output (dumpsys showed `USAGE_MEDIA` players under
+a `VOICE_COMMUNICATION` mic, 2026-11-07), which the phone's echo canceller
+ignores: Claude's own echo interrupted it and was transcribed as Louie. So a
+change of Audio, Mic or Speaker stops the voice, mic, recorder and contexts,
+waits 6 s for the idle outputs to close, and brings everything up as a fresh
+take does. The room, socket and transcript carry on.
 
 **Mute sends silence; it doesn't stop anything.** The recorder and the echo
 gate read a clone of the mic track, and mute disables only the clone, so the

@@ -801,15 +801,15 @@ if [ "$TIER" = proxy ]; then
       sleep 1
     done
   }
-  # `--proxy home` is the home-exit skill: Louie's home IP over Tailscale.
-  HOME_URL=socks5://127.0.0.1:${HOME_EXIT_SOCKS_PORT:-1055}
-  home_exit() {
-    if ! command -v home-exit >/dev/null 2>&1; then
-      s=$(ls -1dt /mnt/skills/*/home-exit ~/.claude/skills/synced/*/home-exit 2>/dev/null | head -1)
-      [ -n "$s" ] || { echo "$NAME: --proxy home needs the home-exit skill, which isn't installed" >&2; return 1; }
+  # `--proxy home` is the home-proxy skill: Louie's home IP over a WebSocket tunnel to his home relay phone.
+  HOME_URL=socks5://127.0.0.1:${HOME_PROXY_SOCKS_PORT:-1080}
+  home_proxy() {
+    if ! command -v home-proxy >/dev/null 2>&1; then
+      s=$(ls -1dt /mnt/skills/*/home-proxy ~/.claude/skills/synced/*/home-proxy 2>/dev/null | head -1)
+      [ -n "$s" ] || { echo "$NAME: --proxy home needs the home-proxy skill, which isn't installed" >&2; return 1; }
       bash "$s/setup.sh" >/dev/null || return 1
     fi
-    home-exit start >/dev/null || return 1
+    home-proxy start >/dev/null || return 1
   }
   case "${1:-}" in
     start)
@@ -822,10 +822,10 @@ if [ "$TIER" = proxy ]; then
       case "$url" in socks5h://*) url=socks5://${url#socks5h://} ;; esac
       platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-America/New_York}
       if [ "$url" = home ]; then
-        home_exit || exit 1
-        # The home exit is an Android phone: sites read its TCP/IP fingerprint as
+        home_proxy || exit 1
+        # The home proxy is an Android phone: sites read its TCP/IP fingerprint as
         # Linux-like, and DataDome hard-blocks a "Windows" browser arriving that way.
-        url=$HOME_URL platform=${CLOAK_PLATFORM:-linux} tz=${CLOAK_TIMEZONE:-$(home-exit tz)}
+        url=$HOME_URL platform=${CLOAK_PLATFORM:-linux} tz=${CLOAK_TIMEZONE:-$(home-proxy tz)}
       fi
       case "$url" in
         http://*|https://*|socks4://*|socks5://*) ;;
@@ -847,7 +847,7 @@ if [ "$TIER" = proxy ]; then
   esac
   if ! up; then
     [ -n "$(current)" ] || { echo "$NAME: not started. Run: $NAME start --proxy <url>" >&2; exit 1; }
-    if [ "$(current)" = "$HOME_URL" ]; then home_exit || exit 1; fi
+    if [ "$(current)" = "$HOME_URL" ]; then home_proxy || exit 1; fi
     launch || exit 1
     echo "$NAME: restarted its browser (the sandbox was recycled), through $(current). It has no page loaded: nav first." >&2
   fi

@@ -11,8 +11,8 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NAME = "home-exit"
-MEMBERS = ["SKILL.md", "setup.sh", "bin/home-exit"]
+NAME = "home-tailscale"
+MEMBERS = ["SKILL.md", "setup.sh", "bin/home-tailscale"]
 AUTHKEY = "tailscale-authkey"
 
 

@@ -69,9 +69,8 @@ skipping them saves traffic and load time. Under `--block-media` video players
 show an error instead. A rule of thumb, by what traffic costs where:
 
 - `pinchtab`, `pinchtab-windows`: leave images on. Traffic is free.
-- `pinchtab-proxy --proxy home`: `--block-media` for text-only reading. The
-  relay runs at about 5 Mbps over Louie's home line, so an image-heavy page
-  loads several seconds slower.
+- `pinchtab-proxy --proxy home`: leave images on unless the page is heavy. It
+  runs at Louie's home upload, about 30 Mbps.
 - `pinchtab-cloud`: `--block-media` unless you need images or video. Traffic
   is billed, and a page with images runs to several MB.
 
@@ -296,14 +295,14 @@ Louie's home IP, for a site that bans this sandbox's datacenter IP, and Tor, for
 a host this sandbox's egress proxy blocks or a `.onion` address:
 
 ```bash
-pinchtab-proxy start --proxy home                      # Louie's home IP, via the home-exit skill
+pinchtab-proxy start --proxy home                      # Louie's home IP, via the home-proxy skill
 pinchtab-proxy start --proxy socks5://127.0.0.1:9050   # tor-proxy; socks5h:// works too; or http://host:port
 pinchtab-proxy execute-batch <<'EOF'
 nav <url> --block-media
 EOF
 ```
 
-- `--proxy home` starts the home-exit skill itself and presents the browser as
+- `--proxy home` starts the home-proxy skill itself and presents the browser as
   Linux in the exit's timezone, matching the Android phone the connections leave
   from; a "Windows" browser arriving that way gets a hard DataDome 403. His
   home network is reachable through it too (his router is `http://172.16.0.1/`).
@@ -313,7 +312,7 @@ EOF
   resolves names, so `.onion` works and lookups stay off this sandbox's DNS.
 - `CLOAK_PLATFORM` and `CLOAK_TIMEZONE` on `start` override the fingerprint.
 - It keeps the proxy: if the sandbox was recycled, the next command brings the
-  browser back through it (restarting home-exit if needed), with no page loaded.
+  browser back through it (restarting home-proxy if needed), with no page loaded.
 - `pinchtab-proxy status`; `pinchtab-proxy stop` when the task is done, since it
   is a second Chrome: about 0.4 GB, and on a 2-vCPU sandbox it competes with
   the main browser for CPU.

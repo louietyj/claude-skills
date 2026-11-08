@@ -1,0 +1,180 @@
+#!/bin/bash
+# home-tailscale: join Louie's tailnet from this sandbox.
+#
+#   home-tailscale start [--userspace] [--exit]   join (installs Tailscale once); prints how to reach things
+#   home-tailscale status
+#   home-tailscale routes     his home network ranges, as advertised in the tailnet
+#   home-tailscale stop       leave the tailnet (the ephemeral device disappears) and stop tailscaled
+#
+# Kernel mode (the default where the sandbox can create a TUN device, e.g. cloud Claude Code): a real
+# tailscale0 interface, so any program gets native TCP and UDP to tailnet devices and his home LAN.
+# Userspace mode (--userspace, or where there is no TUN): a local SOCKS5/HTTP proxy instead.
+# --exit (implies --userspace): internet traffic through that proxy leaves from his home exit node. In
+# kernel mode an exit node would also capture the sandbox's own tunnels to its egress proxy.
+set -uo pipefail
+
+VERSION=1.104.5
+SHA256=720cbbccbfc03d8b55df72afc19e5a72e31b0f65934700aa6fa38074d4ad7bf7
+TARBALL="tailscale_${VERSION}_amd64.tgz"
+URL="https://pkgs.tailscale.com/stable/$TARBALL"
+
+SOCKS_PORT=${HOME_TAILSCALE_SOCKS_PORT:-1055}
+HTTP_PORT=${HOME_TAILSCALE_HTTP_PORT:-1056}
+EXIT_NODE=${HOME_TAILSCALE_EXIT_NODE:-}
+HOME_DIR=${HOME_TAILSCALE_HOME:-$HOME/.cache/home-tailscale}
+BIN="$HOME_DIR/tailscale_${VERSION}_amd64"
+STATE="$HOME_DIR/state"
+SOCK="$HOME_DIR/tailscaled.sock"
+LOG="$HOME_DIR/tailscaled.log"
+PIDFILE="$HOME_DIR/tailscaled.pid"
+MODEFILE="$HOME_DIR/mode"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+die() { printf 'home-tailscale: %s\n' "$1" >&2; exit 1; }
+ts() { "$BIN/tailscale" --socket="$SOCK" "$@"; }
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+status_json() { ts status --json 2>/dev/null; }
+field() { status_json | python3 -c "import json, sys; d = json.load(sys.stdin); print($1)" 2>/dev/null; }
+
+# Through the tailnet's SOCKS proxy only: the egress proxy must not catch these requests.
+via_socks() { env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+  curl -sS --max-time 30 --socks5-hostname "127.0.0.1:$SOCKS_PORT" "$@"; }
+
+auth_key() {
+  local f
+  for f in "${HOME_TAILSCALE_AUTHKEY:-}" "${TS_AUTHKEY:-}"; do [ -n "$f" ] && { echo "$f"; return; }; done
+  for f in "$SKILL_DIR/tailscale-authkey" "$HOME/dot-claude/secrets/tailscale-authkey"; do
+    [ -s "$f" ] && { tr -d '\r\n ' < "$f"; return; }
+  done
+  if command -v cfs >/dev/null 2>&1; then
+    local tmp="$HOME_DIR/authkey.tmp"
+    cfs download /_devfiles/dot-claude/secrets/tailscale-authkey --to "$tmp" >/dev/null 2>&1 \
+      && { tr -d '\r\n ' < "$tmp"; rm -f "$tmp"; return; }
+    rm -f "$tmp"
+  fi
+}
+
+fetch_tailscale() {
+  [ -x "$BIN/tailscaled" ] && return 0
+  mkdir -p "$HOME_DIR"
+  local tmp="$HOME_DIR/$TARBALL.part"
+  curl -sSfL --max-time 180 -o "$tmp" "$URL" || die "could not download $TARBALL from pkgs.tailscale.com."
+  echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 \
+    || { rm -f "$tmp"; die "$TARBALL failed its SHA-256 check -- not using it."; }
+  tar -xzf "$tmp" -C "$HOME_DIR" && rm -f "$tmp" || die "could not unpack $TARBALL."
+}
+
+# Whichever online peer offers itself as an exit node; $HOME_TAILSCALE_EXIT_NODE picks one by name.
+pick_exit_node() {
+  status_json | python3 -c '
+import json, sys
+want = sys.argv[1]
+peers = (json.load(sys.stdin).get("Peer") or {}).values()
+offer = [p for p in peers if p.get("ExitNodeOption") and p.get("Online")]
+name = lambda p: p.get("DNSName", "").split(".")[0]
+if want:
+    offer = [p for p in offer if want in (name(p), p.get("HostName"))]
+if len(offer) != 1:
+    found = ", ".join(name(p) for p in offer) or "none online"
+    sys.exit(f"need exactly one exit node, found: {found}" + ("" if want else "; set HOME_TAILSCALE_EXIT_NODE to pick one"))
+print(offer[0]["TailscaleIPs"][0])
+' "$EXIT_NODE"
+}
+
+launch() { # kernel|userspace
+  local ca=${SSL_CERT_FILE:-} args
+  # tailscaled verifies TLS itself: give it the egress proxy's CA where there is one.
+  [ -z "$ca" ] && [ -f /root/.ccr/ca-bundle.crt ] && ca=/root/.ccr/ca-bundle.crt
+  if [ "$1" = kernel ]; then
+    args=(--tun=tailscale0 --port=0)
+  else
+    args=(--tun=userspace-networking --socks5-server="127.0.0.1:$SOCKS_PORT" --outbound-http-proxy-listen="127.0.0.1:$HTTP_PORT")
+  fi
+  SSL_CERT_FILE=$ca setsid "$BIN/tailscaled" --statedir="$STATE" --socket="$SOCK" "${args[@]}" > "$LOG" 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+  local i
+  for i in $(seq 1 20); do
+    [ -S "$SOCK" ] && running && return 0
+    running || return 1
+    sleep 0.5
+  done
+  running
+}
+
+summary() {
+  local mode; mode=$(cat "$MODEFILE" 2>/dev/null)
+  echo "  tailnet IP: $(ts ip -4 2>/dev/null), mode: $mode"
+  echo "  home LAN routes: $(cmd_routes)"
+  if [ "${mode%% *}" = kernel ]; then
+    echo "  native TCP/UDP to tailnet IPs and those ranges, no proxy needed (unset NO_PROXY for curl)"
+  else
+    echo "  SOCKS5: socks5h://127.0.0.1:$SOCKS_PORT   HTTP: http://127.0.0.1:$HTTP_PORT"
+    [ "$mode" = "userspace exit" ] && echo "  internet via the exit node: $(via_socks https://ipinfo.io/ip 2>/dev/null)"
+  fi
+}
+
+cmd_start() {
+  local want=kernel exit=""
+  for a in "$@"; do
+    case "$a" in
+      --userspace) want=userspace ;;
+      --exit) want=userspace exit=1 ;;
+      *) die "unknown option $a" ;;
+    esac
+  done
+  local wantmode="$want${exit:+ exit}"
+  mkdir -p "$HOME_DIR" "$STATE"
+  if running && [ "$(field 'd.get("BackendState", "")')" = Running ] && [ "$(cat "$MODEFILE" 2>/dev/null)" = "$wantmode" ] \
+     && { [ -z "$exit" ] || [ -n "$(ts debug prefs 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("ExitNodeID", ""))')" ]; }; then
+    echo "home-tailscale: already up."; summary; return 0
+  fi
+  running && { ts logout >/dev/null 2>&1; kill "$(cat "$PIDFILE")" 2>/dev/null; sleep 1; }
+  fetch_tailscale
+  local key; key=$(auth_key)
+  [ -n "$key" ] || die "no auth key: put it in $SKILL_DIR/tailscale-authkey, set HOME_TAILSCALE_AUTHKEY, or keep it in the store at /_devfiles/dot-claude/secrets/tailscale-authkey."
+  if [ "$want" = kernel ] && ! launch kernel; then
+    echo "home-tailscale: no TUN device here (see $LOG); using userspace mode." >&2
+    want=userspace wantmode=userspace
+  fi
+  [ "$want" = userspace ] && { launch userspace || { tail -5 "$LOG" >&2; die "tailscaled did not start."; }; }
+  echo "$wantmode" > "$MODEFILE"
+  # --accept-routes: his home LAN, advertised as a subnet route. --accept-dns=false: leave resolv.conf alone.
+  ts up --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --accept-routes --timeout=60s >/dev/null 2>&1 \
+    || { tail -5 "$LOG" >&2; die "could not join the tailnet (is the auth key expired? it was made 2026-11-06 for 90 days)."; }
+  if [ -n "$exit" ]; then
+    local node; node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
+    ts set --exit-node="$node" --exit-node-allow-lan-access=false || die "could not set the exit node."
+    local i
+    for i in $(seq 1 15); do via_socks -o /dev/null https://ipinfo.io/ip 2>/dev/null && break; sleep 2; done
+    [ "$i" -lt 15 ] || die "the exit node is set but no traffic comes back through it. Is the phone online and on Wi-Fi?"
+  fi
+  echo "home-tailscale: up."; summary
+}
+
+cmd_status() {
+  running || { echo "home-tailscale: not running. Start it with: home-tailscale start"; return 3; }
+  echo "home-tailscale: tailscaled running, state $(field 'd.get("BackendState", "")')"
+  ts status 2>/dev/null | head -8 | sed 's/^/  /'
+  summary
+}
+
+cmd_routes() {
+  running || die "not running; run home-tailscale start."
+  field '",".join(sorted({r for p in (d.get("Peer") or {}).values() if p.get("Online") for r in (p.get("PrimaryRoutes") or []) if r not in ("0.0.0.0/0", "::/0")}))'
+}
+
+cmd_stop() {
+  running || { echo "home-tailscale: not running."; return 0; }
+  ts logout >/dev/null 2>&1
+  kill "$(cat "$PIDFILE")" 2>/dev/null
+  rm -f "$PIDFILE" "$MODEFILE"
+  echo "home-tailscale: stopped; this sandbox left the tailnet."
+}
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  status) cmd_status ;;
+  routes) cmd_routes ;;
+  stop) cmd_stop ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

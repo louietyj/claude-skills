@@ -1,0 +1,117 @@
+#!/bin/bash
+# home-proxy: Louie's home internet as a local SOCKS5/HTTP proxy, over a WebSocket tunnel to his
+# home relay phone (github.com/louietyj/home-relay, proxy.home.louietyj.me).
+#
+#   home-proxy start     fetch the client (once), connect, wait until traffic flows; prints the exit IP
+#   home-proxy status    running? exit IP
+#   home-proxy tz        the exit IP's IANA timezone, for matching a browser's timezone to it
+#   home-proxy stop
+set -uo pipefail
+
+SHA256=4f975bbf4890ebc182c1bacafeb0a468e63f2edb2cc9c896f9cacd82fa9e8848   # gost, linux/amd64, stripped
+GOST_MODULE=github.com/go-gost/gost/cmd/gost@v0.0.0-20261102125854-3d514c57230b
+STORE_BIN=/_devfiles/home-relay/gost-linux-amd64
+STORE_AUTH=/_devfiles/home-relay/secrets/gost-auth.env
+SERVER=${HOME_PROXY_SERVER:-proxy.home.louietyj.me:443}
+
+SOCKS_PORT=${HOME_PROXY_SOCKS_PORT:-1080}
+HTTP_PORT=${HOME_PROXY_HTTP_PORT:-1081}
+HOME_DIR=${HOME_PROXY_HOME:-$HOME/.cache/home-proxy}
+BIN="$HOME_DIR/gost"
+PIDFILE="$HOME_DIR/gost.pid"
+LOG="$HOME_DIR/gost.log"
+INFO="$HOME_DIR/exit.json"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+die() { printf 'home-proxy: %s\n' "$1" >&2; exit 1; }
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+via_proxy() { env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+  curl -sS --max-time 20 --socks5-hostname "127.0.0.1:$SOCKS_PORT" "$@"; }
+
+describe() {
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("  exit IP: %s (%s, %s), timezone %s" % (d.get("ip"), d.get("org"), d.get("city"), d.get("timezone")))
+' "$INFO"
+  echo "  SOCKS5: socks5h://127.0.0.1:$SOCKS_PORT"
+  echo "  HTTP:   http://127.0.0.1:$HTTP_PORT"
+}
+
+# "user:pass" from $HOME_PROXY_AUTH, gost-auth.env beside this skill, or the cfs store.
+credentials() {
+  [ -n "${HOME_PROXY_AUTH:-}" ] && { echo "$HOME_PROXY_AUTH"; return; }
+  local f="$SKILL_DIR/gost-auth.env" tmp="$HOME_DIR/auth.tmp"
+  if [ ! -s "$f" ] && command -v cfs >/dev/null 2>&1 && cfs download "$STORE_AUTH" --to "$tmp" >/dev/null 2>&1; then
+    f=$tmp
+  fi
+  [ -s "$f" ] && (. "$f"; [ -n "${GOST_USER:-}" ] && echo "$GOST_USER:$GOST_PASS")
+  rm -f "$tmp"
+}
+
+fetch_gost() {
+  [ -x "$BIN" ] && return 0
+  mkdir -p "$HOME_DIR"
+  local tmp="$BIN.part"
+  if command -v cfs >/dev/null 2>&1 && cfs download "$STORE_BIN" --to "$tmp" >/dev/null 2>&1; then
+    echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 || { rm -f "$tmp"; die "the stored gost binary failed its SHA-256 check."; }
+  elif command -v go >/dev/null 2>&1; then
+    echo "home-proxy: no stored client; building gost from source (a few minutes)..." >&2
+    GOBIN="$HOME_DIR/gobin" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -trimpath -ldflags='-s -w' "$GOST_MODULE" >&2 \
+      && mv "$HOME_DIR/gobin/gost" "$tmp" || die "could not build gost."
+  else
+    die "no gost client: the cfs store (durable-filesystem skill) has it at $STORE_BIN."
+  fi
+  chmod +x "$tmp" && mv "$tmp" "$BIN"
+}
+
+cmd_start() {
+  mkdir -p "$HOME_DIR"
+  if running && via_proxy -o "$INFO" https://ipinfo.io/json 2>/dev/null; then
+    echo "home-proxy: already up."; describe; return 0
+  fi
+  running && kill "$(cat "$PIDFILE")" 2>/dev/null
+  fetch_gost
+  local auth; auth=$(credentials)
+  [ -n "$auth" ] || die "no credentials: put gost-auth.env beside this skill, set HOME_PROXY_AUTH=user:pass, or keep it in the store at $STORE_AUTH."
+  # Behind the sandbox's egress proxy, reach the server through it with an HTTP CONNECT hop.
+  local chain=() up=${HTTPS_PROXY:-${https_proxy:-}}
+  [ -n "$up" ] && chain=(-F "http://${up#*://}")
+  local ca=${SSL_CERT_FILE:-}
+  [ -z "$ca" ] && [ -f /root/.ccr/ca-bundle.crt ] && ca=/root/.ccr/ca-bundle.crt
+  SSL_CERT_FILE=$ca setsid "$BIN" -L "socks5://127.0.0.1:$SOCKS_PORT" -L "http://127.0.0.1:$HTTP_PORT" \
+    "${chain[@]}" -F "relay+wss://$auth@$SERVER" > "$LOG" 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+  local i
+  for i in $(seq 1 10); do
+    sleep 1
+    via_proxy -o "$INFO" https://ipinfo.io/json 2>/dev/null && { echo "home-proxy: up."; describe; return 0; }
+  done
+  tail -3 "$LOG" >&2
+  die "connected nothing in 10 s. Is the home relay phone up? (github.com/louietyj/home-relay)"
+}
+
+cmd_status() {
+  running || { echo "home-proxy: not running. Start it with: home-proxy start"; return 3; }
+  via_proxy -o "$INFO" https://ipinfo.io/json && { echo "home-proxy: up."; describe; } || die "running, but no traffic flows."
+}
+
+cmd_tz() {
+  [ -s "$INFO" ] || via_proxy -o "$INFO" https://ipinfo.io/json 2>/dev/null || die "not up; run home-proxy start."
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["timezone"])' "$INFO"
+}
+
+cmd_stop() {
+  running && kill "$(cat "$PIDFILE")" 2>/dev/null
+  rm -f "$PIDFILE" "$INFO"
+  echo "home-proxy: stopped."
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  status) cmd_status ;;
+  tz) cmd_tz ;;
+  stop) cmd_stop ;;
+  *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

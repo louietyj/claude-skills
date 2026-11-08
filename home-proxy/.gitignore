@@ -1,0 +1,4 @@
+# Built by package.py; embeds the credentials.
+*.zip
+# The proxy password; snapshot at /_devfiles/home-relay/secrets/gost-auth.env.
+gost-auth.env

@@ -1,17 +1,17 @@
 #!/bin/bash
-# Puts `home-exit` on PATH and starts it. Idempotent -- re-run it rather than
+# Puts `home-tailscale` on PATH and starts it. Idempotent -- re-run it rather than
 # working out whether it already ran.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CLI="$HERE/bin/home-exit"
+CLI="$HERE/bin/home-tailscale"
 
 fail() {
-  printf 'home-exit is NOT ready: %s\n' "$1" >&2
+  printf 'home-tailscale is NOT ready: %s\n' "$1" >&2
   exit 1
 }
 
-[ -f "$CLI" ] || fail "bin/home-exit not found -- the skill files are missing."
+[ -f "$CLI" ] || fail "bin/home-tailscale not found -- the skill files are missing."
 for tool in curl python3 sha256sum tar setsid; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed."
 done
@@ -23,11 +23,11 @@ for dir in /usr/local/bin /usr/bin "$HOME/.local/bin"; do
 done
 [ -n "$BIN_DIR" ] || fail "no writable directory on PATH for the shim."
 
-cat > "$BIN_DIR/home-exit" <<SHIM_EOF
+cat > "$BIN_DIR/home-tailscale" <<SHIM_EOF
 #!/bin/sh
-# home-exit shim -- installed by home-exit/setup.sh, rewritten on every run.
+# home-tailscale shim -- installed by home-tailscale/setup.sh, rewritten on every run.
 exec bash "$CLI" "\$@"
 SHIM_EOF
-chmod +x "$BIN_DIR/home-exit"
+chmod +x "$BIN_DIR/home-tailscale"
 
-"$BIN_DIR/home-exit" start || fail "the lines above say why."
+"$BIN_DIR/home-tailscale" start || fail "the lines above say why."

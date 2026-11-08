@@ -9,8 +9,8 @@
 # Kernel mode (the default where the sandbox can create a TUN device, e.g. cloud Claude Code): a real
 # tailscale0 interface, so any program gets native TCP and UDP to tailnet devices and his home LAN.
 # Userspace mode (--userspace, or where there is no TUN): a local SOCKS5/HTTP proxy instead.
-# --exit (implies --userspace): internet traffic through that proxy leaves from his home exit node. In
-# kernel mode an exit node would also capture the sandbox's own tunnels to its egress proxy.
+# --exit: internet traffic leaves from his home exit node too: natively in kernel mode (see "Kernel-mode
+# exit node" below for how the sandbox's own egress stays off it), through the proxy in userspace mode.
 set -uo pipefail
 
 VERSION=1.104.5
@@ -28,6 +28,14 @@ SOCK="$HOME_DIR/tailscaled.sock"
 LOG="$HOME_DIR/tailscaled.log"
 PIDFILE="$HOME_DIR/tailscaled.pid"
 MODEFILE="$HOME_DIR/mode"
+GUARDPID="$HOME_DIR/guard.pid"
+GUARDLOG="$HOME_DIR/guard.log"
+EXCLUDED="$HOME_DIR/excluded"   # CIDRs we sent to the main table, one per line
+INFRA="$HOME_DIR/infra-pids"    # processes that held upstream connections when the exit node went on
+RULE_MIN=100                    # our ip rules' priorities, ahead of tailscaled's 5210-5270
+RULE_MAX=199
+SEED_RANGE=160.79.104.0/23      # Anthropic's API: every swept sandbox's harness and egress-proxy upstreams
+ANTHROPIC_HOSTS="api.anthropic.com claude.ai mcp-proxy.anthropic.com"
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 die() { printf 'home-tailscale: %s\n' "$1" >&2; exit 1; }
@@ -65,7 +73,14 @@ fetch_tailscale() {
 }
 
 # Whichever online peer offers itself as an exit node; $HOME_TAILSCALE_EXIT_NODE picks one by name.
+# Peers show as offline for a few seconds after joining, hence the retries.
 pick_exit_node() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9; do pick_exit_node_once 2>/dev/null && return 0; sleep 1; done
+  pick_exit_node_once
+}
+
+pick_exit_node_once() {
   status_json | python3 -c '
 import json, sys
 want = sys.argv[1]
@@ -101,12 +116,174 @@ launch() { # kernel|userspace
   running
 }
 
+# ---- Kernel-mode exit node ---------------------------------------------------------------------------
+# An exit node puts `default dev tailscale0` in table 52. tailscaled's own sockets skip it (fwmark), but the
+# harness and the egress proxy talk to Anthropic directly, and tailscaled reaches DERP through that proxy:
+# if their connections get pulled into the tailnet, DERP dies, egress dies, and so does the session's next
+# inference call. So every upstream gets an `ip rule ... lookup main` ahead of tailscaled's rules before the
+# exit node goes on, routes are asserted right after, and a background guard keeps sweeping and probing.
+# Never delete tailscaled's own rules: it puts them back within seconds.
+
+our_rules() { ip rule show | awk -F: -v lo=$RULE_MIN -v hi=$RULE_MAX '$1 + 0 >= lo && $1 + 0 <= hi {print $1 + 0}'; }
+
+remove_rules() {
+  local p
+  for p in $(our_rules); do ip rule del priority "$p" 2>/dev/null; done
+  rm -f "$EXCLUDED"
+}
+
+add_rule() { # cidr
+  grep -qxF "$1" "$EXCLUDED" 2>/dev/null && return 0
+  local p=$RULE_MIN
+  while our_rules | grep -qx "$p"; do p=$((p + 1)); done
+  [ "$p" -le $RULE_MAX ] || { echo "home-tailscale: no free rule priority for $1" >&2; return 1; }
+  ip rule add to "$1" lookup main priority "$p" && echo "$1" >> "$EXCLUDED"
+}
+
+# Public IPv4s that matter to the sandbox: remote ends of ESTABLISHED TCP connections (from the processes in
+# $INFRA once recorded, else from every process but tailscaled, and not already riding the tailnet), plus the
+# current addresses of Anthropic's hostnames (not with "nodns": with routing broken, DNS hangs for seconds).
+# With "record", also writes the owning pids to $INFRA.
+upstreams() {
+  local hosts="$ANTHROPIC_HOSTS ${ANTHROPIC_BASE_URL:-}"
+  [ "${1:-}" = nodns ] && hosts=""
+  python3 - "${1:-}" "$INFRA" "$(pgrep -d, -x tailscaled)" "$hosts" <<'PY'
+import glob, ipaddress, os, socket, struct, sys
+record, infra_file, ts_pids, hosts = sys.argv[1] == "record", sys.argv[2], set(sys.argv[3].split(",")), sys.argv[4]
+infra = None
+if not record and os.path.exists(infra_file):
+    infra = set(open(infra_file).read().split())
+owner = {}
+for fd in glob.glob("/proc/[0-9]*/fd/*"):
+    try:
+        link = os.readlink(fd)
+    except OSError:
+        continue
+    if link.startswith("socket:["):
+        owner[link[8:-1]] = fd.split("/")[2]
+local_nets = [ipaddress.ip_network(n) for n in
+              ("127.0.0.0/8", "100.64.0.0/10", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "192.0.2.0/24",
+               "169.254.0.0/16")]
+is_local = lambda ip: any(ipaddress.ip_address(ip) in n for n in local_nets)
+addr = lambda h: socket.inet_ntoa(struct.pack("<I", int(h.split(":")[0], 16)))
+ips, pids = set(), set()
+for line in open("/proc/net/tcp").readlines()[1:]:
+    f = line.split()
+    pid = owner.get(f[9])
+    if f[3] != "01" or pid is None or pid in ts_pids or (infra is not None and pid not in infra):
+        continue
+    src, dst = addr(f[1]), addr(f[2])
+    if is_local(dst) or (infra is None and src.startswith("100.")):
+        continue
+    ips.add(dst)
+    pids.add(pid)
+for host in hosts.split():
+    host = host.split("://")[-1].split("/")[0].split(":")[0]
+    try:
+        ips.update(a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET))
+    except OSError:
+        pass
+if record:
+    open(infra_file, "w").write("\n".join(sorted(pids)) + "\n")
+print("\n".join(sorted(ips)))
+PY
+}
+
+# Rules for whichever of these addresses no rule covers yet.
+cover() {
+  local ip
+  for ip in $(printf '%s\n' "$@" | python3 -c '
+import ipaddress, os, sys
+nets = [ipaddress.ip_network(l.strip()) for l in open(sys.argv[1])] if os.path.exists(sys.argv[1]) else []
+for l in sys.stdin:
+    l = l.strip()
+    if l and not any(ipaddress.ip_address(l) in n for n in nets):
+        print(l)' "$EXCLUDED"); do
+    add_rule "$ip/32" || return 1
+  done
+}
+
+# Prints any of these addresses that would route into the tailnet.
+leaks() { local ip; for ip in "$@"; do ip route get "$ip" 2>/dev/null | grep -q 'dev tailscale0' && echo "$ip"; done; }
+
+# The egress proxy feeds DERP, so it is the thing that must keep working; where there is none, Anthropic directly.
+egress_ok() {
+  local code t=${EGRESS_TIMEOUT:-10}
+  if [ -n "${HTTPS_PROXY:-${https_proxy:-}}" ]; then
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$t" https://example.com)
+  else
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$t" https://api.anthropic.com/)
+  fi
+  [ "$code" != 000 ]
+}
+
+exit_off() { # reason
+  ts set --exit-node= >/dev/null 2>&1
+  remove_rules
+  [ "$(cat "$MODEFILE" 2>/dev/null)" = "kernel exit" ] && echo kernel > "$MODEFILE"
+  [ -n "${1:-}" ] && echo "$(date '+%F %T') exit node off: $1" >> "$GUARDLOG"
+}
+
+# The pid file outlives a VM reboot (the disk persists), so check the pid is still a guard.
+guard_alive() { [ -f "$GUARDPID" ] && grep -qa '_guard' "/proc/$(cat "$GUARDPID")/cmdline" 2>/dev/null; }
+
+stop_guard() { guard_alive && kill "$(cat "$GUARDPID")" 2>/dev/null; rm -f "$GUARDPID"; }
+
+exit_healthy() { # mode
+  case "$1" in
+    "kernel exit") guard_alive && [ -n "$(exit_node_id)" ] && egress_ok ;;
+    "userspace exit") [ -n "$(exit_node_id)" ] ;;
+    *) true ;;
+  esac
+}
+
+exit_node_id() { ts debug prefs 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("ExitNodeID", ""))' 2>/dev/null; }
+
+# Runs in the background while a kernel-mode exit node is on, as the dead-man switch: every 5 s it covers
+# new upstreams of the recorded processes and takes the exit node down at once if any of them would route
+# into the tailnet; every 15 s it also probes the egress proxy. It has to be fast: in cloud Claude Code a
+# blackout of well under a minute got the session's worker restarted. Dies with the VM, as do the rules.
+cmd_guard() {
+  echo $$ > "$GUARDPID"
+  local tick=0 ups bad
+  ups=$(upstreams nodns)
+  while running && [ "$(cat "$MODEFILE" 2>/dev/null)" = "kernel exit" ]; do
+    bad=$(leaks $ups)   # last tick's addresses first: instant, before anything that could block
+    [ -z "$bad" ] || { exit_off "route check: $(echo $bad)"; break; }
+    ups=$(upstreams nodns)
+    cover $ups || true
+    if [ $((tick % 3)) -eq 0 ] && ! EGRESS_TIMEOUT=5 egress_ok; then exit_off "egress probe failed"; break; fi
+    tick=$((tick + 1))
+    sleep 5
+  done
+  rm -f "$GUARDPID"
+}
+
+kernel_exit_on() {
+  command -v ip >/dev/null 2>&1 || apt-get install -y -qq iproute2 >/dev/null 2>&1 || die "kernel-mode --exit needs iproute2 (ip)."
+  local node ups bad
+  node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
+  add_rule "$SEED_RANGE" || die "could not add the $SEED_RANGE rule."
+  ups=$(upstreams record)
+  cover $ups || { exit_off; die "could not add rules for the sandbox's upstreams."; }
+  echo "kernel exit" > "$MODEFILE"
+  stop_guard
+  setsid bash "$0" _guard >> "$GUARDLOG" 2>&1 < /dev/null &
+  ts set --exit-node="$node" --exit-node-allow-lan-access=true || { exit_off; die "could not set the exit node."; }
+  bad=$(leaks $ups $(upstreams))
+  [ -z "$bad" ] || { exit_off "route check"; die "exit node rolled back: these upstreams would route into the tailnet: $bad"; }
+  egress_ok || { exit_off "egress check"; die "exit node rolled back: the egress proxy stopped answering. Upstreams seen: $(echo $ups)"; }
+}
+
 summary() {
   local mode; mode=$(cat "$MODEFILE" 2>/dev/null)
   echo "  tailnet IP: $(ts ip -4 2>/dev/null), mode: $mode"
   echo "  home LAN routes: $(cmd_routes)"
-  if [ "${mode%% *}" = kernel ]; then
-    echo "  native TCP/UDP to tailnet IPs and those ranges, no proxy needed (unset NO_PROXY for curl)"
+  if [ "$mode" = "kernel exit" ]; then
+    echo "  native TCP/UDP to the internet too, from $(env -u HTTPS_PROXY -u https_proxy curl -s --max-time 10 https://ipinfo.io/ip)"
+    echo "  (unset HTTPS_PROXY for it); kept off it: $(tr '\n' ' ' < "$EXCLUDED" 2>/dev/null)"
+  elif [ "$mode" = kernel ]; then
+    echo "  native TCP/UDP to tailnet IPs and those ranges, no proxy needed (unset HTTPS_PROXY for curl)"
   else
     echo "  SOCKS5: socks5h://127.0.0.1:$SOCKS_PORT   HTTP: http://127.0.0.1:$HTTP_PORT"
     [ "$mode" = "userspace exit" ] && echo "  internet via the exit node: $(via_socks https://ipinfo.io/ip 2>/dev/null)"
@@ -118,35 +295,45 @@ cmd_start() {
   for a in "$@"; do
     case "$a" in
       --userspace) want=userspace ;;
-      --exit) want=userspace exit=1 ;;
+      --exit) exit=1 ;;
       *) die "unknown option $a" ;;
     esac
   done
-  local wantmode="$want${exit:+ exit}"
   mkdir -p "$HOME_DIR" "$STATE"
-  if running && [ "$(field 'd.get("BackendState", "")')" = Running ] && [ "$(cat "$MODEFILE" 2>/dev/null)" = "$wantmode" ] \
-     && { [ -z "$exit" ] || [ -n "$(ts debug prefs 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("ExitNodeID", ""))')" ]; }; then
+  local cur up=""
+  cur=$(cat "$MODEFILE" 2>/dev/null)
+  running && [ "$(field 'd.get("BackendState", "")')" = Running ] && up=1
+  if [ -n "$up" ] && [ "$cur" = "$want${exit:+ exit}" ] && exit_healthy "$cur"; then
     echo "home-tailscale: already up."; summary; return 0
   fi
-  running && { ts logout >/dev/null 2>&1; kill "$(cat "$PIDFILE")" 2>/dev/null; sleep 1; }
-  fetch_tailscale
-  local key; key=$(auth_key)
-  [ -n "$key" ] || die "no auth key: put it in $SKILL_DIR/tailscale-authkey, set HOME_TAILSCALE_AUTHKEY, or keep it in the store at /_devfiles/dot-claude/secrets/tailscale-authkey."
-  if [ "$want" = kernel ] && ! launch kernel; then
-    echo "home-tailscale: no TUN device here (see $LOG); using userspace mode." >&2
-    want=userspace wantmode=userspace
+  if [ -z "$up" ] || [ "${cur%% *}" != "$want" ]; then
+    stop_guard; [ "$cur" = "kernel exit" ] && remove_rules
+    running && { ts logout >/dev/null 2>&1; kill "$(cat "$PIDFILE")" 2>/dev/null; sleep 1; }
+    fetch_tailscale
+    local key; key=$(auth_key)
+    [ -n "$key" ] || die "no auth key: put it in $SKILL_DIR/tailscale-authkey, set HOME_TAILSCALE_AUTHKEY, or keep it in the store at /_devfiles/dot-claude/secrets/tailscale-authkey."
+    if [ "$want" = kernel ] && ! launch kernel; then
+      echo "home-tailscale: no TUN device here (see $LOG); using userspace mode." >&2
+      want=userspace
+    fi
+    [ "$want" = userspace ] && { launch userspace || { tail -5 "$LOG" >&2; die "tailscaled did not start."; }; }
+    echo "$want" > "$MODEFILE"
+    # --accept-routes: his home LAN, advertised as a subnet route. --accept-dns=false: leave resolv.conf alone.
+    # --reset: the state dir outlives a VM reboot, and `up` refuses to run over prefs it isn't restating.
+    ts up --reset --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --accept-routes --timeout=60s >/dev/null 2>&1 \
+      || { tail -5 "$LOG" >&2; die "could not join the tailnet (is the auth key expired? it was made 2026-11-06 for 90 days)."; }
   fi
-  [ "$want" = userspace ] && { launch userspace || { tail -5 "$LOG" >&2; die "tailscaled did not start."; }; }
-  echo "$wantmode" > "$MODEFILE"
-  # --accept-routes: his home LAN, advertised as a subnet route. --accept-dns=false: leave resolv.conf alone.
-  ts up --auth-key="$key" --hostname="claude-$(hostname | cut -c1-20)" --accept-dns=false --accept-routes --timeout=60s >/dev/null 2>&1 \
-    || { tail -5 "$LOG" >&2; die "could not join the tailnet (is the auth key expired? it was made 2026-11-06 for 90 days)."; }
-  if [ -n "$exit" ]; then
-    local node; node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
+  want=$(cat "$MODEFILE"); want=${want%% *}
+  if [ -z "$exit" ]; then
+    stop_guard; exit_off; echo "$want" > "$MODEFILE"
+  elif [ "$want" = kernel ]; then
+    kernel_exit_on
+  else
+    local node i; node=$(pick_exit_node) || die "joined, but $(pick_exit_node 2>&1). Is Tailscale on the phone, with Run as exit node on?"
     ts set --exit-node="$node" --exit-node-allow-lan-access=false || die "could not set the exit node."
-    local i
     for i in $(seq 1 15); do via_socks -o /dev/null https://ipinfo.io/ip 2>/dev/null && break; sleep 2; done
     [ "$i" -lt 15 ] || die "the exit node is set but no traffic comes back through it. Is the phone online and on Wi-Fi?"
+    echo "userspace exit" > "$MODEFILE"
   fi
   echo "home-tailscale: up."; summary
 }
@@ -164,6 +351,8 @@ cmd_routes() {
 }
 
 cmd_stop() {
+  stop_guard
+  [ "$(cat "$MODEFILE" 2>/dev/null)" = "kernel exit" ] && remove_rules
   running || { echo "home-tailscale: not running."; return 0; }
   ts logout >/dev/null 2>&1
   kill "$(cat "$PIDFILE")" 2>/dev/null
@@ -176,5 +365,6 @@ case "${1:-}" in
   status) cmd_status ;;
   routes) cmd_routes ;;
   stop) cmd_stop ;;
+  _guard) cmd_guard ;;
   *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

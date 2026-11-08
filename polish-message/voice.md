@@ -40,6 +40,11 @@ sentence or two, backs it with exact facts, and stops.
   no "I'm reaching out because". The first sentence is the situation or
   the ask: `We booked a 12pm tour on 03/07 (Booking ID ABC-123, $482.04)
   which was described as a 3h tour.`
+- **No manufactured personal hook in a cold email.** Picking a phrase off
+  their website ("Your 'life's backup plan' page is exactly what I'm
+  looking for") reads like an AI recruiter email. Mention how he found them
+  only when it explains why he's writing to *them*, e.g. their page on
+  overseas heirs when his heirs live abroad. Otherwise open with the ask.
 - **Replies open with thanks for the specific thing:** `Thanks for meeting
   me today!` / `Thanks for escalating the ticket!`
 
@@ -224,6 +229,7 @@ If a draft contains any of these, it isn't in his voice yet:
 - Em dashes, semicolon-heavy sentences, "Additionally," / "Furthermore," /
   "Moreover,".
 - A long backstory before the ask.
+- A "personalized" opener latched onto something from their site.
 - Stacked hedges: "I just wanted to quickly check whether it might be
   possible …".
 - Softening a real disagreement into "perhaps we could consider …".

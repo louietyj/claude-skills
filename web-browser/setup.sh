@@ -888,7 +888,7 @@ if [ "$TIER" = windows ]; then
                 printf '%s' "$resp" | json token > "$G"; chmod 600 "$G"; rm -f "$RQ"
                 bridge=$(printf '%s' "$resp" | json bridge_version)
                 mine=$("$REAL" --version 2>/dev/null | awk '{print $NF}')
-                echo "Approved. $NAME now drives Louie's Chrome until the grant goes idle for 30 minutes."
+                echo "Approved. $NAME now drives Louie's Chrome until the grant goes idle for 30 minutes. Keep it for the rest of the conversation; release only once he's clearly done."
                 [ "$bridge" = "$mine" ] || echo "WARNING: his bridge runs pinchtab $bridge, this sandbox $mine; commands may misbehave. Tell Louie."
                 exit 0 ;;
               denied)

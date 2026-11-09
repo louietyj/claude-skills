@@ -227,11 +227,14 @@ done (`pinchtab-windows tab close <id>`). Confirm before anything that acts as
 him: paying, sending, deleting, changing settings. A file a page downloads
 lands in his own Downloads folder; `wait --download` also copies it to you.
 
-**3. Release it** with `pinchtab-windows release` when the task is done, and
-not before: not between rounds of subagents you are still sending into his
-browser, since each release costs him another approval. A grant also lapses
-after 30 idle minutes; a command then says so, and you ask again with a new
-`grant`.
+**3. Keep it for the whole conversation.** Run `pinchtab-windows release` only
+when the conversation is clearly ending: he has said he's done, or said
+thanks and nothing is left open. Finishing the task you were asked to do isn't
+the end. If there's any chance he'll want something more, keep the grant.
+Releasing too early costs him another approval when his next message needs
+his browser. Holding it costs nothing: it lapses after 30 idle minutes, and he
+can revoke it with one click on the laptop. Once it lapses, a command says so
+and you ask again with a new `grant`.
 
 Screenshots work as for `pinchtab`, in their own directory (setup.sh names the
 `latest` paths). His window can be any size, so take every coordinate through

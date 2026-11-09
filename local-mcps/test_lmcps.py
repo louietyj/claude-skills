@@ -4,6 +4,7 @@ fake_mcp_server.py and the HTTP server is a stub in this process.
 
     python test_lmcps.py
 """
+import gzip
 import importlib.util
 import json
 import os
@@ -558,9 +559,15 @@ class StubHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
-        self.end_headers()
+        data = None
         if body is not None:
-            self.wfile.write((body if isinstance(body, str) else json.dumps(body)).encode())
+            data = (body if isinstance(body, str) else json.dumps(body)).encode()
+            if StubHandler.mode == "gzip":
+                data = gzip.compress(data)
+                self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        if data is not None:
+            self.wfile.write(data)
 
     def do_GET(self):
         """Serves the config file, standing in for the Dropbox shared link."""
@@ -633,6 +640,16 @@ class TestHttp(Base):
         r = self.run_lmcps("call", "maps", "geocode", "{}")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "51.5,-0.1")
+
+    def test_gzipped_response_is_decompressed(self):
+        """urllib never decompresses, and some servers gzip without being asked
+        (the claude.ai relay did, 2026-11-09)."""
+        StubHandler.mode = "gzip"
+        self.write_config({"maps": {"type": "http", "url": self.url}})
+        r = self.run_lmcps("call", "maps", "geocode", "{}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "51.5,-0.1")
+        self.assertEqual(StubHandler.seen_headers.get("accept-encoding"), "identity")
 
     def test_401_says_the_headers_were_rejected(self):
         StubHandler.mode = "401"

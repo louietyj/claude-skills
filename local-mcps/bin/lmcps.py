@@ -18,6 +18,7 @@ server's README works unchanged. See SKILL.md for where it comes from.
 import argparse
 import base64
 import fnmatch
+import gzip
 import hashlib
 import json
 import mimetypes
@@ -36,6 +37,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -559,15 +561,29 @@ def save_session(slot, record):
     os.replace(tmp, SESSIONS)
 
 
+def read_body(resp):
+    """urllib never decompresses, and servers may gzip unasked (the claude.ai relay does)."""
+    b = resp.read()
+    enc = (resp.headers.get("Content-Encoding") or "").lower()
+    if "gzip" in enc or b[:2] == b"\x1f\x8b":
+        b = gzip.decompress(b)
+    elif "deflate" in enc:
+        try:
+            b = zlib.decompress(b)
+        except zlib.error:  # raw deflate, no zlib header
+            b = zlib.decompress(b, -zlib.MAX_WBITS)
+    return b.decode(errors="replace")
+
+
 def http_post(name, url, headers, message):
     """Returns (response headers, body); body is None for a 202 to a notification."""
     req = urllib.request.Request(url, data=json.dumps(message).encode(),
                                  headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
-            raw, got = r.read().decode(), r.headers
+            raw, got = read_body(r), r.headers
     except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:300]
+        detail = read_body(e)[:300]
         # The spec's signal that a session is gone -- the one failure we retry.
         if e.code == 404 and "Mcp-Session-Id" in headers:
             raise SessionExpired()
@@ -618,6 +634,7 @@ def call_http(name, cfg, method, params, before_send=None):
     # Cloudflare 403s urllib's default `Python-urllib/3.x` (Alpha Vantage does).
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
+               "Accept-Encoding": "identity",
                "User-Agent": f"{CLIENT_INFO['name']}/{CLIENT_INFO['version']}"}
     # Whatever the config asks for, verbatim. The header name is the whole point
     # of this path: a connector could not have sent `tomtom-api-key` at all.

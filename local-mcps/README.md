@@ -30,7 +30,7 @@ The sandbox, meanwhile, has node 22, npm, npx, uv, uvx and python 3.12, and its 
 
 ## Where this came from
 
-`bin/lmcps.py` is a port of the `monitor-mcp` Claude Code skill's `mcp_call.py`, which already called MCP servers from outside Claude Code so the Monitor tool could poll them. The transport work carried over intact. What changed:
+`bin/lmcps.py` is a port of [`bash-mcp`](../bash-mcp/)'s `mcp_call.py` (then the `monitor-mcp` Claude Code skill), which already called MCP servers from outside Claude Code so the Monitor tool could poll them. The transport work carried over intact. What changed:
 
 - **Discovery was replaced entirely.** The original merged `~/.claude.json`, a `.mcp.json` found by walking up from the cwd, and `projects[cwd]`. None of that exists on claude.ai. There is deliberately **no** fall back to `~/.claude.json` — it would work on a Claude Code development machine and fail on the one platform this targets, which is the worst possible place for a fallback to hide a bug. A test pins that.
 - **OAuth was deleted.** `call_http` demanded a token from `~/.claude/.credentials.json` whenever `Authorization` was absent, which killed exactly the header-auth servers this exists for. Configured headers now go out verbatim and nothing is invented.

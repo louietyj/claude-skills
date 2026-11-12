@@ -254,7 +254,8 @@ the screen at all**: he is talking, standing in a queue, or on another call.
 Worth steering on, the way Louie would steer you if he were watching you work:
 - something said that contradicts an earlier statement or a fact you know;
 - a statement that deserves a fact check: a number, a term, or a claim about
-  how something works or what is normal; then check it;
+  how something works or what is normal. Check it, and steer only if the
+  check turns up something to add or refute;
 - something the other side said that he seems to have missed or skated past;
 - a better next question, or something he said he wanted to cover and hasn't;
 - Louie is stuck: he lost his thread ("where were we?"), stalls on an answer,

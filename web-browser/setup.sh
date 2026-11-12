@@ -708,15 +708,31 @@ except Exception:
 import json, sys
 print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == sys.argv[1]), ""))' "$1"
   }
-  start_cloud() {  # $1 country, or none for Browser Use's own datacenter egress
+  # Louie's home IP: the home relay's HTTPS proxy (github.com/louietyj/home-relay), its login from the cfs store.
+  home_proxy() {
+    f=$CLOUD_DIR/webproxy-auth.env
+    [ -s "$f" ] || { command -v cfs >/dev/null 2>&1 &&
+      cfs download /_devfiles/home-relay/secrets/webproxy-auth.env --to "$f" >/dev/null 2>&1 && chmod 600 "$f"; } ||
+      { echo "$NAME: no login for the home proxy: the cfs store (durable-filesystem skill) has it at /_devfiles/home-relay/secrets/webproxy-auth.env" >&2; return 1; }
+    python3 - "$f" <<'PY'
+import json, sys
+env = dict(l.strip().split("=", 1) for l in open(sys.argv[1]) if "=" in l)
+print(",\"customProxy\":" + json.dumps({"host": "webproxy.home.louietyj.me", "port": 443, "protocol": "https",
+                                        "username": env["WEBPROXY_USER"], "password": env["WEBPROXY_PASS"]}))
+PY
+  }
+  start_cloud() {  # $1 country, none for Browser Use's own datacenter egress, or home
     stop_cloud > /dev/null
-    proxy="\"$1\"" where="a $1 residential IP"
+    proxy="\"$1\"" where="a $1 residential IP" extra=
     [ "$1" = none ] && proxy=null where="Browser Use's datacenter egress (no residential proxy)"
-    extra=
+    if [ "$1" = home ]; then
+      extra=$(home_proxy) || return 1
+      proxy=null where="Louie's home IP"
+    fi
     if [ -n "$PROFILE" ]; then
       pid=$(profile_id "$PROFILE") || { echo "$NAME: could not list Browser Use profiles" >&2; return 1; }
       [ -n "$pid" ] || { echo "$NAME: no profile named \"$PROFILE\". Creating one is a separate step that needs Louie's explicit yes: $NAME profile create <name>" >&2; return 1; }
-      extra=",\"profileId\":\"$pid\""
+      extra="$extra,\"profileId\":\"$pid\""
     fi
     # 1440x900 like the local browser, so its shots stay under claude.ai's
     # shrink limit. Its own captcha solver is off: pinchtab's runs as usual.
@@ -752,7 +768,10 @@ print(next((p["id"] for p in json.load(sys.stdin)["items"] if p.get("name") == s
   case "${1:-}" in
     start)
       country=none
-      [ "${2:-}" = --country ] && country=${3:?usage: $NAME start [--country none|us|gb|...]}
+      case "${2:-}" in
+        --country) country=${3:?usage: $NAME start [--country none|us|gb|... | --proxy home]} ;;
+        --proxy) [ "${3:-}" = home ] || { echo "usage: $NAME start --proxy home" >&2; exit 2; }; country=home ;;
+      esac
       if [ "$country" = "$(cat "$CLOUD_DIR/country" 2>/dev/null)" ]; then ensure; else start_cloud "$country"; fi
       exit $? ;;
     stop)

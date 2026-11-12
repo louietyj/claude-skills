@@ -268,6 +268,10 @@ EOF
   player far more.
 - `pinchtab-cloud start --country gb` for another country's residential IP;
   `--country none` goes back to the datacenter IP.
+- `pinchtab-cloud start --proxy home` puts it on Louie's home IP, through his
+  home relay ($0.20/GB, his ~30 Mbps upload, LAN unreachable). For a job that
+  should look like him at home every time, such as a logged-in profile; for a
+  one-off, `pinchtab-proxy --proxy home` is free.
 - **A login that lasts: almost never what you want.** A profile keeps a
   login usable by any later session, which is a very different risk from a
   one-off login. Logging in to check something once (a Cigna policy

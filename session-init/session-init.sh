@@ -82,10 +82,8 @@ find_skill() {
   return 1
 }
 
-# Cowork and cloud Claude Code sync skills in the background after the
-# container starts, so a boot fired in its first seconds can find this skill
-# before its siblings have landed (seen 2026-11-13). Wait for the files the
-# boot needs rather than reporting the skill NOT INSTALLED.
+# Synced skills land a second or two after boot, so this skill can be found
+# before its siblings.
 find_skill_waiting() {
   local dir i
   for i in $(seq 30); do

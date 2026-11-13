@@ -10,10 +10,10 @@ I pressed a button (watch or phone) to talk to you, and the intercom room is alr
 In your first response, make these three calls, in this order:
 
 A (Bash):
-setsid bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh" > /tmp/session-init.txt 2>&1 < /dev/null &
+for i in $(seq 60); do d=$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1); [ -n "$d" ] && break; sleep 1; done; setsid bash "$d/session-init.sh" > /tmp/session-init.txt 2>&1 < /dev/null &
 
 B (Bash):
-bash "$(ls -1dt /mnt/skills/*/intercom ~/.claude/skills/synced/*/intercom 2>/dev/null | head -1)/setup.sh" --quick && intercom join <id>
+for i in $(seq 60); do d=$(ls -1dt /mnt/skills/*/intercom ~/.claude/skills/synced/*/intercom 2>/dev/null | head -1); [ -f "$d/setup.sh" ] && break; sleep 1; done; bash "$d/setup.sh" --quick && intercom join <id>
 
 C (ToolSearch): select:Monitor
 

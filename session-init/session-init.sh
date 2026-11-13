@@ -82,6 +82,20 @@ find_skill() {
   return 1
 }
 
+# Cowork and cloud Claude Code sync skills in the background after the
+# container starts, so a boot fired in its first seconds can find this skill
+# before its siblings have landed (seen 2026-11-13). Wait for the files the
+# boot needs rather than reporting the skill NOT INSTALLED.
+find_skill_waiting() {
+  local dir i
+  for i in $(seq 30); do
+    dir=$(find_skill "$1") && [ -f "$dir/SKILL.md" ] && [ -f "$dir/setup.sh" ] &&
+      { printf '%s' "$dir"; return 0; }
+    sleep 1
+  done
+  find_skill "$1"
+}
+
 note() {  # $1 = label, $2 = status. Called after the step number is incremented.
   summary+=("$(printf '  [%d/%d] %s %s %s' "$step" "$TOTAL" "$1" "${DOTS:${#1}}" "$2")")
 }
@@ -135,8 +149,8 @@ printf 'a plan. Do not repeat those steps, and do not re-read the files they pri
 printf '`cfs` and `lmcps` are yours to use from here: what is ruled out is redoing\n'
 printf 'the boot, not using the tools it just set up. Read this, then answer.\n'
 
-DFS=$(find_skill durable-filesystem) || DFS=''
-LMCPS=$(find_skill local-mcps) || LMCPS=''
+DFS=$(find_skill_waiting durable-filesystem) || DFS=''
+LMCPS=$(find_skill_waiting local-mcps) || LMCPS=''
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

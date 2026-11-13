@@ -1,10 +1,10 @@
 <session_init>
 **At the start of every conversation, before you answer anything, send these two tool calls together in one message, in this order:**
 
-1. Bash: `bash "$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1)/session-init.sh" > /tmp/session-init.txt 2>&1 || true`
+1. Bash: `for i in $(seq 60); do d=$(ls -1dt /mnt/skills/*/session-init ~/.claude/skills/synced/*/session-init 2>/dev/null | head -1); [ -n "$d" ] && break; sleep 1; done; if [ -n "$d" ]; then bash "$d/session-init.sh"; else echo "session-init: skills still not synced after 60s"; fi > /tmp/session-init.txt 2>&1 || true`
 2. Read `/tmp/session-init.txt` with `allow_large: true`, no offset or limit
 
-The `|| true` stops a partial boot's exit code from cancelling the read; the file's own summary reports what failed. `<skill_instructions>` below applies here first and hardest: if the read still comes back truncated, read the rest before your next action. A read that finds no file, or a header timestamp older than this conversation, ran too early: read it again.
+The loop waits for my skills, which can take a few seconds to sync into a fresh session. The `|| true` stops a partial boot's exit code from cancelling the read; the file's own summary reports what failed. `<skill_instructions>` below applies here first and hardest: if the read still comes back truncated, read the rest before your next action. A read that finds no file, or a header timestamp older than this conversation, ran too early: read it again.
 
 One message. It boots my durable filesystem and my local MCP servers, prints my memory index, and prints both skills' instructions in full — so you never invoke those skills or run their setup yourself. Its own output tells you the rest.
 

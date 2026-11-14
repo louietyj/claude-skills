@@ -10,35 +10,121 @@ every step, and read-only page helpers. The claim itself always goes through
 Navia's own form, never through API writes, because the three checkpoint
 screens only exist there.
 
-**The hard rule: never click "send claim to Navia" until you have captured
+This is a skill, not a script. Two kinds of instruction follow:
+
+- **Hard rules**, marked as such, which you follow exactly.
+- **Use judgment** items: decide from the receipt, what Louie said, and what
+  you can look up, and ask him when the answer isn't clear. They describe the
+  outcome and the format he wants, not a formula; don't turn them into one.
+  He approves every field anyway, so a sensible proposal with your reasoning
+  beats a rigid rule applied wrongly.
+
+**Hard rule: never click "send claim to Navia" until you have captured
 checkpoints 1, 2 and 3 below as full-size screenshots and matched every field
 on them against the agreed fields, in writing.** No exceptions for short
 claims, retries or "I just looked at it".
 
 ## 0. Agree the fields with Louie (before the browser)
 
-Louie's rule: **one claim per receipt, one item per claim**, its amount the
-receipt's claimable total; when that is a sum or only some lines count, show
-the arithmetic in the comments. Eligibility and documentation are his calls:
-claim what he asks, don't second-guess it.
+Louie's conventions (from him, 2026-11-14):
+
+- **One receipt, one claim, one item.** The exception is a receipt covering
+  different services (Rx and over-the-counter on one Walmart receipt): a
+  **separate claim per service**, each claiming only its own lines. Travel is
+  always its own claim (below).
+- **Date (use judgment):** start and end are almost always the same day, the
+  day on the receipt, even if he received it later. Pick the most
+  defensible-looking date on the receipt: a big, bold printed date wins over a
+  small dispense date elsewhere on the page. As a tiebreak, dispense date >
+  order date > delivery date.
+- **For whom:** Louie Yi Jie Tan.
+- **Provider:** the basic name: `Walmart Pharmacy`, `Grace Dental`,
+  `C.Sharp Optometry`.
+- **Amount:** what he paid for the claimed lines. Bag fees and tips are never
+  claimed. **Delivery fees (use judgment):** claimable when the delivery was
+  for the medical item; ask if the same delivery also brought non-medical
+  things.
+- **Comments: a brief "how we got this number", nothing more.** Blank when
+  the amount reads straight off the receipt. A subset of lines:
+  `Finasteride $24.80, Clindamycin $20.00` (copy the item names verbatim when
+  that's what identifies them). Tax re-applied: `Finasteride $10.00 * 1.09125
+  tax = $10.91`. No prose. The format is fixed; the numbers are not:
+- **Tax multiplier (use judgment):** receipts don't always say what was taxed
+  or at what rate, and they can come from another state or county. Combine
+  what you have: divide the receipt's tax by what looks like the taxable
+  subtotal, look up the sales tax rate where the store is, and make sure the
+  two agree and reproduce the receipt's tax line. If they don't, say so on the
+  card.
+- Eligibility and documentation are his calls: claim what he asks.
 
 Read the receipt and send him this card, every field filled:
 
 | Field | Example | Notes |
 |---|---|---|
 | Benefit | Health Care FSA (1/1/2026 - 12/31/2026) | Plan year = the year of service. |
-| Document | walmart-rx-2026-11-10.pdf | Name the file for what it is; Navia's reviewer sees the name. PDF or image. |
+| Documents | walmart-rx-2026-11-10.pdf | Name each file for what it is; Navia's reviewer sees the name. PDF or image. In upload order. |
 | Expense type | Prescription Drugs | Navia's list: Prescription Drugs, Over-the-Counter Items, Over-The-Counter with Rx, General Healthcare, General Dental Care, General Vision Care, Counseling Services, Chiropractic, Massage Therapy, Orthodontia, Travel, Personal Protective Equipment, Feminine Care Product, Letter of Medical Necessity. |
-| Service start / end | 11/10/2026 / 11/10/2026 | Date of service, not purchase confirmation. |
-| Provider | Walmart Pharmacy | As on his past claims: `Walmart Pharmacy` for Rx, `Walmart` for store items, the practice for visits. |
+| Service start / end | 11/10/2026 / 11/10/2026 | |
+| Provider | Walmart Pharmacy | |
 | For whom | Louie Yi Jie Tan | |
-| Amount | $44.80 | Out of pocket, as on the receipt. |
-| Comments | $24.80 finasteride + $20.00 clindamycin = $44.80 (Rx items, Walmart order 2000154-58328872) | The arithmetic and the order or invoice number. Keep it under ~150 characters so it shows whole in the form. |
+| Amount | $44.80 | |
+| Comments | Finasteride $24.80, Clindamycin $20.00 | |
 
 Wait for his OK or edits. This card is **the agreed fields**: everything
 below is checked against it, character for character. Then, by default, you
 file without asking again; if he asked to see the screenshots first, send the
 three checkpoints and wait for his go before Send.
+
+## 0b. Travel (mileage) claims
+
+A drive to an in-person visit (doctor, dentist, lab, optometrist) is claimed
+again **as its own claim**, expense type **Travel**. **Whether there was a
+trip (use judgment):** from the receipt and what Louie said; offer the travel
+claim, or ask, when it isn't obvious. A delivered order has none.
+
+- **Route (use judgment):** home → the provider → home by default. Louie's home
+  address is in his memory profile (`/memory/profile.md` in the cfs store);
+  never write it into this public repo. Another start or end (work, another
+  stop) only when context says so; ask if unsure.
+- **Evidence: a Google Maps printout, first**, then every document of the base
+  claim. Name it `<provider>-mileage-<date>.pdf`. See "Making the Maps
+  printout" below.
+- **Rate:** the IRS medical mileage rate for the year of service (2026:
+  20.5¢/mi). Check the IRS's figure for a new year before using it.
+- **Amount:** cents = round(miles × rate in cents), with the miles exactly as
+  Google prints them.
+- **Provider:** the base claim's provider + ` (Mileage)`: `Grace Dental (Mileage)`.
+- **Comments:** `22.3mi * $0.205/mi = $4.57`.
+- Date, for whom: as the base claim.
+
+Example: a 22.3 mi round trip to Grace Dental in 2026 is `Grace Dental
+(Mileage)`, `22.3mi * $0.205/mi = $4.57`, documents
+`grace-dental-mileage-2026-03-17.pdf` then the dental receipt. Checkpoint 1
+also confirms the Maps PDF is listed first.
+
+### Making the Maps printout
+
+Tested in pinchtab 2026-11-14 (plain `pinchtab` works; Google Maps doesn't
+need the residential IP). Google's print view is part of the page, so save
+the page as a PDF yourself rather than using its Print button, which opens a
+system print dialog.
+
+1. Open `https://www.google.com/maps/dir/<home>/<provider address>/<home>/data=!4m2!4m1!3e0`
+   (`3e0` = driving; addresses `+`-joined). **Expect:** a "Driving … N miles"
+   route option and a "Details" button. Use Google's default (fastest) route.
+2. Click "Details". **Expect:** "N min (N miles)" at the top of the panel, the
+   turn-by-turn list, and Send / Share / Print buttons.
+3. Click "Print", then "Print including maps". **Expect:** the print view:
+   "<from> to <to>   Drive N miles, M min" across the top, a notes box,
+   "Cancel" and "Print" buttons. Don't click its Print.
+4. Save the page as a PDF with headers and footers on, so it carries the date
+   and the directions URL like his past printouts:
+   ```
+   pdf -o <provider>-mileage-<date>.pdf --display-header-footer
+   ```
+   (Any other browser: its print-to-PDF of this view.)
+5. Open the PDF and check page 1: the map, "Drive N miles", the start, stop
+   and end addresses. N is the mileage in the comment.
 
 ## 1. Browser
 
@@ -118,7 +204,10 @@ EOF
 2. `navia.duplicates({date: '2026-11-10', amount: '44.80'})` → **expect**
    `possibleDuplicates: []`. Any hit (same amount, same service date or posted
    within 45 days, claims and card swipes alike) goes to Louie before you go
-   on. Navia's form also rejects a same-date-same-amount claim itself
+   on. **Use judgment** for hits that are plainly a different visit: repeat
+   trips to one provider cost the same mileage, so a travel hit with a
+   different service date is expected; mention it on the card rather than
+   stopping. Navia's form also rejects a same-date-same-amount claim itself
    (`NVClaimDuplicate`).
 
 Also there: `navia.statement({date})` (claims, election, reimbursed) and
@@ -141,10 +230,11 @@ next one. Anything else means stop and see "Getting unstuck".
    use the open list's own entry). **Expect:** the benefit box reads "Health
    Care FSA" and a plan-year box beside it reads the agreed year, e.g.
    "01/01/2026 - 12/31/2026"; "plan dates" and "available balance" links.
-4. Click "choose files" and give it the document (`upload <path>` fills the
-   picker that click opened). **Expect:** a row with the file name and size;
-   wait until its Actions column shows a trash icon, not "loading";
-   "File Count: 1".
+4. For each agreed document, in the agreed order: click "choose files" and
+   give it that one file (`upload <path>` fills the picker that click opened),
+   and wait until its row's Actions column shows a trash icon, not "loading",
+   before the next. **Expect:** one row per document, in that order, with
+   names and sizes; "File Count" equal to the number of documents.
 5. **CHECKPOINT 1** (see section 5).
 6. Click "next". **Expect:** "2 Enter Claim Details"; the document preview on
    the left; "Selected Benefit" reading the agreed benefit and year; "Select a
@@ -177,8 +267,8 @@ capture the checkpoint again.
 
 | | Screen | Must match the agreed fields |
 |---|---|---|
-| 1 | Upload Documents, file loaded | Benefit; plan year; file name; one file, not "loading"; File Count 1. |
-| 2 | Enter Claim Details, filled | Selected Benefit + year; expense type; start and end dates; provider; for whom; amount; the whole comment (scroll the box if it wraps out of view). And the preview on the left shows **this** receipt: its date and total visible and matching. |
+| 1 | Upload Documents, files loaded | Benefit; plan year; every agreed file, in the agreed order (Maps PDF first on a travel claim), none "loading", nothing extra; File Count. |
+| 2 | Enter Claim Details, filled | Selected Benefit + year; expense type; start and end dates; provider; for whom; amount; the whole comment (scroll the box if it wraps out of view). And the preview on the left shows **this** claim's evidence: the receipt's date and total, or on a travel claim the Maps PDF's route and miles. |
 | 3 | Claim summary | Exactly one row; its service dates, provider and amount; nothing else in the list; terms box still unticked. |
 
 ## 6. Read back and report

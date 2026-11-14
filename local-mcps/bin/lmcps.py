@@ -1020,8 +1020,10 @@ def render_content(blocks, out_dir, stem):
 def cmd_call(args):
     servers = load_servers()
     cfg = pick(servers, args.server)
+    # "-" reads stdin: one command-line argument is capped at 128 KiB on Linux.
+    raw = sys.stdin.read() if args.arguments == "-" else args.arguments
     try:
-        arguments = json.loads(args.arguments) if args.arguments else {}
+        arguments = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError as e:
         die(f"arguments are not valid JSON: {e}")
     # A failure may be a spent quota, so say which key was spent.
@@ -1257,7 +1259,8 @@ def main():
     p = sub.add_parser("call", help="invoke a tool")
     p.add_argument("server")
     p.add_argument("tool")
-    p.add_argument("arguments", nargs="?", default="", help="JSON object of arguments")
+    p.add_argument("arguments", nargs="?", default="",
+                   help="JSON object of arguments, or - to read it from stdin (for large arguments)")
     p.add_argument("--out-dir", default=str(LMCPS_HOME / "out"), metavar="DIR",
                    help="where image, audio and binary resource blocks are saved")
     p.set_defaults(fn=cmd_call)

@@ -56,6 +56,14 @@ and parameters.
 Arguments are one JSON object, quoted. `--timeout SECS` (default 120) goes
 before the verb: `lmcps --timeout 240 call ...`.
 
+Pass `-` instead to read the JSON from stdin. Use it for anything big, such as
+a file sent as base64, since one command-line argument is capped at 128 KiB.
+Build the JSON in the pipe so the bytes never pass through your context:
+
+```bash
+base64 -w0 map.png | jq -Rs '{photo: ("data:image/png;name=map.png;base64," + .)}' | lmcps call <server> send_photo -
+```
+
 `call` prints the tool's text content verbatim, so `| jq` works directly when
 that text is JSON. Images, audio and binary resources are saved to files
 instead, and each leaves a line like `[image: /path/to/file.png (image/png,

@@ -45,13 +45,13 @@ class Base(unittest.TestCase):
         self.config_path.write_text(json.dumps({"mcpServers": servers, **top}),
                                     encoding="utf-8")
 
-    def run_lmcps(self, *args, env=None, timeout=30):
+    def run_lmcps(self, *args, env=None, timeout=30, stdin=None):
         e = dict(os.environ)
         e["LMCPS_HOME"] = str(self.tmp / "home")
         e["LMCPS_CONFIG"] = str(self.config_path)
         e.update(env or {})
         return subprocess.run([sys.executable, str(LMCPS), *args], capture_output=True,
-                              text=True, timeout=timeout, env=e)
+                              text=True, timeout=timeout, env=e, input=stdin)
 
 
 class TestServers(Base):
@@ -262,6 +262,15 @@ class TestStdioProtocol(Base):
     def test_call_returns_the_text_content(self):
         self.write_config({"adder": fake_server()})
         r = self.run_lmcps("call", "adder", "add", '{"a": 1, "b": 2}')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "3")
+
+    def test_call_reads_arguments_from_stdin_past_the_argv_limit(self):
+        """One argv string is capped at 128 KiB on Linux, too small for a file sent as base64."""
+        self.write_config({"adder": fake_server()})
+        padding = "x" * 300_000
+        r = self.run_lmcps("call", "adder", "add", "-",
+                           stdin=json.dumps({"a": 1, "b": 2, "padding": padding}))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "3")
 

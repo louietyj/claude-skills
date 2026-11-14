@@ -1,164 +1,126 @@
 ---
 name: navia-claim
-description: "File Louie's Navia Health Care FSA reimbursement claims from receipts he sends (photos, screenshots, PDFs): agree every claim field with him up front, fill Navia's own claim form in a browser on a residential IP, verify three mandatory screenshots against the agreed fields before Send, and read the claim back afterwards. Ships js/navia.js, read-only page helpers for the duplicate check, a portal-unchanged check and the read-back. Use whenever he sends a receipt or bill to claim from his FSA, says 'submit this to Navia', or asks what's on his FSA statement."
+description: "File Louie's Navia Health Care FSA reimbursement claims from receipts he sends (photos, screenshots, PDFs): agree every claim field with him up front, fill Navia's own claim form in a browser on a residential IP, verify three mandatory checkpoints against the agreed fields before Send, and read the claim back afterwards. Ships js/navia.js, read-only page helpers: duplicate check, portal-unchanged check, form-state check and read-back. Use whenever he sends a receipt or bill to claim from his FSA, says 'submit this to Navia', or asks what's on his FSA statement."
 ---
 
 # navia-claim
 
 You drive the browser; this skill gives you the route, the state to expect at
-every step, and read-only page helpers. The claim itself always goes through
-Navia's own form, never through API writes, because the three checkpoint
-screens only exist there.
+each step, and read-only page helpers. The claim always goes through Navia's
+own form, never API writes: the checkpoint screens only exist there.
 
-This is a skill, not a script. Two kinds of instruction follow:
+This is a skill, not a script. **Hard rules** are marked and followed exactly.
+**Use judgment** items describe the outcome and format Louie wants, not a
+formula: decide from the receipt, what he said and what you can look up, and
+ask when it isn't clear. He approves every field, so propose with your
+reasoning rather than apply a rule wrongly.
 
-- **Hard rules**, marked as such, which you follow exactly.
-- **Use judgment** items: decide from the receipt, what Louie said, and what
-  you can look up, and ask him when the answer isn't clear. They describe the
-  outcome and the format he wants, not a formula; don't turn them into one.
-  He approves every field anyway, so a sensible proposal with your reasoning
-  beats a rigid rule applied wrongly.
-
-**Hard rule: never click "send claim to Navia" until you have captured
-checkpoints 1, 2 and 3 below as full-size screenshots and matched every field
-on them against the agreed fields, in writing.** No exceptions for short
+**Hard rule: never click "send claim to Navia" until checkpoints 1, 2 and 3
+(section 5) have each passed: a full-size screenshot and `navia.formState`
+both matching every agreed field, written out.** No exceptions for short
 claims, retries or "I just looked at it".
 
-## 0. Agree the fields with Louie (before the browser)
+## 0. Agree the fields with Louie
 
-Louie's conventions (from him, 2026-11-14):
+His conventions (2026-11-14):
 
-- **One receipt, one claim, one item.** The exception is a receipt covering
-  different services (Rx and over-the-counter on one Walmart receipt): a
-  **separate claim per service**, each claiming only its own lines. Travel is
-  always its own claim (below).
+- **One receipt, one claim, one item.** A receipt covering different services
+  (Rx and over-the-counter) becomes a **separate claim per service**, each with
+  only its own lines. Travel is always its own claim (0b).
 - **Date (use judgment):** start and end are almost always the same day, the
-  day on the receipt, even if he received it later. Pick the most
-  defensible-looking date on the receipt: a big, bold printed date wins over a
-  small dispense date elsewhere on the page. As a tiebreak, dispense date >
-  order date > delivery date.
+  day on the receipt, even if he received it later. Take the most
+  defensible-looking date: a big, bold printed date beats a small dispense date
+  elsewhere. Tiebreak: dispense > order > delivery date.
 - **For whom:** Louie Yi Jie Tan.
 - **Provider:** the basic name: `Walmart Pharmacy`, `Grace Dental`,
   `C.Sharp Optometry`.
-- **Amount:** what he paid for the claimed lines. Bag fees and tips are never
-  claimed. **Delivery fees (use judgment):** claimable when the delivery was
-  for the medical item; ask if the same delivery also brought non-medical
-  things.
-- **Comments: a brief "how we got this number", nothing more.** Blank when
-  the amount reads straight off the receipt. A subset of lines:
-  `Finasteride $24.80, Clindamycin $20.00` (copy the item names verbatim when
-  that's what identifies them). Tax re-applied: `Finasteride $10.00 * 1.09125
-  tax = $10.91`. No prose. The format is fixed; the numbers are not:
-- **Tax multiplier (use judgment):** receipts don't always say what was taxed
-  or at what rate, and they can come from another state or county. Combine
-  what you have: divide the receipt's tax by what looks like the taxable
-  subtotal, look up the sales tax rate where the store is, and make sure the
-  two agree and reproduce the receipt's tax line. If they don't, say so on the
-  card.
+- **Amount:** what he paid for the claimed lines. Never bag fees or tips.
+  **Delivery fees (use judgment):** claimable when the delivery was for the
+  medical item; ask if it also brought non-medical things.
+- **Comments: a terse "how we got this number".** Blank when the amount reads
+  straight off the receipt. A subset: `Finasteride $24.80, Clindamycin $20.00`
+  (item names verbatim when that's what identifies them). Tax re-applied:
+  `Finasteride $10.00 * 1.09125 tax = $10.91`. No prose.
+- **Tax multiplier (use judgment):** receipts don't always say what was taxed,
+  and can come from another state. Divide the receipt's tax by what looks like
+  the taxable subtotal, look up the local sales tax rate, and check the two
+  agree and reproduce the tax line. If they don't, say so on the card.
 - Eligibility and documentation are his calls: claim what he asks.
 
-Read the receipt and send him this card, every field filled:
+Send him this card, every field filled:
 
-| Field | Example | Notes |
-|---|---|---|
-| Benefit | Health Care FSA (1/1/2026 - 12/31/2026) | Plan year = the year of service. |
-| Documents | walmart-rx-2026-11-10.pdf | Name each file for what it is; Navia's reviewer sees the name. PDF or image. In upload order. |
-| Expense type | Prescription Drugs | Navia's list: Prescription Drugs, Over-the-Counter Items, Over-The-Counter with Rx, General Healthcare, General Dental Care, General Vision Care, Counseling Services, Chiropractic, Massage Therapy, Orthodontia, Travel, Personal Protective Equipment, Feminine Care Product, Letter of Medical Necessity. |
-| Service start / end | 11/10/2026 / 11/10/2026 | |
-| Provider | Walmart Pharmacy | |
-| For whom | Louie Yi Jie Tan | |
-| Amount | $44.80 | |
-| Comments | Finasteride $24.80, Clindamycin $20.00 | |
+| Field | Example |
+|---|---|
+| Benefit | Health Care FSA (1/1/2026 - 12/31/2026), the year of service |
+| Documents, in upload order | walmart-rx-2026-11-10.pdf (named for what it is: Navia's reviewer sees it) |
+| Expense type | Prescription Drugs (Navia's types: `navia.benefits()`, or Prescription Drugs, Over-the-Counter Items, Over-The-Counter with Rx, General Healthcare, General Dental Care, General Vision Care, Counseling Services, Chiropractic, Massage Therapy, Orthodontia, Travel, Personal Protective Equipment, Feminine Care Product, Letter of Medical Necessity) |
+| Service start / end | 11/10/2026 / 11/10/2026 |
+| Provider | Walmart Pharmacy |
+| For whom | Louie Yi Jie Tan |
+| Amount | $44.80 |
+| Comments | Finasteride $24.80, Clindamycin $20.00 |
 
-Wait for his OK or edits. This card is **the agreed fields**: everything
-below is checked against it, character for character. Then, by default, you
-file without asking again; if he asked to see the screenshots first, send the
-three checkpoints and wait for his go before Send.
+His OK makes this card **the agreed fields**, checked character for character
+from here on. Then file without asking again, unless he asked to see the
+checkpoints first: then send them and wait for his go before Send.
 
 ## 0b. Travel (mileage) claims
 
 A drive to an in-person visit (doctor, dentist, lab, optometrist) is claimed
-again **as its own claim**, expense type **Travel**. **Whether there was a
-trip (use judgment):** from the receipt and what Louie said; offer the travel
-claim, or ask, when it isn't obvious. A delivered order has none.
+again as **its own claim, expense type Travel**. **Whether there was a trip
+(use judgment):** from the receipt and what he said; offer or ask when it isn't
+obvious. A delivered order has none.
 
-- **Route (use judgment):** home → the provider → home by default. Louie's home
-  address is in his memory profile (`/memory/profile.md` in the cfs store);
-  never write it into this public repo. Another start or end (work, another
-  stop) only when context says so; ask if unsure.
-- **Evidence: a Google Maps printout, first**, then every document of the base
-  claim. Name it `<provider>-mileage-<date>.pdf`. See "Making the Maps
-  printout" below.
+- **Route (use judgment):** home → provider → home by default; another start
+  or end only when context says so. His home address is in
+  `/memory/profile.md` (cfs store); never write it into this public repo.
+- **Documents:** the Google Maps printout first, then every document of the
+  base claim.
 - **Rate:** the IRS medical mileage rate for the year of service (2026:
-  20.5¢/mi). Check the IRS's figure for a new year before using it.
-- **Amount:** cents = round(miles × rate in cents), with the miles exactly as
-  Google prints them.
-- **Provider:** the base claim's provider + ` (Mileage)`: `Grace Dental (Mileage)`.
+  20.5¢/mi); check the IRS figure for a new year.
+- **Amount:** cents = round(miles × rate in cents), miles exactly as Google
+  prints them.
+- **Provider:** base provider + ` (Mileage)`, e.g. `Grace Dental (Mileage)`.
 - **Comments:** `22.3mi * $0.205/mi = $4.57`.
-- Date, for whom: as the base claim.
+- Date and for whom: as the base claim.
 
-Example: a 22.3 mi round trip to Grace Dental in 2026 is `Grace Dental
-(Mileage)`, `22.3mi * $0.205/mi = $4.57`, documents
-`grace-dental-mileage-2026-03-17.pdf` then the dental receipt. Checkpoint 1
-also confirms the Maps PDF is listed first.
-
-### Making the Maps printout
-
-Tested in pinchtab 2026-11-14 (plain `pinchtab` works; Google Maps doesn't
-need the residential IP). Google's print view is part of the page, so save
-the page as a PDF yourself rather than using its Print button, which opens a
-system print dialog.
+**Making the Maps printout** (tested in plain `pinchtab` 2026-11-14; Google
+Maps needs no residential IP):
 
 1. Open `https://www.google.com/maps/dir/<home>/<provider address>/<home>/data=!4m2!4m1!3e0`
-   (`3e0` = driving; addresses `+`-joined). **Expect:** a "Driving … N miles"
-   route option and a "Details" button. Use Google's default (fastest) route.
-2. Click "Details". **Expect:** "N min (N miles)" at the top of the panel, the
-   turn-by-turn list, and Send / Share / Print buttons.
-3. Click "Print", then "Print including maps". **Expect:** the print view:
-   "<from> to <to>   Drive N miles, M min" across the top, a notes box,
-   "Cancel" and "Print" buttons. Don't click its Print.
-4. Save the page as a PDF with headers and footers on, so it carries the date
-   and the directions URL like his past printouts:
-   ```
-   pdf -o <provider>-mileage-<date>.pdf --display-header-footer
-   ```
-   (Any other browser: its print-to-PDF of this view.)
-5. Open the PDF and check page 1: the map, "Drive N miles", the start, stop
-   and end addresses. N is the mileage in the comment.
+   (`3e0` = driving, addresses `+`-joined). **Expect:** "Driving … N miles"
+   and a "Details" button. Keep Google's default route.
+2. "Details". **Expect:** "N min (N miles)" at the top, turn-by-turn steps,
+   a Print button.
+3. "Print" → "Print including maps". **Expect:** the print view: "<from> to
+   <to>   Drive N miles, M min", a notes box, "Cancel" and "Print". Don't click
+   its Print: that opens a system dialog.
+4. Save the page with headers and footers, so it carries the date and the
+   directions URL: `pdf -o <provider>-mileage-<date>.pdf --display-header-footer`
+   (another browser: print-to-PDF of this view).
+5. Open the PDF: page 1 shows the map, "Drive N miles" and the addresses; N is
+   the comment's mileage.
 
 ## 1. Browser
 
-Set it up yourself with whatever browser skill you have. Requirements:
+Set it up yourself, with any browser tool that can click, type, screenshot and
+evaluate JavaScript in the page (examples below are pinchtab batch steps):
 
 - **A residential IP.** `webapi.naviabenefits.com` is Cloudflare-blocked from
   datacenter IPs (this sandbox, Browser Use `--country none`, VPNs): the login
-  page loads but nothing after it works. Louie's home IP is the default
-  (`pinchtab-proxy start --proxy home`); Browser Use residential
-  (`pinchtab-cloud`) if the home relay is down.
-- **Images not blocked.** The form previews documents with
-  `assets/js/pdf.worker.min.js`; with images or scripts blocked the preview
-  fails and the uploaded file never appears in the list.
-- One tab on `https://app.naviabenefits.com/`. Work in it; a reload or new tab
-  starts a new claim session.
-
-Examples below are pinchtab batch steps. Any tool that can click, type, take
-screenshots and evaluate JavaScript in the page works the same way.
+  page loads, nothing after it works. Default: his home IP
+  (`pinchtab-proxy start --proxy home`, or `--proxy socks5://127.0.0.1:1080`
+  after the home-proxy skill's setup); fallback: `pinchtab-cloud` residential.
+- **Images not blocked**, or the form's PDF previewer
+  (`assets/js/pdf.worker.min.js`) fails and uploads never list.
+- **One tab** on `https://app.naviabenefits.com/`. A reload or new tab starts
+  a new claim session.
 
 ## 2. Log in
 
-Get the login with request-credential (`naviabenefits.com`), all of this in
-one `run`:
-
-1. Open `https://app.naviabenefits.com/#/login`.
-   **Expect:** a visible password field `#Login_Password[type=password]`.
-2. Type (keystrokes, not a pasted/filled value: Angular ignores those) the
-   username into `#Login_Username`, the password into `#Login_Password`; click
-   `#login-btn`.
-3. **Expect within 30 s, one of:**
-   - `sessionStorage.authorizationData` has a `token`: logged in (the browser
-     remembers the device). Go to step 5.
-   - The page says "Verify Your Identity": step 4.
-   - A `<messagebox>` with text: the login was rejected. Stop and tell Louie.
+Get the login with request-credential (`naviabenefits.com`) and do steps 1–3
+in one `run`. Type values as keystrokes: Navia's Angular form ignores filled
+or pasted ones.
 
 ```
 nav https://app.naviabenefits.com/#/login
@@ -169,22 +131,26 @@ click "#login-btn"
 wait --fn "document.body.innerText.includes('Verify Your Identity') || JSON.parse(sessionStorage.getItem('authorizationData')||'{}').token || [...document.querySelectorAll('messagebox')].some(e => e.innerText.trim())" --timeout-ms 30000
 ```
 
-4. Code: choose the phone radio (the masked number, not the one with "@"), click
-   "send code". **Expect:** "Enter verification code". Read the code from his
-   phone's notifications (mcp-android `android_notification_list`, TextNow,
-   sender `40680`, "Code: NNNNNN"; it arrives in about 10 s; email lags
-   minutes). Type it into the "Enter code" box, tick "Remember this device for
-   future logins", click "submit code". A new code request voids the old one.
-5. **Expect:** URL `#/pptHome`, his name and employer top right,
-   `authorizationData.token` set.
+**Expect** one of:
+- a `token` in `sessionStorage.authorizationData`: logged in (the device is
+  remembered);
+- "Verify Your Identity": pick the phone (the masked number, not the "@" one),
+  "send code", **expect** "Enter verification code". The code arrives in
+  about 10 s in his phone's notifications (mcp-android
+  `android_notification_list`: TextNow, sender `40680`, "Code: NNNNNN"; email
+  lags minutes). Type it into "Enter code", tick "Remember this device for
+  future logins", "submit code". A new code voids the old one;
+- a `<messagebox>` with text: login rejected. Stop and tell Louie.
 
-## 3. Load the helpers and run the pre-checks
+**Then expect:** `#/pptHome`, his name top right, a `token` set.
 
-Inject `js/navia.js` (in this skill's directory) into the tab. It installs
-`window.navia`; reinject after any full page load. Each helper returns a
-promise **and** leaves `{done, ok, value | error}` in `navia.result`, so with
-an eval that doesn't await, start it, wait for `navia.result.done`, then read
-`navia.result`. The statement call can take over a minute: wait up to 2 min.
+## 3. Helpers and pre-checks
+
+Inject `js/navia.js` (this skill's directory); it installs `window.navia`.
+Reinject after any full page load. Async helpers also leave
+`{done, ok, value | error}` in `navia.result`: start one, wait for
+`navia.result.done` (the statement call can take 2 min), read the result.
+`navia.formState` is synchronous and returns directly.
 
 ```bash
 export NAVIA_JS="$(tr '\n' ' ' < "$(ls -1dt /mnt/skills/*/navia-claim ~/.claude/skills/synced/*/navia-claim 2>/dev/null | head -1)/js/navia.js")"
@@ -196,148 +162,123 @@ eval "JSON.stringify(navia.result)"
 EOF
 ```
 
-1. `navia.selfcheck()` → **expect** `{ok: true, problems: []}`. It reads the
-   portal's code and confirms the endpoints and form fields recorded
-   2026-11-13 (it moves the tab to `#/claimSub`). Problems mean Navia changed
-   its portal: still fine to file by hand, but the read-back may not work and
-   this skill needs updating; tell Louie.
+1. `navia.selfcheck()` → **expect** `{ok: true, problems: []}`: the portal
+   still has the endpoints and form fields recorded 2026-11-13 (it moves the
+   tab to `#/claimSub`). Problems: Navia changed its portal; you can still
+   file by hand, but tell Louie the helpers may be off.
 2. `navia.duplicates({date: '2026-11-10', amount: '44.80'})` → **expect**
-   `possibleDuplicates: []`. Any hit (same amount, same service date or posted
-   within 45 days, claims and card swipes alike) goes to Louie before you go
-   on. **Use judgment** for hits that are plainly a different visit: repeat
-   trips to one provider cost the same mileage, so a travel hit with a
-   different service date is expected; mention it on the card rather than
-   stopping. Navia's form also rejects a same-date-same-amount claim itself
-   (`NVClaimDuplicate`).
+   `possibleDuplicates: []`. A hit (same amount, same service date or posted
+   within 45 days, claims and card swipes) goes to Louie first. **Use
+   judgment** on plainly different visits: repeat trips cost the same mileage,
+   so mention those on the card instead of stopping. Navia also rejects a
+   same-date-same-amount item itself (`NVClaimDuplicate`).
 
-Also there: `navia.statement({date})` (claims, election, reimbursed) and
-`navia.benefits()` (benefits, plan dates, expense types).
+Also: `navia.statement({date})` (claims, election, reimbursed),
+`navia.benefits()`, and `navia.formState()` (section 4).
 
 ## 4. Fill the form
 
-Take a screenshot after every step and compare it with **Expect** before the
-next one. Anything else means stop and see "Getting unstuck".
+After every step: screenshot, compare with **Expect**, and where it says
+**Assert**, run `JSON.stringify(navia.formState())` and check the named
+fields. Anything else: stop, see "Getting unstuck".
 
-1. Open `https://app.naviabenefits.com/#/claimSub` (or "submit a claim" on
-   the home page). **Expect:** "Submit a Claim"; "Claim Items" with **no
-   rows**; "add item to claim"; the terms box unticked. Rows already there are
-   a stale attempt: "cancel claim request" → "yes" first.
-2. Click "add item to claim". **Expect:** a "Claim Items" dialog, "1 Upload
-   Documents", a "select the benefit..." dropdown, "drag and drop or choose
-   files", "Uploaded Files … File Count: 0".
-3. Open "select the benefit..." and click "Health Care FSA" in its list (the
-   options are links; "Health Care FSA" also appears elsewhere on the page, so
-   use the open list's own entry). **Expect:** the benefit box reads "Health
-   Care FSA" and a plan-year box beside it reads the agreed year, e.g.
-   "01/01/2026 - 12/31/2026"; "plan dates" and "available balance" links.
-4. For each agreed document, in the agreed order: click "choose files" and
-   give it that one file (`upload <path>` fills the picker that click opened),
-   and wait until its row's Actions column shows a trash icon, not "loading",
-   before the next. **Expect:** one row per document, in that order, with
-   names and sizes; "File Count" equal to the number of documents.
-5. **CHECKPOINT 1** (see section 5).
-6. Click "next". **Expect:** "2 Enter Claim Details"; the document preview on
-   the left; "Selected Benefit" reading the agreed benefit and year; "Select a
-   service..."; empty date, Provider name, For whom, Amount, Comments boxes;
-   buttons "cancel", "back to documents", "I'm finished", "add another claim".
-7. Open "Select a service..." and click the agreed expense type. **Expect:**
-   the box shows it; "Benefit eligibility date" and "Anticipated
-   reimbursement date" appear.
-8. Type (keystrokes) into each box: Service start date and Service end date as
-   MM/DD/YYYY, Provider name, For whom, Amount as `44.80` (it reformats to
-   `$44.80`), Comments. **Expect:** every box shows the typed value
-   (`value <selector>` or reading the inputs in the page confirms what the
-   screenshot shows). To fix one: click in, select all, type again.
+1. Open `#/claimSub` (or "submit a claim" on the home page). **Expect:**
+   "Submit a Claim", "add item to claim", "send claim to Navia".
+   **Assert:** `screen: 'summary'`, `items: []`, `termsTicked: false`. Leftover
+   items are a stale attempt: "cancel claim request" → "yes" first.
+2. "add item to claim". **Expect:** the "Claim Items" dialog at "1 Upload
+   Documents", "select the benefit...", "choose files", "File Count: 0".
+3. Open "select the benefit..." and click "Health Care FSA" inside that open
+   list (the name also appears elsewhere on the page). **Assert:**
+   `screen: 'upload'`, `benefit: 'Health Care FSA'`, `planYear` the agreed
+   year, e.g. `'01/01/2026 - 12/31/2026'`.
+4. Per document, in order: "choose files", give it that one file
+   (`upload <path>` fills the picker the click opened), and wait until its row
+   is no longer loading before the next. **Assert:** `files` lists every
+   document in order, each `loading: false`; `fileCount` matches.
+5. **CHECKPOINT 1.**
+6. "next". **Expect:** "2 Enter Claim Details", the document preview left,
+   "Select a service...", empty boxes, "I'm finished". **Assert:**
+   `screen: 'details'`, `selectedBenefit` the agreed benefit and year.
+7. Open "Select a service..." and click the agreed type. **Assert:**
+   `expenseType`.
+8. Type into each box: start and end date (MM/DD/YYYY), Provider name, For
+   whom, Amount (`44.80`; it shows `$44.80`), Comments. **Assert:** each value,
+   and `rejectedByForm: []` (Navia marks e.g. an empty required box). Fix a
+   box: click in, select all, type again.
 9. **CHECKPOINT 2.**
-10. Click "I'm finished". **Expect:** a green "Claim added successfully" toast,
-    the dialog closed, the Claim Items table with exactly one row. Never
-    "add another claim": one item per claim.
+10. "I'm finished" (never "add another claim"). **Expect:** a green "Claim
+    added successfully" toast, the dialog closed. **Assert:**
+    `screen: 'summary'`, exactly one item.
 11. **CHECKPOINT 3.**
 12. Tick "I have read and agree to Navia's terms and conditions", click "send
-    claim to Navia". Once. **Expect:** URL `#/claimReceipt?batchId=…`, "Success!
-    Claim Submitted", "Online Claim Submission Receipt" with the anticipated
-    reimbursement date, the claim total and "Claimed Items". Screenshot it.
+    claim to Navia" once. **Expect:** `#/claimReceipt?batchId=…`, "Success!
+    Claim Submitted", the receipt with total and anticipated reimbursement
+    date. Screenshot it.
 
-## 5. The checkpoints
+## 5. Checkpoints
 
-At each one: a **full-size** screenshot (small print matters), then write out
-every field as `field | agreed | on screen | ✓/✗`. Any ✗, an unreadable value,
-or a failed screenshot means do not proceed: fix it (Getting unstuck) and
-capture the checkpoint again.
+At each: a **full-size** screenshot (small print matters) and
+`navia.formState({expected: <agreed fields>})`, e.g.
 
-| | Screen | Must match the agreed fields |
+```
+eval "JSON.stringify(navia.formState({expected: {documents: ['walmart-rx-2026-11-10.pdf'], benefit: 'Health Care FSA', expenseType: 'Prescription Drugs', fromDate: '2026-11-10', toDate: '2026-11-10', provider: 'Walmart Pharmacy', who: 'Louie Yi Jie Tan', amount: '44.80', comments: 'Finasteride $24.80, Clindamycin $20.00'}}))"
+```
+
+It returns `ok` and a `checks` list for that screen. Then write out every
+field as `field | agreed | screenshot | formState | ✓/✗`. **Pass only if the
+screenshot and formState both match the agreed value.** A ✗, an unreadable
+value, a failed screenshot or `ok: false` means: fix it, capture again.
+
+| | Screen | Must match |
 |---|---|---|
-| 1 | Upload Documents, files loaded | Benefit; plan year; every agreed file, in the agreed order (Maps PDF first on a travel claim), none "loading", nothing extra; File Count. |
-| 2 | Enter Claim Details, filled | Selected Benefit + year; expense type; start and end dates; provider; for whom; amount; the whole comment (scroll the box if it wraps out of view). And the preview on the left shows **this** claim's evidence: the receipt's date and total, or on a travel claim the Maps PDF's route and miles. |
-| 3 | Claim summary | Exactly one row; its service dates, provider and amount; nothing else in the list; terms box still unticked. |
+| 1 | Upload Documents, files loaded | Benefit; plan year; every agreed file in order (Maps PDF first on travel), none loading, nothing extra. |
+| 2 | Enter Claim Details, filled | Benefit and year; expense type; dates; provider; for whom; amount; the whole comment (scroll it if needed); nothing rejected. And the preview shows **this** claim's evidence: the receipt's date and total, or the Maps PDF's route and miles. |
+| 3 | Claim summary | Exactly one item: dates, provider, amount; terms box unticked. |
 
 ## 6. Read back and report
 
-On the receipt page, reinject `navia.js` if needed and run
-`navia.readback({expected: {amount: '44.80', fromDate: '2026-11-10', provider:
-'Walmart Pharmacy', who: 'Louie Yi Jie Tan', comments: '...'}})` (the batchId
-comes from the page URL). **Expect** `ok: true`, `mismatches: []`, and a
-`statementLines` entry "PENDING Online Claim" for the total. A mismatch goes to
-Louie verbatim.
+On the receipt page (reinject `navia.js` if needed):
+`navia.readback({expected: {amount: '44.80', fromDate: '2026-11-10',
+provider: 'Walmart Pharmacy', who: 'Louie Yi Jie Tan', comments: '...'}})`
+(batchId from the URL). **Expect** `ok: true`, `mismatches: []`, and a
+"PENDING Online Claim" in `statementLines`. A mismatch goes to Louie verbatim.
 
-Report to Louie: the batch id, total, anticipated reimbursement date, the
-Pending line, and the three checkpoint screenshots plus the receipt page
-(send them, and save them with the comparison tables under
-`/drafts/navia-claims/claims/<date>-<provider>/` in the store). Then close the
-browser: Navia's logout doesn't end the session server-side.
+Report the batch id, total, anticipated reimbursement date and the Pending
+line, and send the three checkpoint screenshots plus the receipt page; save
+them with the comparison tables under
+`/drafts/navia-claims/claims/<date>-<provider>/` in the store. Then close the
+browser: Navia's logout doesn't end the session.
 
 ## Getting unstuck
 
-Always look at the screenshot first; most stalls are visible.
+Look at the screenshot first, then `navia.formState()`.
 
-- **Take over by hand.** When a label click fails or the page isn't what the
-  recipe expects, drive it like a person: snapshot the interactive elements
-  (`snap --grep "<label words>"`), click by ref, or click the point you see in
-  the screenshot (`click --x X --y Y --unscale last-small`), **one action per
-  batch**, screenshot after each, until the page is back at an Expect state.
-- **"selector is ambiguous" / wrong element**: use the ref from a fresh snap
-  of the open dropdown or dialog, or coordinates. Refs die on page changes.
-- **A typed value didn't stick or reverted**: click into the box, select all
-  (Ctrl+A), type again, click elsewhere, re-read the value.
-- **Dropdown won't open**: click its arrow, not the text; the options are links.
-- **Upload row stuck on "loading"** or the file never lists: the PDF previewer
-  is blocked. Restart the browser without image/script blocking, reload, and
-  start the claim again (a reload makes a new session; old uploads are
-  abandoned).
-- **A wrong value on the item**: pencil icon on its row → "next" past the
-  documents → fix → "Update claim" → redo checkpoints 2 and 3. Or the trash
-  icon → "yes" and add it again.
-- **Anything messy** (extra rows, wrong document, confused state): "cancel
-  claim request" → "yes" → start again at step 1. Nothing is submitted before
-  Send.
-- **Navia rejects the item** with a message (e.g. a duplicate): stop, tell
-  Louie.
-- **Logged out mid-claim** (redirected to the login page, helpers say "not
-  logged in"): log in again and restart the claim from step 1.
-- **Nothing loads after login / status 0 network errors**: the browser isn't
-  on a residential IP.
-- **Not sure Send went through** (timeout, blank page, error after the
-  click): **never click Send again.** Run `navia.statement({date})` and look
-  for a "PENDING Online Claim" line with the amount; open "My Benefits" →
-  Health Care FSA if the helpers can't run. Only if it is absent and Louie
-  agrees, file again.
-
-## How it works, for repairs
-
-Navia's portal is an Angular app at `app.naviabenefits.com` talking to
-`webapi.naviabenefits.com` with `Authorization: bearer <token>` and
-`X-NAVIA-CSRF-TOKEN`, both from `sessionStorage.authorizationData` (never print
-it). Rejected requests come back without CORS headers, so they show as network
-failures in the page. Recorded 2026-11-13 from the form's own traffic:
-
-- `GET api/common/trans/claim` → the claim session's `transId`. A reload starts a new one.
-- `GET api/ppt/claims/benefits` → benefits, plan dates, `lastSubmitDate`, expense types.
-- `POST api/ppt/docs/upload/files?transId=` (multipart `files`) on choosing a file; `DELETE api/ppt/docs/upload?transId=&fileName=` from the trash icon. After a rejected validate Navia has already dropped the uploads.
-- `POST api/ppt/claims/validate?transId=` per item ("I'm finished" / "Update claim"): `{id, age, amount: "44.80", benefitId, comments, depId, expenseTypeId, fromDate: "MM/DD/YYYY", toDate, provider, who, isNoResid, isOffset, isSecIns, ProcessResidual}` → 200 empty or 400 `[{errCode, errMsg}]`.
-- `POST api/ppt/claims/batch?transId=` on Send: the array of those items (`id` 1-based) → the `batchId` string; the page then routes to `#/claimReceipt?batchId=<encoded again>`.
-- `GET api/ppt/claims/receipt?id=<batchId, URL-encoded again>` → what Navia recorded.
-- `GET api/ppt/stmt/accttrans?planId=&benefitTypeId=` → the statement; `planId` from `sessionStorage.pptResponse[].benefitStmts[]` (one per plan year, with `beginDate`/`endDate`).
-
-To see what changed after a portal update, file one claim by hand with the
-browser's network capture on and compare the `/validate` and `/batch` bodies,
-then update `ENDPOINTS`/`FORM_FIELDS` in `js/navia.js` and the recipe above.
+- **Take over by hand** when a label click fails, matches the wrong element,
+  or the page isn't at an Expect state: snapshot the controls
+  (`snap --grep "<label words>"`), click by ref (fresh: refs die when the page
+  changes) or at the point in the screenshot
+  (`click --x X --y Y --unscale last-small`), **one action per batch**,
+  screenshot after each, until you are back at an Expect state. Dropdown
+  options are links; a stubborn dropdown opens from its arrow.
+- **A value didn't stick** (`rejectedByForm`, or the box shows something else):
+  click in, Ctrl+A, type again, click elsewhere, assert again.
+- **Upload stuck loading / never lists:** the PDF previewer is blocked.
+  Restart the browser without image or script blocking and start the claim
+  again.
+- **Wrong value on the item:** the pencil on its row → "next" → fix →
+  "Update claim" → redo checkpoints 2 and 3. Or the trash icon → "yes" → add
+  it again.
+- **Messy state** (extra items, wrong document): "cancel claim request" →
+  "yes" → step 1. Navia then shows a red "We were unable to complete your
+  request": its own cancel bug (it leaves the unsubmitted upload behind),
+  harmless. Nothing is submitted before Send.
+- **Navia rejects the item** (e.g. a duplicate): stop, tell Louie.
+- **Logged out mid-claim:** log in again, restart from step 1.
+- **Nothing works after login, network status 0:** not a residential IP.
+- **Unsure whether Send went through:** **never click Send again.**
+  `navia.statement({date})`: look for "PENDING Online Claim" with the amount
+  (or My Benefits → Health Care FSA). Refile only if it's absent and Louie
+  agrees.
+- **Portal changed** (selfcheck problems, a step that no longer matches):
+  `REPAIR.md` has the API and the page hooks the helpers read.

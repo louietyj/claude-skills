@@ -134,6 +134,79 @@
             nextReimbDate: (receipt.nextReimbDate || '').slice(0, 10), items, statementLines: pending, mismatches};
   };
 
+  /* What the claim form shows right now, read from the page, as a second channel next to the
+     checkpoint screenshots. Pass the agreed fields to get a per-field comparison. */
+  const visible = (e) => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+  const text = (e) => (e ? e.innerText.replace(/\s+/g, ' ').trim() : null);
+  const money = (s) => Number(String(s || '').replace(/[$,\s]/g, ''));
+  const formState = ({expected} = {}) => {
+    const modal = [...document.querySelectorAll('.nv-modal')].find(visible);
+    const toggles = modal ? [...modal.querySelectorAll('a.dropdown-toggle.selected-item')].filter(visible).map(text) : [];
+    const byPh = (ph) => [...modal.querySelectorAll('input, textarea')].find((e) => e.placeholder === ph && visible(e));
+    const field = (sel) => { const e = modal.querySelector(sel); return visible(e) ? e : null; };
+    let state;
+    if (modal && field('#fromDate')) {
+      const inputs = {fromDate: field('#fromDate'), toDate: field('#toDate'), provider: field('#providerName'),
+                      who: field('#forWhom'), amount: byPh('Amount'), comments: field('#claimComment')};
+      state = {screen: 'details', selectedBenefit: (byPh('Selected Benefit') || {}).value, expenseType: toggles[0] || null,
+               previewFile: text([...modal.querySelectorAll('span.file-name')].find(visible))};
+      for (const [k, e] of Object.entries(inputs)) state[k] = e ? e.value : null;
+      state.rejectedByForm = Object.entries(inputs).filter(([, e]) => e && e.classList.contains('ng-invalid')).map(([k]) => k);
+    } else if (modal && visible(document.getElementById('fileDropRef'))) {
+      const rows = [...modal.querySelectorAll('.list-row')].filter((r) => visible(r) && r.querySelector('.file-name-btn'));
+      state = {screen: 'upload', benefit: toggles[0] || null, planYear: toggles[1] || null,
+               fileCount: Number(((modal.innerText.match(/File Count:\s*(\d+)/) || [])[1]) || 0),
+               files: rows.map((r) => ({name: text(r.querySelector('.file-name-btn')), size: ((text(r).match(/[\d.]+\s*[KMG]?B/) || [])[0]) || null,
+                                        loading: /loading/i.test(text(r))}))};
+    } else if (location.hash.startsWith('#/claimReceipt')) {
+      state = {screen: 'receipt', batchId: decodeURIComponent((location.hash.match(/batchId=([^&]+)/) || [])[1] || '')};
+    } else if (location.hash.startsWith('#/claimSub')) {
+      const rows = [...document.querySelectorAll('.listview .list-row')].filter(visible)
+        .map((r) => [...r.children].map(text)).filter((c) => c[0] !== 'Service Date');
+      const terms = document.getElementById('agreeToTerms');
+      state = {screen: 'summary', termsTicked: !!(terms && terms.checked),
+               items: rows.map((c) => { const d = (c[0] || '').match(/\d{1,2}\/\d{1,2}\/\d{4}/g) || [];
+                                        return {fromDate: d[0] || null, toDate: d[1] || d[0] || null, provider: c[1], amount: c[2]}; })};
+    } else {
+      state = {screen: 'other', hash: location.hash};
+    }
+    if (!expected) return state;
+
+    const checks = [];
+    const eq = (name, agreed, page, same) => checks.push({field: name, agreed, page, ok: same === undefined ? String(agreed).trim() === String(page == null ? '' : page).trim() : same});
+    const sameDate = (a, b) => { try { return iso(toDate(a)) === iso(toDate(b)); } catch (e) { return false; } };
+    const sameMoney = (a, b) => Math.abs(money(a) - money(b)) < 0.005;
+    const docs = expected.documents || [];
+    if (state.screen === 'upload') {
+      eq('benefit', expected.benefit || 'Health Care FSA', state.benefit);
+      const year = String(toDate(expected.fromDate).getUTCFullYear());
+      eq('planYear', year, state.planYear, (state.planYear || '').includes(year));
+      eq('fileCount', docs.length, state.fileCount, state.fileCount === docs.length && state.files.length === docs.length);
+      docs.forEach((d, i) => eq('file ' + (i + 1), d, (state.files[i] || {}).name));
+      eq('loading', 'none', state.files.filter((f) => f.loading).map((f) => f.name).join(', ') || 'none');
+    } else if (state.screen === 'details') {
+      eq('selectedBenefit', expected.benefit || 'Health Care FSA', state.selectedBenefit, (state.selectedBenefit || '').startsWith(expected.benefit || 'Health Care FSA'));
+      eq('expenseType', expected.expenseType, state.expenseType);
+      eq('fromDate', expected.fromDate, state.fromDate, sameDate(expected.fromDate, state.fromDate));
+      eq('toDate', expected.toDate || expected.fromDate, state.toDate, sameDate(expected.toDate || expected.fromDate, state.toDate));
+      eq('provider', expected.provider, state.provider);
+      eq('who', expected.who, state.who);
+      eq('amount', expected.amount, state.amount, sameMoney(expected.amount, state.amount));
+      eq('comments', expected.comments || '', state.comments);
+      if (docs.length) eq('previewFile', docs[0], state.previewFile, docs.includes(state.previewFile));
+      eq('rejectedByForm', 'none', state.rejectedByForm.join(', ') || 'none');
+    } else if (state.screen === 'summary') {
+      const it = state.items[0] || {};
+      eq('items', 1, state.items.length);
+      eq('fromDate', expected.fromDate, it.fromDate, sameDate(expected.fromDate, it.fromDate));
+      eq('toDate', expected.toDate || expected.fromDate, it.toDate, sameDate(expected.toDate || expected.fromDate, it.toDate));
+      eq('provider', expected.provider, it.provider);
+      eq('amount', expected.amount, it.amount, sameMoney(expected.amount, it.amount));
+      eq('termsTicked', false, state.termsTicked, state.termsTicked === false);
+    }
+    return {...state, ok: checks.every((c) => c.ok), checks};
+  };
+
   const wrap = (fn) => (args) => {
     window.navia.result = {done: false};
     return Promise.resolve().then(() => fn(args || {})).then(
@@ -141,7 +214,12 @@
       (e) => { window.navia.result = {done: true, ok: false, error: String((e && e.message) || e)}; throw e; });
   };
 
+  const wrapSync = (fn) => (args) => {
+    try { const value = fn(args || {}); window.navia.result = {done: true, ok: true, value}; return value; }
+    catch (e) { window.navia.result = {done: true, ok: false, error: String((e && e.message) || e)}; throw e; }
+  };
+
   window.navia = {result: null, benefits: wrap(benefits), statement: wrap(statement), duplicates: wrap(duplicates),
-                  selfcheck: wrap(selfcheck), readback: wrap(readback)};
-  return 'navia ready: benefits, statement, duplicates, selfcheck, readback';
+                  selfcheck: wrap(selfcheck), readback: wrap(readback), formState: wrapSync(formState)};
+  return 'navia ready: benefits, statement, duplicates, selfcheck, readback, formState';
 })();

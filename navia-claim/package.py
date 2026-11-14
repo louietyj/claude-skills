@@ -7,7 +7,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "navia-claim"
-MEMBERS = ["SKILL.md", "js/navia.js"]
+MEMBERS = ["SKILL.md", "REPAIR.md", "js/navia.js"]
 
 
 def main() -> int:

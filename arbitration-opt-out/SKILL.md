@@ -29,16 +29,18 @@ As per the [document name], I would like to opt out of the arbitration agreement
 
 [Required info, one line per item]
 
-Please reply to confirm that my request has been received and processed. I can be reached at louietyj@gmail.com or (415) 630-7551.
+Please reply to confirm that my request has been received and processed. I can be reached at [email] or [phone].
 ```
 
 Default info lines — add/drop to match what the clause asks for:
 
 ```
-Full name: Louie Yi Jie Tan
-Mailing address: 609 San Conrado Ter Unit 1, Sunnyvale, CA 94085
-Email address: louietyj@gmail.com
+Full name: [full name]
+Mailing address: [mailing address]
+Email address: [email]
 ```
+
+Fill the bracketed details from his memory profile (`/memory/profile.md` in the cfs store): full legal name, mailing address (with the unit), email, and phone written as `(415) 555-0123`. Never copy them into this repo: it is public.
 
 Anything required that you don't have (account number, username…): `[TODO]` line and ask; never guess. If the clause mandates specific wording or a signature, honour it.
 

@@ -37,7 +37,9 @@ Louie's conventions (from him, 2026-11-14):
   defensible-looking date on the receipt: a big, bold printed date wins over a
   small dispense date elsewhere on the page. As a tiebreak, dispense date >
   order date > delivery date.
-- **For whom:** Louie Yi Jie Tan.
+- **For whom:** his full legal name, as on his memory profile
+  (`/memory/profile.md` in the cfs store). Personal details stay out of this
+  public repo.
 - **Provider:** the basic name: `Walmart Pharmacy`, `Grace Dental`,
   `C.Sharp Optometry`.
 - **Amount:** what he paid for the claimed lines. Bag fees and tips are never
@@ -66,7 +68,7 @@ Read the receipt and send him this card, every field filled:
 | Expense type | Prescription Drugs | Navia's list: Prescription Drugs, Over-the-Counter Items, Over-The-Counter with Rx, General Healthcare, General Dental Care, General Vision Care, Counseling Services, Chiropractic, Massage Therapy, Orthodontia, Travel, Personal Protective Equipment, Feminine Care Product, Letter of Medical Necessity. |
 | Service start / end | 11/10/2026 / 11/10/2026 | |
 | Provider | Walmart Pharmacy | |
-| For whom | Louie Yi Jie Tan | |
+| For whom | (his full legal name) | |
 | Amount | $44.80 | |
 | Comments | Finasteride $24.80, Clindamycin $20.00 | |
 
@@ -175,8 +177,8 @@ wait --fn "document.body.innerText.includes('Verify Your Identity') || JSON.pars
    sender `40680`, "Code: NNNNNN"; it arrives in about 10 s; email lags
    minutes). Type it into the "Enter code" box, tick "Remember this device for
    future logins", click "submit code". A new code request voids the old one.
-5. **Expect:** URL `#/pptHome`, "Louie Yi Jie Tan / SNF Snowflake Inc." top
-   right, `authorizationData.token` set.
+5. **Expect:** URL `#/pptHome`, his name and employer top right,
+   `authorizationData.token` set.
 
 ## 3. Load the helpers and run the pre-checks
 
@@ -275,7 +277,7 @@ capture the checkpoint again.
 
 On the receipt page, reinject `navia.js` if needed and run
 `navia.readback({expected: {amount: '44.80', fromDate: '2026-11-10', provider:
-'Walmart Pharmacy', who: 'Louie Yi Jie Tan', comments: '...'}})` (the batchId
+'Walmart Pharmacy', who: '<for whom>', comments: '...'}})` (the batchId
 comes from the page URL). **Expect** `ok: true`, `mismatches: []`, and a
 `statementLines` entry "PENDING Online Claim" for the total. A mismatch goes to
 Louie verbatim.

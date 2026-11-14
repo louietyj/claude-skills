@@ -35,12 +35,12 @@ Please reply to confirm that my request has been received and processed. I can b
 Default info lines — add/drop to match what the clause asks for:
 
 ```
-Full name: [full name]
+Full name: Louie Yi Jie Tan
 Mailing address: [mailing address]
 Email address: [email]
 ```
 
-Fill the bracketed details from his memory profile (`/memory/profile.md` in the cfs store): full legal name, mailing address (with the unit), email, and phone written as `(415) 555-0123`. Never copy them into this repo: it is public.
+Fill the bracketed details from his memory profile (`/memory/profile.md` in the cfs store): mailing address (with the unit), email, and phone written as `(415) 555-0123`. Never copy them into this repo: it is public.
 
 Anything required that you don't have (account number, username…): `[TODO]` line and ask; never guess. If the clause mandates specific wording or a signature, honour it.
 

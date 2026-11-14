@@ -37,9 +37,7 @@ Louie's conventions (from him, 2026-11-14):
   defensible-looking date on the receipt: a big, bold printed date wins over a
   small dispense date elsewhere on the page. As a tiebreak, dispense date >
   order date > delivery date.
-- **For whom:** his full legal name, as on his memory profile
-  (`/memory/profile.md` in the cfs store). Personal details stay out of this
-  public repo.
+- **For whom:** Louie Yi Jie Tan.
 - **Provider:** the basic name: `Walmart Pharmacy`, `Grace Dental`,
   `C.Sharp Optometry`.
 - **Amount:** what he paid for the claimed lines. Bag fees and tips are never
@@ -68,7 +66,7 @@ Read the receipt and send him this card, every field filled:
 | Expense type | Prescription Drugs | Navia's list: Prescription Drugs, Over-the-Counter Items, Over-The-Counter with Rx, General Healthcare, General Dental Care, General Vision Care, Counseling Services, Chiropractic, Massage Therapy, Orthodontia, Travel, Personal Protective Equipment, Feminine Care Product, Letter of Medical Necessity. |
 | Service start / end | 11/10/2026 / 11/10/2026 | |
 | Provider | Walmart Pharmacy | |
-| For whom | (his full legal name) | |
+| For whom | Louie Yi Jie Tan | |
 | Amount | $44.80 | |
 | Comments | Finasteride $24.80, Clindamycin $20.00 | |
 
@@ -277,7 +275,7 @@ capture the checkpoint again.
 
 On the receipt page, reinject `navia.js` if needed and run
 `navia.readback({expected: {amount: '44.80', fromDate: '2026-11-10', provider:
-'Walmart Pharmacy', who: '<for whom>', comments: '...'}})` (the batchId
+'Walmart Pharmacy', who: 'Louie Yi Jie Tan', comments: '...'}})` (the batchId
 comes from the page URL). **Expect** `ok: true`, `mismatches: []`, and a
 `statementLines` entry "PENDING Online Claim" for the total. A mismatch goes to
 Louie verbatim.

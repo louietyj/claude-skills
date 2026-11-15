@@ -223,6 +223,8 @@ class Fake:
     async def renegotiate(self, request):
         body = await request.json()
         self.sfu["answers"].append({"session": request.match_info["sid"], **body})
+        if body["sessionDescription"].get("sdp") == "v=0 too-late":
+            return web.json_response({"errorCode": "session_error"}, status=410)
         return web.json_response({})
 
     async def tracks_close(self, request):

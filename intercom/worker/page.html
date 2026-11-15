@@ -224,7 +224,6 @@ const GAP_REPORT_MS = 3000;
 // overlapping attempts so a slow network's can still finish (README: "Reconnecting").
 const RETRY_MS = [250, 500, 1000, 2000];
 const ATTEMPT_MAX_MS = 10000;
-const ATTEMPTS_MAX = 3;
 let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
 let prevWs = null, switchWhy = null, racing = null;
 let netType = navigator.connection?.type ?? null;
@@ -546,13 +545,12 @@ function race(open) {
   const r = { live: new Set(), n: 0, timer: null, done: false };
   const next = () => {
     if (r.done) return;
-    if (r.live.size < ATTEMPTS_MAX) {
-      const a = { close: null, kill: null };
-      const drop = () => { clearTimeout(a.kill); r.live.delete(a); };
-      r.live.add(a);
-      a.kill = setTimeout(() => { drop(); a.close?.(); }, ATTEMPT_MAX_MS);
-      a.close = open({ won: () => { drop(); r.stop(); }, lost: drop });
-    }
+    // No cap: the timeout bounds how many run at once (about 8 on this schedule).
+    const a = { close: null, kill: null };
+    const drop = () => { clearTimeout(a.kill); r.live.delete(a); };
+    r.live.add(a);
+    a.kill = setTimeout(() => { drop(); a.close?.(); }, ATTEMPT_MAX_MS);
+    a.close = open({ won: () => { drop(); r.stop(); }, lost: drop });
     const ms = RETRY_MS[Math.min(r.n++, RETRY_MS.length - 1)];
     r.timer = setTimeout(next, ms * (0.8 + Math.random() * 0.4));
   };
@@ -607,10 +605,12 @@ setInterval(checkSocket, 1000);
 
 // A new network has probably killed the socket. `change` also fires on
 // bandwidth estimates, so only a different kind of network counts.
-// The voice's connection is checked too: it rides the same network.
+// The voice's connection is on the old network too, though it says `connected`
+// until ICE notices, ~20 s on a Wi-Fi to cellular switch: replace it now.
 function networkChanged(why) {
   if (mode !== "live") return;
   reconnectNow(why, true);
+  if (voice) { voiceSuspect = voice; voiceSuspectWhy = "network"; }
   checkVoice();
 }
 addEventListener("online", () => networkChanged("back online"));
@@ -693,8 +693,12 @@ function onMessage(m) {
   else if (m.type === "tts_done") claudeTalking = false;
   else if (m.type === "voice_offer") answerVoice(m.sdp, m.vid);
   // The relay heard no playback, or remade the track: this connection no longer counts.
-  else if (m.type === "voice_restart" && talk) { voiceSuspect = voice; checkVoice(); }
-  else if (m.type === "voice_failed") { voiceAttempts.get(m.vid)?.fail(); voiceFailed(m.error); }
+  else if (m.type === "voice_restart" && talk) { voiceSuspect = voice; voiceSuspectWhy = "relay"; checkVoice(); }
+  // A raced attempt failing is routine: the race goes on.
+  else if (m.type === "voice_failed") {
+    if (m.vid != null) voiceAttempts.get(m.vid)?.fail();
+    else voiceFailed(m.error);
+  }
   else if (m.type === "settings") { holdMs = m.hold_ms; isolateOn = m.isolate ?? null; renderSheet(); }
   else if (m.type === "release") releaseAudio();
   else if (m.type === "call_failed") status(`Call failed: ${m.error}`, "red");
@@ -1163,7 +1167,8 @@ function scheduleChirps() {
 const VOICE_DISCONNECTED_MS = 3000;   // `disconnected` often recovers by itself; past this, race it
 const VOICE_RED_MS = 120000;          // down this long: the status turns red, the race carries on
 const VOICE_ICE_WAIT_MS = 500;
-let voiceVid = null, voiceSuspect = null, voiceDownSince = null, voiceRace = null, voiceN = 0;
+let voiceVid = null, voiceSuspect = null, voiceSuspectWhy = null, voiceDownSince = null, voiceRace = null, voiceN = 0;
+let voiceOutage = null;               // { at, n0 }: when the voice went down, for the relay's log
 const voiceAttempts = new Map();      // vid -> an attempt awaiting its offer or its connection
 
 const voiceUp = () => !!voice && voice !== voiceSuspect && voice.connectionState === "connected";
@@ -1209,7 +1214,8 @@ function checkVoice() {
   if (now - voiceDownSince >= VOICE_RED_MS) voiceFailed("still reconnecting");
   else if (ws && ws.readyState === 1) status("Reconnecting voice…", "amber");
   if (voiceRace || !ws || ws.readyState !== 1) return;
-  send({ type: "voice_down", why: !voice ? "none" : voice === voiceSuspect ? "relay" : st });
+  send({ type: "voice_down", why: !voice ? "none" : voice === voiceSuspect ? voiceSuspectWhy : st });
+  voiceOutage = { at: voiceDownSince, n0: voiceN };
   voiceRace = race(openVoice);
 }
 setInterval(checkVoice, 1000);
@@ -1251,8 +1257,12 @@ function adoptVoice(vid, a) {
   voiceEl.srcObject = a.stream;
   aecReference();
   routeVoice();
+  const out = voiceOutage;
+  voiceOutage = null;
   const play = () => voiceEl.play().then(() => {
-    if (voice === a.pc) send({ type: "voice_ready", vid, ms: Date.now() - a.t0 });
+    if (voice !== a.pc) return;
+    send({ type: "voice_ready", vid, ms: Date.now() - a.t0,
+           ...(out ? { down_ms: Date.now() - out.at, tries: vid - out.n0 } : {}) });
   }, (err) => err.name === "NotAllowedError" ? needTap(play) : voiceFailed(`won't play (${err.name})`));
   play();
 }

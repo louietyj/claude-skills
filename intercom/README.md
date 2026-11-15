@@ -568,20 +568,27 @@ socket itself never dropped (so nothing restarted the voice), and Louie heard
 nothing more while Claude still heard him. Now both channels use `race()`:
 attempts start 250 ms, 500 ms, 1 s, then every 2 s apart (±20%), for as long
 as the session lives. Attempts overlap rather than replace each other: each
-runs until it connects or 10 s pass, up to 3 at a time, and the first to
-connect wins. A connect is several sequential round trips (TCP+TLS+upgrade for
+runs until it connects or 10 s pass, and the first to connect wins. There is
+no cap on attempts in flight: the timeout already bounds them (about 8 on this
+schedule), and a cap of 3 held up new attempts for 10 s behind stuck ones on
+the first Wi-Fi to cellular test. A connect is several sequential round trips (TCP+TLS+upgrade for
 the socket; offer, answer, ICE and DTLS for the voice), so on a link with
 round trips near a second, an attempt cut off at 2 s would never finish and the
 channel would stay down on a network that could carry it. The voice counts as
 down when it has no connection, its connection is `failed`, it has been
-`disconnected` for 3 s, or the relay says playback stalled (`voice_restart`).
+`disconnected` for 3 s, the relay says playback stalled (`voice_restart`), or
+the browser reports a new network: a Wi-Fi to cellular switch left the old
+connection saying `connected` for ~20 s with nothing getting through. A raced
+attempt that fails (an answer that reached the SFU after it gave up: 410) is
+logged quietly and dropped at once.
 Its requests travel on the socket, so its race runs only while the socket is
 open and starts again the moment it reopens. Each attempt has its own SFU
 session (`vid`); once one plays, the relay closes the rest. The page answers
 after at most 500 ms of ICE gathering (it was 2 s): the SFU is ICE-lite on a
 public address and learns the page's from its checks. The page's status turns
 amber while the voice reconnects, and red after 2 minutes, with the race still
-running. Voice drops and connect times are logged quietly (`net`).
+running. Voice drops, connect times and how long the voice was down are
+logged quietly (`net`).
 
 **Speech survives a drop.** While Claude speaks, the page reports every 250 ms
 how much it has played (`voice_heard`: real samples, not concealment, from the
@@ -592,7 +599,8 @@ line. When the voice plays again within 30 s, it resumes from the start of the
 word that was playing, as a buffering media player does (a live call drops the
 gap instead, but Claude's line is already generated); past 30 s, `speak`
 returns `interrupted` with what was heard, since the conversation may have
-moved on. A paused line reports `paused_s`. The same reports keep `done` honest:
+moved on. A paused line reports `paused_s`. The 90 s guard on a line covers
+only generation: it once cut off a line that 25 s of pauses had pushed past it. The same reports keep `done` honest:
 a line whose page hasn't played it all is not done, where the relay's clock
 alone used to call it done after a silent drop.
 

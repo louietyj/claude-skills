@@ -43,7 +43,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
-                 "--var RESUME_GRACE_MS:2000 --var VOICE_RESUME_WAIT_MS:3000 "
+                 "--var RESUME_GRACE_MS:2000 --var VOICE_RESUME_WAIT_MS:3000 --var SPEAK_GEN_TIMEOUT_MS:15000 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
@@ -1098,6 +1098,33 @@ class Speak(unittest.TestCase):
             m = recv_until(ws, lambda m: m.get("type") in ("voice_offer", "voice_failed"))
             got[m.get("vid")] = m["type"]
         self.assertEqual(got, {1: "voice_offer", 2: "voice_offer"})
+        ws.close()
+
+    def test_a_raced_attempt_the_sfu_refuses_is_dropped_quietly(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        last = entries(sid)[-1]["n"] if entries(sid) else 0
+        ws.send(json.dumps({"type": "voice_request", "vid": 3}))
+        recv_until(ws, lambda m: m.get("type") == "voice_offer" and m.get("vid") == 3)
+        ws.send(json.dumps({"type": "voice_answer", "vid": 3, "sdp": {"type": "answer", "sdp": "v=0 too-late"}}))
+        self.assertEqual(recv_until(ws, lambda m: m.get("type") == "voice_failed")["vid"], 3)
+        es = wait_entries(sid, lambda es: any("voice attempt 3 failed" in t for t in texts(es, "net")))
+        self.assertFalse(any("could not be connected" in t for t in texts(es, "event")), es)
+        self.assertEqual(http("/watch", id=sid, since=last, interval=0, wait=1)[1]["event"], "idle")
+        ws.close()
+
+    def test_a_line_paused_past_the_generation_guard_still_finishes(self):
+        sid, _, ws = live_talk()
+        t0 = time.time()
+        th, got = speak_in_background(sid, " ".join(["word"] * 24))    # 12 s of audio
+        stop, _ = report_playback(ws, frozen_at=0.6)
+        self.assertEqual(stop["type"], "tts_stop")
+        time.sleep(2.5)
+        ws.send(json.dumps({"type": "voice_ready"}))
+        report_playback(ws, counted=0.6, timeout=30)
+        th.join(30)
+        self.assertGreater(time.time() - t0, 15, "the test must outlast the guard (15 s here)")
+        self.assertEqual(got["out"]["status"], "done", got)
         ws.close()
 
     def test_speak_asks_a_page_whose_voice_is_down_to_reconnect_it(self):

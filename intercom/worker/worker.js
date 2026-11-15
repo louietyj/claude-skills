@@ -134,7 +134,7 @@ const VOICE_READY_WAIT_MS = 10_000;
 // clock, and resumes where it stopped if the voice is back within the wait.
 const VOICE_STALL_S = 2;
 const VOICE_RESUME_WAIT_MS = 30_000;
-const VOICE_SUBS_MAX = 4;                // the page races up to 3 connections; one more is being replaced
+const VOICE_SUBS_MAX = 10;               // the page races about 8 at most, plus the one being replaced
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
 const SPEAK_KEEPALIVE_MS = 5000;
@@ -1401,7 +1401,7 @@ export class Session {
     if (msg.type === "loud") return this.onLoud(!!msg.on);
     if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice(voiceKey(msg.vid));
     if (msg.type === "voice_answer") return this.answerVoice(voiceKey(msg.vid), msg.sdp);
-    if (msg.type === "voice_ready") return this.onVoiceReady(voiceKey(msg.vid), msg.ms);
+    if (msg.type === "voice_ready") return this.onVoiceReady(voiceKey(msg.vid), msg.ms, msg.down_ms, msg.tries);
     if (msg.type === "voice_down") return this.onVoiceDown(String(msg.why ?? "").slice(0, 40));
     if (msg.type === "voice_heard") return this.onVoiceHeard(msg.sid, Number(msg.s));
     if (msg.type === "mic") return this.onMic(msg.state);
@@ -1639,8 +1639,7 @@ export class Session {
       }
       this.toHolder({ type: "voice_offer", vid: vid === "_" ? undefined : Number(vid), sdp: out.sessionDescription });
     } catch (e) {
-      await this.addEntry("event", { text: `Claude's voice could not be connected (${e.message}); speak will fail` });
-      this.toHolder({ type: "voice_failed", vid: vid === "_" ? undefined : Number(vid), error: String(e.message).slice(0, 200) });
+      await this.voiceAttemptFailed(vid, e);
     }
   }
 
@@ -1650,8 +1649,19 @@ export class Session {
     try {
       await this.sfu(`/sessions/${sub.sessionId}/renegotiate`, "PUT", { sessionDescription: sdp });
     } catch (e) {
-      await this.addEntry("event", { text: `Claude's voice could not be connected (${e.message}); speak will fail` });
+      this.voiceSubs.delete(vid);
+      await this.voiceAttemptFailed(vid, e);
     }
+  }
+
+  // A raced attempt failing is routine (an answer too late for the SFU): quiet.
+  // A page with one attempt at a time has nothing else coming, so Claude is told.
+  async voiceAttemptFailed(vid, e) {
+    const raced = vid !== "_";
+    await this.addEntry(raced ? "net" : "event", { text: raced
+      ? `voice attempt ${vid} failed: ${String(e.message).slice(0, 160)}`
+      : `Claude's voice could not be connected (${e.message}); speak will fail` });
+    this.toHolder({ type: "voice_failed", vid: raced ? Number(vid) : undefined, error: String(e.message).slice(0, 200) });
   }
 
   // Best effort: the SFU drops a session whose peer has gone anyway.
@@ -1661,7 +1671,7 @@ export class Session {
   }
 
   // The page's voice plays: its other attempts are done with, and speech paused by a drop resumes.
-  async onVoiceReady(vid, ms) {
+  async onVoiceReady(vid, ms, downMs, tries) {
     const was = this.voiceReady;
     this.voiceReady = true;
     this.voiceVid = vid;
@@ -1669,7 +1679,9 @@ export class Session {
     const sp = this.speaking;
     if (sp?.paused) this.resumeSpeech(sp);
     if (!was && Number.isFinite(Number(ms))) {
-      await this.addEntry("net", { text: `${this.ui(this.holder)} voice connected in ${(Number(ms) / 1000).toFixed(1)}s` });
+      const s = (v) => `${(Number(v) / 1000).toFixed(1)}s`;
+      const down = Number.isFinite(Number(downMs)) ? `, back after ${s(downMs)} down and ${Number(tries)} attempts` : "";
+      await this.addEntry("net", { text: `${this.ui(this.holder)} voice connected in ${s(ms)}${down}` });
     }
   }
 
@@ -1796,7 +1808,8 @@ export class Session {
     this.speechSpans.push(sp.span);
     if (this.speechSpans.length > SPANS_MAX) this.speechSpans.shift();
     sp.pump = setInterval(() => this.pumpVoice(sp), PUMP_MS);
-    sp.guard = setTimeout(() => this.finishSpeak(sp, "error", "TTS produced no end of audio"), SPEAK_GEN_TIMEOUT_MS);
+    sp.guard = setTimeout(() => this.finishSpeak(sp, "error", "TTS produced no end of audio"),
+                          Number(this.env.SPEAK_GEN_TIMEOUT_MS ?? SPEAK_GEN_TIMEOUT_MS));
     if (rid) await this.rememberSpeak(rid, { status: "started" });
     return [await done, 200];
   }
@@ -1813,6 +1826,8 @@ export class Session {
       sp.ends.push(...ts.character_end_times_seconds);
       sp.starts.push(...(ts.character_start_times_seconds ?? []));
     }
+    // The guard is on generation only: a line paused by a drop can outlast it.
+    if (m.audio_end || m.terminated) clearTimeout(sp.guard);
     if (m.audio_end) sp.genEnded = true;
     if (m.terminated) {
       sp.genEnded = sp.genDone = true;

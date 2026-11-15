@@ -549,9 +549,8 @@ back after Wi-Fi went off: Louie would rather have late turns than lost ones.
 To notice a socket that died without closing (a network switch), the relay
 pings every screen every 2s. **Racing a quiet socket:** past one missed ping
 (3s), or at once when the browser reports a different kind of network, the page
-opens fresh sockets alongside the quiet one, each given 2s to open (a TCP+TLS+
-WebSocket handshake on poor cellular can take a second), until one opens or the
-old one is heard from again. A quiet socket is often TCP backing off its
+opens fresh sockets alongside the quiet one, on the reconnect schedule below,
+until one opens or the old one is heard from again. A quiet socket is often TCP backing off its
 retransmissions (the timeout doubles from a few hundred ms per miss, so a 3s
 blackout stalled sockets for 7-10s on cellular); a fresh one has no backoff and
 gets through as soon as the network does. Any gap over 3s is logged quietly
@@ -560,8 +559,42 @@ the new one resumes, chunks still go out on the old one: a cellular link that
 lost 2-3s of pings stalled TCP for ~10s, and the first version, which went
 quiet on the old socket at once, turned each such stall into a gap. A device's
 newer socket replaces its older one without cutting Claude's speech; a socket
-that died does cut it. Claude's voice is asked for again if its connection
-fails, three times.
+that died pauses it (below).
+
+**Reconnecting: one schedule for the socket and the voice, never giving up.**
+The voice used to be retried three times, back to back, and then left for dead:
+on 2026-11-15 a Wi-Fi blip mid-talk used all three inside the outage, the
+socket itself never dropped (so nothing restarted the voice), and Louie heard
+nothing more while Claude still heard him. Now both channels use `race()`:
+attempts start 250 ms, 500 ms, 1 s, then every 2 s apart (±20%), for as long
+as the session lives. Attempts overlap rather than replace each other: each
+runs until it connects or 10 s pass, up to 3 at a time, and the first to
+connect wins. A connect is several sequential round trips (TCP+TLS+upgrade for
+the socket; offer, answer, ICE and DTLS for the voice), so on a link with
+round trips near a second, an attempt cut off at 2 s would never finish and the
+channel would stay down on a network that could carry it. The voice counts as
+down when it has no connection, its connection is `failed`, it has been
+`disconnected` for 3 s, or the relay says playback stalled (`voice_restart`).
+Its requests travel on the socket, so its race runs only while the socket is
+open and starts again the moment it reopens. Each attempt has its own SFU
+session (`vid`); once one plays, the relay closes the rest. The page answers
+after at most 500 ms of ICE gathering (it was 2 s): the SFU is ICE-lite on a
+public address and learns the page's from its checks. The page's status turns
+amber while the voice reconnects, and red after 2 minutes, with the race still
+running. Voice drops and connect times are logged quietly (`net`).
+
+**Speech survives a drop.** While Claude speaks, the page reports every 250 ms
+how much it has played (`voice_heard`: real samples, not concealment, from the
+receiver's stats, summed across connections). When playback falls 2 s behind
+the relay's clock, the page reports its voice down, or the socket holding the
+audio drops, the relay stops feeding the track, mutes the page and keeps the
+line. When the voice plays again within 30 s, it resumes from the start of the
+word that was playing, as a buffering media player does (a live call drops the
+gap instead, but Claude's line is already generated); past 30 s, `speak`
+returns `interrupted` with what was heard, since the conversation may have
+moved on. A paused line reports `paused_s`. The same reports keep `done` honest:
+a line whose page hasn't played it all is not done, where the relay's clock
+alone used to call it done after a silent drop.
 
 **One recorder run = one webm header = one transcriber stream** (a "segment").
 A stream that resumes mid-container is not reliably decodable, so every

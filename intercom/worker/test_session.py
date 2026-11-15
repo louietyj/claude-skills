@@ -43,7 +43,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var REALTIME_APP_ID:app1 --var REALTIME_APP_TOKEN:{SFUKEY} "
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
-                 "--var RESUME_GRACE_MS:2000 "
+                 "--var RESUME_GRACE_MS:2000 --var VOICE_RESUME_WAIT_MS:3000 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
@@ -773,6 +773,29 @@ def connect_voice(ws, ready=True):
         ws.send(json.dumps({"type": "voice_ready"}))
 
 
+def report_playback(ws, frozen_at=None, counted=0.0, timeout=15):
+    """The page's part while Claude speaks: from its next tts_start, report how
+    much it has played (its count goes on from `counted`, by the clock less the
+    playout delay, stuck at `frozen_at` if given). Returns the message that ends
+    it (tts_done or tts_stop) and everything seen on the way."""
+    seen, t0, tts = [], None, None
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            m = json.loads(ws.recv(timeout=0.25))
+            seen.append(m)
+            if m.get("type") == "tts_start":
+                t0, tts = time.time(), m["sid"]
+            if m.get("type") in ("tts_done", "tts_stop"):
+                return m, seen
+        except TimeoutError:
+            pass
+        if t0 is not None:
+            s = counted + max(0.0, time.time() - t0 - PLAYOUT_MS / 1000)
+            ws.send(json.dumps({"type": "voice_heard", "sid": tts, "s": min(s, frozen_at or s)}))
+    raise AssertionError(f"speech never ended: {seen}")
+
+
 def live_talk(with_transcriber=False):
     global SEG_T0
     sid, key = create_talk()
@@ -1035,6 +1058,106 @@ class Speak(unittest.TestCase):
         while time.time() < end and adapter not in FAKE.sfu["closed"]:
             time.sleep(0.1)
         self.assertIn(adapter, FAKE.sfu["closed"])
+        ws.close()
+
+    def test_raced_voice_attempts_each_get_an_offer_and_the_one_that_plays_closes_the_rest(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        closed = len(FAKE.sfu["subs_closed"])
+        offers = {}
+        for vid in (1, 2):
+            ws.send(json.dumps({"type": "voice_request", "vid": vid}))
+            offers[vid] = recv_until(ws, lambda m: m.get("type") == "voice_offer" and m.get("vid") == vid)
+        subs = {s["session"] for s in FAKE.sfu["subscribes"][-2:]}
+        self.assertEqual(len(subs), 2)
+        ws.send(json.dumps({"type": "voice_answer", "vid": 2, "sdp": {"type": "answer", "sdp": "v=0 two"}}))
+        ws.send(json.dumps({"type": "voice_ready", "vid": 2, "ms": 1400}))
+        es = wait_entries(sid, lambda es: any("voice connected in 1.4s" in t for t in texts(es, "net")))
+        winner = [a["session"] for a in FAKE.sfu["answers"] if a["sessionDescription"]["sdp"] == "v=0 two"][-1]
+        end = time.time() + 5
+        while time.time() < end and len(FAKE.sfu["subs_closed"]) == closed:
+            time.sleep(0.1)
+        self.assertEqual([c["session"] for c in FAKE.sfu["subs_closed"][closed:]], list(subs - {winner}))
+        self.assertTrue(FAKE.sfu["subs_closed"][-1]["force"])
+        self.assertEqual(http("/speak", "POST", {"text": "one"}, id=sid, timeout=20)[1]["status"], "done")
+        ws.close()
+
+    def test_speak_asks_a_page_whose_voice_is_down_to_reconnect_it(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        th, got = speak_in_background(sid, "hello")
+        recv_until(ws, lambda m: m.get("type") == "voice_restart")
+        connect_voice(ws)
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", got)
+        ws.close()
+
+    def test_speech_pauses_when_playback_stalls_and_resumes_from_that_word(self):
+        sid, _, ws = live_talk()
+        words = "one two three four five six seven eight"
+        th, got = speak_in_background(sid, words)
+        # The page plays 1.2 s (into "three"), then nothing more reaches it.
+        stop, seen = report_playback(ws, frozen_at=1.2)
+        self.assertEqual(stop["type"], "tts_stop", seen)
+        self.assertIn("voice_restart", [m.get("type") for m in seen])
+        time.sleep(0.5)
+        n = len(FAKE.sfu["packets"])
+        ws.send(json.dumps({"type": "voice_ready"}))
+        done, _ = report_playback(ws, counted=1.2)
+        self.assertEqual(done["type"], "tts_done")
+        th.join(20)
+        out = got["out"]
+        self.assertEqual((out["status"], out["spoken"]), ("done", words), out)
+        self.assertGreaterEqual(out["paused_s"], 0.4)
+        # Resumed from where "three" begins (1.0 s): 3.0 s of 48 kHz mono, as stereo.
+        self.assertEqual(sum(p["len"] for p in FAKE.sfu["packets"][n:]), 3 * 48000 * 2 * 2)
+        self.assertEqual(texts(entries(sid), "said").count(words), 1)
+        ws.close()
+
+    def test_speech_that_never_finished_playing_is_not_done(self):
+        sid, _, ws = live_talk()
+        th, got = speak_in_background(sid, "one two three four")
+        # The voice dies 0.8 s from the end: the relay's clock alone would call it done.
+        stop, seen = report_playback(ws, frozen_at=1.2)
+        self.assertEqual(stop["type"], "tts_stop", seen)
+        ws.send(json.dumps({"type": "voice_ready"}))
+        report_playback(ws, counted=1.2)
+        th.join(20)
+        self.assertEqual(got["out"]["status"], "done", got)
+        self.assertIn("paused_s", got["out"])
+        ws.close()
+
+    def test_a_voice_that_stays_down_ends_the_speech_with_what_was_heard(self):
+        sid, _, ws = live_talk()
+        th, got = speak_in_background(sid, "one two three four five six")
+        stop, _ = report_playback(ws, frozen_at=0.7)
+        self.assertEqual(stop["type"], "tts_stop")
+        th.join(20)
+        out = got["out"]
+        self.assertEqual((out["status"], out["spoken"], out["unspoken"]),
+                         ("interrupted", "one", "two three four five six"), out)
+        self.assertIn("wasn't back within 3s", out["reason"])
+        ws.close()
+
+    def test_a_dropped_socket_pauses_speech_and_the_rejoined_page_resumes_it(self):
+        sid, _ = create_talk()
+        ws, _ = recording(sid)
+        connect_voice(ws)
+        th, got = speak_in_background(sid, "one two three four five six")
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        time.sleep(1.0)
+        ws.close()
+        time.sleep(0.5)
+        ws = screen(sid, "phone", dev="p1", holding=True, rec="r1")
+        recv_until(ws, lambda m: m.get("type") == "resume")
+        ws.send(json.dumps({"type": "voice_ready"}))                 # its voice track survived
+        recv_until(ws, lambda m: m.get("type") == "tts_start")
+        th.join(20)
+        out = got["out"]
+        self.assertEqual((out["status"], out["spoken"]), ("done", "one two three four five six"), out)
+        self.assertGreaterEqual(out["paused_s"], 0.4)
         ws.close()
 
 

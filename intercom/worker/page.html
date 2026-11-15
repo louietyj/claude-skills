@@ -211,19 +211,23 @@ let talk = false, voice = null, voiceEl = null, claudeTalking = false;
 let separate = false, mediaCtx = null, mediaOut = null, mediaSrc = null;
 let voiceMuted = false, voiceVolume = 1;
 let meterCtx = null, meterTimer = null, probe = null, chirp = null, meterSeen = null;
-let backoff = 250, retryTimer = null, failures = 0, noteTimer = null;
+let noteTimer = null;
 // The recorder runs through a dropped socket. Its recent chunks are kept, so a
 // new socket can resend whatever the relay didn't get (README: "A dropped page").
 const KEEP_CHUNKS = 240;         // 60 s at 250 ms, the relay's grace
 // The relay pings every 2 s. A quiet socket is often just TCP backing off its
-// retries, which a fresh socket skips: past one missed ping, new ones race it,
-// each given 2 s to open (README: "Racing a quiet socket").
+// retries, which a fresh socket skips: past one missed ping, new ones race it
+// (README: "Racing a quiet socket").
 const RACE_AFTER_MS = 3000;
-const RACE_EVERY_MS = 2000;
 const GAP_REPORT_MS = 3000;
+// The socket and Claude's voice reconnect on one schedule, forever, with
+// overlapping attempts so a slow network's can still finish (README: "Reconnecting").
+const RETRY_MS = [250, 500, 1000, 2000];
+const ATTEMPT_MAX_MS = 10000;
+const ATTEMPTS_MAX = 3;
 let recId = null, recN = 0, recKept = [], streaming = false, lastRx = 0;
-let prevWs = null, switchWhy = null, racer = null;
-let netType = navigator.connection?.type ?? null, voiceRetries = 0;
+let prevWs = null, switchWhy = null, racing = null;
+let netType = navigator.connection?.type ?? null;
 
 function tick() {
   const d = new Date();
@@ -393,14 +397,15 @@ async function wake() {
 // Joining makes this page a screen in the room, with no audio.
 async function join(s) {
   talk = s.mode === "talk";
-  session = s; sid = s.id; mode = "live"; failures = 0;
+  session = s; sid = s.id; mode = "live";
   holding = false; roomAudio = undefined; roomCall = null; roomSince = null; holdMs = null; muted = false;
   micId = sinkId = "default";
   clearTimeout(noteTimer); $("note").textContent = "";
   show("live");
   $("sid").textContent = `${s.id} · ${talk ? "TALK" : "LISTEN"}`;
   await wake();
-  connect();
+  status("Connecting…", "amber");
+  reconnectNow(null);
 }
 
 // Called from a tap: mobile browsers only let a tap start audio output.
@@ -474,7 +479,7 @@ function closeMic() {
 function startAudio() {
   reportVis();
   segment();
-  if (talk) startVoice();
+  if (talk) voiceToRelay();
 }
 
 function deviceUrl() {
@@ -484,14 +489,12 @@ function deviceUrl() {
 
 // `opened`: a socket that won a race, already open.
 function connect(opened) {
-  clearTimeout(retryTimer);
   if (mode !== "live") return;
   if (!opened) status("Connecting…", "amber");
   const sock = opened || new WebSocket(deviceUrl());
   ws = sock;
   streaming = false;
   const onopen = () => {
-    backoff = 250; failures = 0;
     lastRx = Date.now();
     status("");
     // A screen that held the mic before the drop takes it back, if nothing else has.
@@ -515,14 +518,10 @@ function connect(opened) {
   sock.onclose = (e) => {
     if (ws !== sock || mode !== "live") return;
     if (e.code === 4001) return finish("Open in another tab");
-    if (racer) return;                  // a race is already finding the next socket
     streaming = false;
-    switchWhy = `closed ${e.code}`;
-    failures++;
-    if (failures >= 4) return checkStillLive();
+    stopVoiceRace();                    // its offers and answers travel on this socket
     status("Reconnecting…", "amber");
-    retryTimer = setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 4, 5000);
+    reconnectNow(`closed ${e.code}`);
   };
   if (opened) onopen(); else sock.onopen = onopen;
 }
@@ -540,39 +539,64 @@ function netState() {
            vis: document.visibilityState, unsent: ws ? ws.bufferedAmount : null };
 }
 
+// Attempts on the RETRY_MS schedule, overlapping, until one wins. `open({ won,
+// lost })` starts one and returns its closer; it calls won() when it connects
+// (the race stops and closes the rest) or lost() when it fails.
+function race(open) {
+  const r = { live: new Set(), n: 0, timer: null, done: false };
+  const next = () => {
+    if (r.done) return;
+    if (r.live.size < ATTEMPTS_MAX) {
+      const a = { close: null, kill: null };
+      const drop = () => { clearTimeout(a.kill); r.live.delete(a); };
+      r.live.add(a);
+      a.kill = setTimeout(() => { drop(); a.close?.(); }, ATTEMPT_MAX_MS);
+      a.close = open({ won: () => { drop(); r.stop(); }, lost: drop });
+    }
+    const ms = RETRY_MS[Math.min(r.n++, RETRY_MS.length - 1)];
+    r.timer = setTimeout(next, ms * (0.8 + Math.random() * 0.4));
+  };
+  r.stop = () => {
+    r.done = true;
+    clearTimeout(r.timer);
+    for (const a of r.live) { clearTimeout(a.kill); a.close?.(); }
+    r.live.clear();
+  };
+  next();
+  return r;
+}
+
 // Fresh sockets race the quiet one, which keeps carrying chunks: the first to
 // open takes over (the relay closes the old one at its hello), and the old one
-// hearing from the relay first calls the race off.
-function reconnectNow(why) {
-  if (racer || mode !== "live") return;
+// hearing from the relay first calls the race off. `fresh`: the network changed,
+// so attempts already under way are likely on the dead one.
+function reconnectNow(why, fresh = false) {
+  if (mode !== "live" || (racing && !fresh)) return;
+  stopRace();
   switchWhy = why;
-  const attempt = () => {
-    if (mode !== "live") return stopRace();
-    const s = racer = new WebSocket(deviceUrl());
-    const next = setTimeout(() => {
-      if (racer !== s) return;
-      s.onopen = s.onclose = null;
-      try { s.close(); } catch {}
-      attempt();
-    }, RACE_EVERY_MS);
+  let refused = 0;
+  racing = race(({ won, lost }) => {
+    const s = new WebSocket(deviceUrl());
     s.onopen = () => {
-      clearTimeout(next);
-      if (racer !== s) return s.close();
-      racer = null;
+      won();
+      racing = null;
       try { prevWs && prevWs !== ws && prevWs.close(); } catch {}
       prevWs = ws && ws.readyState === 1 ? ws : null;
       connect(s);
     };
-    // Refused at once (offline): the next try waits for its turn.
-    s.onclose = () => { if (racer === s) { clearTimeout(next); setTimeout(() => racer === s && attempt(), RACE_EVERY_MS); } };
-  };
-  attempt();
+    // A refused socket and a dropped network look alike: now and then, ask whether the session still exists.
+    s.onclose = (e) => {
+      lost();
+      if (e.code === 4001) return finish("Open in another tab");
+      if (++refused % 4 === 0) checkStillLive();
+    };
+    return () => { s.onopen = s.onclose = null; try { s.close(); } catch {} };
+  });
 }
 
 function stopRace() {
-  const s = racer;
-  racer = null;
-  if (s) { s.onopen = s.onclose = null; try { s.close(); } catch {} }
+  racing?.stop();
+  racing = null;
 }
 
 function dropPrev() {
@@ -583,13 +607,19 @@ setInterval(checkSocket, 1000);
 
 // A new network has probably killed the socket. `change` also fires on
 // bandwidth estimates, so only a different kind of network counts.
-addEventListener("online", () => { if (mode === "live") reconnectNow("back online"); });
+// The voice's connection is checked too: it rides the same network.
+function networkChanged(why) {
+  if (mode !== "live") return;
+  reconnectNow(why, true);
+  checkVoice();
+}
+addEventListener("online", () => networkChanged("back online"));
 navigator.connection?.addEventListener?.("change", () => {
   const type = navigator.connection.type ?? null;
   if (type === netType) return;
   const was = netType;
   netType = type;
-  if (mode === "live") reconnectNow(`network ${was} to ${type}`);
+  networkChanged(`network ${was} to ${type}`);
 });
 
 // The relay has `have` of this run's chunks (-1: it lost the stream): resend the rest, or start afresh.
@@ -603,22 +633,15 @@ function resume(have) {
   streaming = true;
   reportVis();
   if (!talk) return;
-  // The voice track usually outlives the socket; restarting it would cut Claude off.
-  if (!voice || ["failed", "closed"].includes(voice.connectionState)) startVoice();
-  else if (voice.connectionState === "connected") send({ type: "voice_ready" });
+  voiceToRelay();
 }
 
-// A refused socket and a dropped network look alike, so after a few failures
-// ask whether the session still exists.
 async function checkStillLive() {
   try {
     const r = await fetch(`/armed?k=${encodeURIComponent(K)}`, { cache: "no-store" });
     const ids = ((await r.json()).sessions || []).map((s) => s.id);
-    if (!ids.includes(sid)) return finish("Session is over");
+    if (!ids.includes(sid) && mode === "live") finish("Session is over");
   } catch {}
-  status("Reconnecting…", "amber");
-  retryTimer = setTimeout(connect, backoff);
-  backoff = Math.min(backoff * 2, 10000);
 }
 
 // One recorder run = one webm header = one transcriber stream on the server.
@@ -659,13 +682,19 @@ function onMessage(m) {
   else if (m.type === "resume") resume(m.have);
   else if (m.type === "note") showNote(m.text, m.age_ms);
   else if (m.type === "ended") finish("Session ended");
-  else if (m.type === "tts_start") { claudeTalking = true; setVoice(false); }
+  else if (m.type === "tts_start") {
+    claudeTalking = true;
+    setVoice(false);
+    // A resumed line keeps its count.
+    if (heard?.sid !== m.sid) heard = { sid: m.sid, s: 0, done: 0, pc: null };
+  }
   // Muting drops what is still in flight, so the interruption is heard at once.
   else if (m.type === "tts_stop") { claudeTalking = false; setVoice(true); }
   else if (m.type === "tts_done") claudeTalking = false;
-  else if (m.type === "voice_offer") answerVoice(m.sdp);
-  else if (m.type === "voice_restart" && talk) startVoice();
-  else if (m.type === "voice_failed") voiceFailed(m.error);
+  else if (m.type === "voice_offer") answerVoice(m.sdp, m.vid);
+  // The relay heard no playback, or remade the track: this connection no longer counts.
+  else if (m.type === "voice_restart" && talk) { voiceSuspect = voice; checkVoice(); }
+  else if (m.type === "voice_failed") { voiceAttempts.get(m.vid)?.fail(); voiceFailed(m.error); }
   else if (m.type === "settings") { holdMs = m.hold_ms; isolateOn = m.isolate ?? null; renderSheet(); }
   else if (m.type === "release") releaseAudio();
   else if (m.type === "call_failed") status(`Call failed: ${m.error}`, "red");
@@ -1015,7 +1044,7 @@ async function restartAudio() {
     status("Couldn't open that mic", "red");
   }
   segment();
-  if (talk) startVoice();
+  if (talk) checkVoice();
   renderSheet();
 }
 
@@ -1129,57 +1158,149 @@ function scheduleChirps() {
   c.until = t;
 }
 
+// While holding the audio in talk mode, a voice that looks broken is raced
+// until one connects; the race needs the socket open (README: "Reconnecting").
+const VOICE_DISCONNECTED_MS = 3000;   // `disconnected` often recovers by itself; past this, race it
+const VOICE_RED_MS = 120000;          // down this long: the status turns red, the race carries on
+const VOICE_ICE_WAIT_MS = 500;
+let voiceVid = null, voiceSuspect = null, voiceDownSince = null, voiceRace = null, voiceN = 0;
+const voiceAttempts = new Map();      // vid -> an attempt awaiting its offer or its connection
+
+const voiceUp = () => !!voice && voice !== voiceSuspect && voice.connectionState === "connected";
+
 function closeVoice() {
+  stopVoiceRace();
   try { voice && voice.close(); } catch {}
-  voice = null;
+  voice = voiceVid = voiceSuspect = voiceDownSince = null;
 }
 
-function startVoice() {
-  closeVoice();
-  const pc = voice = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }] });
-  // The relay holds Claude's speech until both are true: anything sent earlier is never heard.
-  let playing = false;
-  const ready = () => { if (voice === pc && playing && pc.connectionState === "connected") send({ type: "voice_ready" }); };
+function stopVoiceRace() {
+  voiceRace?.stop();
+  voiceRace = null;
+}
+
+// Clears only the voice's own status: a socket reconnecting keeps its message.
+function voiceBack() {
+  if (voiceDownSince == null) return;
+  voiceDownSince = null;
+  if (ws && ws.readyState === 1) status("");
+}
+
+// The relay holds Claude's speech until the page says its voice plays.
+function voiceToRelay() {
+  if (voiceUp()) send({ type: "voice_ready", vid: voiceVid });
+  else checkVoice();
+}
+
+// Every second, and on anything that may have broken the voice.
+function checkVoice() {
+  if (!talk || !holding || mode !== "live") return;
+  if (voiceUp()) {
+    stopVoiceRace();
+    voiceBack();
+    return;
+  }
+  const now = Date.now();
+  voiceDownSince ??= now;
+  const st = voice?.connectionState;
+  const down = !voice || voice === voiceSuspect || st === "failed" || st === "closed" ||
+               now - voiceDownSince >= VOICE_DISCONNECTED_MS;
+  if (!down) return;
+  if (now - voiceDownSince >= VOICE_RED_MS) voiceFailed("still reconnecting");
+  else if (ws && ws.readyState === 1) status("Reconnecting voice…", "amber");
+  if (voiceRace || !ws || ws.readyState !== 1) return;
+  send({ type: "voice_down", why: !voice ? "none" : voice === voiceSuspect ? "relay" : st });
+  voiceRace = race(openVoice);
+}
+setInterval(checkVoice, 1000);
+
+function openVoice({ won, lost }) {
+  const vid = ++voiceN;
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }] });
+  const a = { pc, stream: null, t0: Date.now() };
+  a.fail = () => {
+    if (voiceAttempts.get(vid) !== a) return;
+    voiceAttempts.delete(vid);
+    try { pc.close(); } catch {}
+    lost();
+  };
+  voiceAttempts.set(vid, a);
   pc.ontrack = (e) => {
     try { e.receiver.jitterBufferTarget = JITTER_MS; } catch {}
-    voiceEl.srcObject = new MediaStream([e.track]);
-    aecReference();
-    routeVoice();
-    const play = () => voiceEl.play().then(() => { playing = true; ready(); },
-      (err) => err.name === "NotAllowedError" ? needTap(play) : voiceFailed(`won't play (${err.name})`));
-    play();
+    a.stream = new MediaStream([e.track]);
   };
-  // A network switch fails the voice's connection too: ask for the track again, a few times.
   pc.onconnectionstatechange = () => {
-    if (voice === pc && pc.connectionState === "connected") voiceRetries = 0;
-    if (voice === pc && pc.connectionState === "failed") {
-      if (holding && voiceRetries++ < 3) startVoice();
-      else voiceFailed("connection failed");
-    }
-    ready();
+    if (voiceAttempts.get(vid) !== a) return;
+    if (pc.connectionState === "connected") {
+      voiceAttempts.delete(vid);
+      won();
+      adoptVoice(vid, a);
+    } else if (pc.connectionState === "failed") a.fail();
   };
-  send({ type: "voice_request" });
+  send({ type: "voice_request", vid });
+  return () => { voiceAttempts.delete(vid); try { pc.close(); } catch {} };
 }
 
-async function answerVoice(sdp) {
-  const pc = voice;
-  if (!pc) return;
+// The winner replaces the old connection, which may be dead or merely stalled.
+function adoptVoice(vid, a) {
+  const old = voice;
+  voice = a.pc; voiceVid = vid; voiceSuspect = null;
+  if (old && old !== a.pc) { try { old.close(); } catch {} }
+  a.pc.onconnectionstatechange = () => checkVoice();
+  voiceBack();
+  voiceEl.srcObject = a.stream;
+  aecReference();
+  routeVoice();
+  const play = () => voiceEl.play().then(() => {
+    if (voice === a.pc) send({ type: "voice_ready", vid, ms: Date.now() - a.t0 });
+  }, (err) => err.name === "NotAllowedError" ? needTap(play) : voiceFailed(`won't play (${err.name})`));
+  play();
+}
+
+async function answerVoice(sdp, vid) {
+  const a = voiceAttempts.get(vid);
+  if (!a) return;
+  const pc = a.pc;
   try {
     await pc.setRemoteDescription(sdp);
     await pc.setLocalDescription(await pc.createAnswer());
-    // Answer with candidates included; bounded, as gathering can stall on some networks.
+    // Briefly, for candidates: the SFU is ICE-lite on a public address and learns
+    // ours from our checks, so a stalled gathering mustn't hold the answer up.
     await new Promise((res) => {
       if (pc.iceGatheringState === "complete") return res();
-      const t = setTimeout(res, 2000);
+      const t = setTimeout(res, VOICE_ICE_WAIT_MS);
       pc.addEventListener("icegatheringstatechange", () => {
         if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
       });
     });
-    if (voice === pc) send({ type: "voice_answer", sdp: pc.localDescription });
-  } catch (err) {
-    voiceFailed(err.name);
+    if (voiceAttempts.get(vid) === a) send({ type: "voice_answer", vid, sdp: pc.localDescription });
+  } catch {
+    a.fail();
   }
 }
+
+// Seconds of the line played here (real audio, not concealment, across
+// connections), for the relay to pause and resume by (README: "Speech survives a drop").
+const HEARD_EVERY_MS = 250;
+let heard = null;
+async function heardTick() {
+  if (!claudeTalking || !heard || !voice) return;
+  const pc = voice;
+  let real = null, rate = 48000;
+  try {
+    const stats = await pc.getStats();
+    for (const r of stats.values()) {
+      if (r.type !== "inbound-rtp" || r.kind !== "audio") continue;
+      real = (r.totalSamplesReceived ?? 0) - (r.concealedSamples ?? 0);
+      rate = stats.get(r.codecId)?.clockRate ?? rate;
+    }
+  } catch {}
+  if (real == null || !heard || pc !== voice) return;
+  if (heard.pc !== pc) { heard.pc = pc; heard.base = real; heard.rate = rate; heard.done = heard.s; }
+  heard.s = heard.done + (real - heard.base) / heard.rate;
+  send({ type: "voice_heard", sid: heard.sid, s: Math.round(heard.s * 1000) / 1000 });
+}
+setInterval(heardTick, HEARD_EVERY_MS);
 
 // A long steer shrinks until it fits between the audio line and stop, beside
 // any status; past the smallest size, the middle scrolls.
@@ -1233,7 +1354,6 @@ function releaseAudio() {
 
 // Audio and socket off; the mode is set first, so the close isn't retried.
 function release() {
-  clearTimeout(retryTimer);
   stopRace();
   releaseAudio();
   const sock = ws; ws = null;
@@ -1347,7 +1467,8 @@ document.addEventListener("visibilitychange", () => {
   reportVis();
   if (document.visibilityState === "visible") {
     wake();
-    if (!ws || ws.readyState > 1) { backoff = 250; connect(); }
+    if (!ws || ws.readyState > 1) reconnectNow("back on screen", true);
+    checkVoice();
   }
 });
 

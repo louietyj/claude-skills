@@ -75,7 +75,7 @@ def main():
             time.sleep(5)
             page.context.set_offline(False)
             time.sleep(4)
-            check(ts.stream_count() == n + 1 and page.evaluate("racer === null"),
+            check(ts.stream_count() == n + 1 and page.evaluate("racing === null"),
                   "a race run offline ends once a socket is heard, on the same stream")
             ran = time.time() - t0
             got = decoded_s(stream["audio"])
@@ -86,9 +86,9 @@ def main():
                   f"the switches logged quietly: {ts.texts(es, 'net')}")
             check(not any("disconnected" in t for t in ts.texts(es, "event")), "no drop reported to Claude")
 
-            page.evaluate("window._connect = connect; connect = () => {}; ws.close()")   # away past the grace
+            page.evaluate("window._rn = reconnectNow; reconnectNow = () => {}; ws.close()")   # away past the grace
             time.sleep(3)
-            page.evaluate("connect = window._connect; connect()")
+            page.evaluate("reconnectNow = window._rn; reconnectNow('back')")
             ts.wait_streams(n + 2)
             es = ts.wait_entries(sid, lambda es: any("reconnected after" in t for t in ts.texts(es, "event")))
             check(any("holding the audio disconnected" in t for t in ts.texts(es, "event")),

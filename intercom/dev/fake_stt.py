@@ -62,7 +62,7 @@ class Fake:
         self.batches = []      # one dict per POST
         self.speeches = []     # one dict per TTS connection
         self.sfu = {"adapters": [], "packets": [], "sessions": 0, "subscribes": [],
-                    "answers": [], "closed": []}
+                    "answers": [], "closed": [], "subs_closed": []}
         self.krisp = {"tokens": [], "streams": [], "refuse_token": False, "close_after": None, "scale": None}
         self._client = None
 
@@ -224,6 +224,11 @@ class Fake:
         self.sfu["answers"].append({"session": request.match_info["sid"], **body})
         return web.json_response({})
 
+    async def tracks_close(self, request):
+        body = await request.json()
+        self.sfu["subs_closed"].append({"session": request.match_info["sid"], **body})
+        return web.json_response({"tracks": body["tracks"]})
+
 
     # --- Krisp -----------------------------------------------------------------------
 
@@ -267,6 +272,7 @@ def start(port=8798):
     app.router.add_route("POST", "/v1/apps/{app}/sessions/new", fake.session_new)
     app.router.add_route("POST", "/v1/apps/{app}/sessions/{sid}/tracks/new", fake.tracks_new)
     app.router.add_route("PUT", "/v1/apps/{app}/sessions/{sid}/renegotiate", fake.renegotiate)
+    app.router.add_route("PUT", "/v1/apps/{app}/sessions/{sid}/tracks/close", fake.tracks_close)
     app.router.add_route("POST", "/v1/listen", fake.batch)
     app.router.add_route("POST", "/v2/sdk/tokens/session", fake.krisp_token)
     app.router.add_route("GET", "/voice-isolation", fake.krisp_viva)

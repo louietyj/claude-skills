@@ -130,6 +130,11 @@ const VOICE_LEAD_S = 0.2;
 const VOICE_PLAYOUT_MS = 700;
 // The page's WebRTC connection takes a few seconds after START; audio fed before it is up is lost.
 const VOICE_READY_WAIT_MS = 10_000;
+// Speech pauses when the page's playback falls this far behind the relay's
+// clock, and resumes where it stopped if the voice is back within the wait.
+const VOICE_STALL_S = 2;
+const VOICE_RESUME_WAIT_MS = 30_000;
+const VOICE_SUBS_MAX = 4;                // the page races up to 3 connections; one more is being replaced
 const BARGE_IN_WORDS = 2;
 const SPEAK_GEN_TIMEOUT_MS = 90_000;
 const SPEAK_KEEPALIVE_MS = 5000;
@@ -184,6 +189,11 @@ function deepgramUrl(base, params, keyterms) {
 
 function randomKey() {
   return Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// A page's voice connection attempt; a page from before attempts were numbered has one at a time.
+function voiceKey(vid) {
+  return Number.isInteger(vid) ? String(vid) : "_";
 }
 
 // The adapter's protobuf Packet with only `bytes payload = 5` set, carrying
@@ -491,7 +501,8 @@ export class Session {
     this.pinger = null;
     this.voiceOut = null;        // the SFU adapter's socket: PCM in, Claude's voice track out
     this.voicePending = null;
-    this.voiceSub = null;        // the page's SFU session, awaiting its answer
+    this.voiceSubs = new Map();  // the page's SFU sessions, one per connection attempt: vid -> { sessionId, mid }
+    this.voiceVid = null;        // the attempt that plays
     this.voiceReady = false;     // the page says it is connected and playing
     this.speechSpans = [];       // [start, end|null] in session seconds: when Claude's voice could echo
     this.loudSpans = [];         // [start, end] when the page's sustained-energy gate was open
@@ -1264,9 +1275,9 @@ export class Session {
 
   // A page that drops while holding the audio keeps recording, and its next
   // socket can resume the transcriber's stream (rejoin). Claude hears of the
-  // drop only if the grace runs out. Speech is cut when the socket died, as the
-  // voice track rarely survives that, but not when a newer socket replaced a
-  // live one. In meta too: after a restart, load() reports it.
+  // drop only if the grace runs out. Speech pauses when the socket died, until
+  // the rejoined page's voice plays again; a newer socket replacing a live one
+  // changes nothing. In meta too: after a restart, load() reports it.
   async beginGrace(server, replaced = false) {
     const g = { ws: server, dev: this.screens.get(server).dev, ui: this.ui(server), at: Date.now() };
     g.timer = setTimeout(() => this.expireGrace().catch(() => {}), this.graceMs());
@@ -1276,7 +1287,7 @@ export class Session {
     await this.armTimer();
     if (replaced) return;
     this.voiceReady = false;
-    if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", SPEAK_CUT_BY.dropped);
+    if (this.speaking) this.pauseSpeech(this.speaking, "the connection dropped");
   }
 
   graceMs() { return Number(this.env.RESUME_GRACE_MS ?? RESUME_GRACE_MS); }
@@ -1388,9 +1399,11 @@ export class Session {
       return started;
     }
     if (msg.type === "loud") return this.onLoud(!!msg.on);
-    if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice();
-    if (msg.type === "voice_ready") { this.voiceReady = true; return; }
-    if (msg.type === "voice_answer" && this.voiceSub) return this.answerVoice(msg.sdp);
+    if (msg.type === "voice_request" && this.talk()) return this.subscribeVoice(voiceKey(msg.vid));
+    if (msg.type === "voice_answer") return this.answerVoice(voiceKey(msg.vid), msg.sdp);
+    if (msg.type === "voice_ready") return this.onVoiceReady(voiceKey(msg.vid), msg.ms);
+    if (msg.type === "voice_down") return this.onVoiceDown(String(msg.why ?? "").slice(0, 40));
+    if (msg.type === "voice_heard") return this.onVoiceHeard(msg.sid, Number(msg.s));
     if (msg.type === "mic") return this.onMic(msg.state);
     // Off screen with the mic still hearing (a locked phone, an app switch) is
     // not news: Claude hears of it only if the mic goes silent (onMic).
@@ -1604,29 +1617,66 @@ export class Session {
     }
   }
 
-  // The page asks for the track; the SFU offers it, and the page's answer goes back.
-  async subscribeVoice() {
-    this.voiceReady = false;
+  // The page asks for the track once per connection attempt (it races several);
+  // the SFU offers it, and the page's answer goes back.
+  async subscribeVoice(vid) {
+    if (vid === "_") this.voiceReady = false;     // such a page has closed its previous connection
     try {
       const pub = await this.ensureVoice(true);
       const { sessionId } = await this.sfu("/sessions/new", "POST");
       const out = await this.sfu(`/sessions/${sessionId}/tracks/new`, "POST",
         { tracks: [{ location: "remote", sessionId: pub.sessionId, trackName: VOICE_TRACK }] });
       if (out.tracks?.[0]?.errorCode) throw new Error(`subscribe: ${out.tracks[0].errorCode}`);
-      this.voiceSub = sessionId;
-      this.toHolder({ type: "voice_offer", sdp: out.sessionDescription });
+      const old = this.voiceSubs.get(vid);
+      if (old) this.closeSub(old);
+      this.voiceSubs.delete(vid);
+      this.voiceSubs.set(vid, { sessionId, mid: out.tracks?.[0]?.mid ?? null });
+      // Attempts the page gave up on never say so; the oldest go once there are too many.
+      for (const [k, s] of this.voiceSubs) {
+        if (this.voiceSubs.size <= VOICE_SUBS_MAX) break;
+        if (k !== this.voiceVid) { this.closeSub(s); this.voiceSubs.delete(k); }
+      }
+      this.toHolder({ type: "voice_offer", vid: vid === "_" ? undefined : Number(vid), sdp: out.sessionDescription });
     } catch (e) {
       await this.addEntry("event", { text: `Claude's voice could not be connected (${e.message}); speak will fail` });
-      this.toHolder({ type: "voice_failed", error: String(e.message).slice(0, 200) });
+      this.toHolder({ type: "voice_failed", vid: vid === "_" ? undefined : Number(vid), error: String(e.message).slice(0, 200) });
     }
   }
 
-  async answerVoice(sdp) {
+  async answerVoice(vid, sdp) {
+    const sub = this.voiceSubs.get(vid);
+    if (!sub) return;
     try {
-      await this.sfu(`/sessions/${this.voiceSub}/renegotiate`, "PUT", { sessionDescription: sdp });
+      await this.sfu(`/sessions/${sub.sessionId}/renegotiate`, "PUT", { sessionDescription: sdp });
     } catch (e) {
       await this.addEntry("event", { text: `Claude's voice could not be connected (${e.message}); speak will fail` });
     }
+  }
+
+  // Best effort: the SFU drops a session whose peer has gone anyway.
+  closeSub(sub) {
+    if (!sub?.mid) return;
+    this.sfu(`/sessions/${sub.sessionId}/tracks/close`, "PUT", { tracks: [{ mid: sub.mid }], force: true }).catch(() => {});
+  }
+
+  // The page's voice plays: its other attempts are done with, and speech paused by a drop resumes.
+  async onVoiceReady(vid, ms) {
+    const was = this.voiceReady;
+    this.voiceReady = true;
+    this.voiceVid = vid;
+    for (const [k, s] of this.voiceSubs) if (k !== vid) { this.closeSub(s); this.voiceSubs.delete(k); }
+    const sp = this.speaking;
+    if (sp?.paused) this.resumeSpeech(sp);
+    if (!was && Number.isFinite(Number(ms))) {
+      await this.addEntry("net", { text: `${this.ui(this.holder)} voice connected in ${(Number(ms) / 1000).toFixed(1)}s` });
+    }
+  }
+
+  async onVoiceDown(why) {
+    const was = this.voiceReady;
+    this.voiceReady = false;
+    if (this.speaking && !this.speaking.phone) this.pauseSpeech(this.speaking, `voice ${why || "down"}`);
+    if (was) await this.addEntry("net", { text: `${this.ui(this.holder)} voice dropped (${why || "down"}); reconnecting` });
   }
 
   // --- speech (talk mode) ----------------------------------------------------------
@@ -1687,6 +1737,8 @@ export class Session {
         try { await this.ensureVoice(); } catch (e) { return [{ status: "error", error: e.message }, 502]; }
         if (!this.voiceOut) return [{ status: "error", error: "the voice track is not connected" }, 502];
       }
+      // A page that thinks its voice is fine when the relay doesn't, or that gave up, reconnects it.
+      if (!this.voiceReady) this.toHolder({ type: "voice_restart" });
       const waitUntil = Date.now() + Number(this.env.VOICE_READY_WAIT_MS ?? VOICE_READY_WAIT_MS);
       while (!this.voiceReady && this.holder && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 100));
       if (!this.voiceReady) {
@@ -1723,12 +1775,15 @@ export class Session {
     const sid = crypto.randomUUID().slice(0, 8);
     const rate = onPhone ? this.phoneFormat?.sample_rate ?? 8000 : TTS_CONFIG.sample_rate;
     const sp = this.speaking = {
-      sid, rid, ws, text, chars: [], ends: [], queue: [], sentBytes: 0, firstAt: null,
+      sid, rid, ws, text, chars: [], ends: [], starts: [], queue: [], sentBytes: 0, firstAt: null,
       genEnded: false, genDone: false, stopping: null, guard: null, pump: null, resolve: null,
       bargeIn: body?.barge_in !== false,
       // A call reports, by marks, how much of the audio has played. Chunks are
       // 100 ms: at 48 kHz, doubled to stereo, under the SFU's 32 KB packet cap.
       phone: onPhone ? this.phone : null, markedBytes: 0, bps: rate * 2, chunk: rate * 2 / 10,
+      // A page's own count of what it played (`heard`) and what was sent, so a pause can resume.
+      base: null, sent: [], heard: 0, heardBase: { page: 0, pos: 0 }, lastPage: 0, reports: false,
+      paused: null, pausedMs: 0,
     };
     const done = new Promise((r) => { sp.resolve = r; });
     ws.addEventListener("message", (m) => this.onTts(sp, m.data));
@@ -1755,6 +1810,7 @@ export class Session {
     if (ts) {
       sp.chars.push(...ts.characters);
       sp.ends.push(...ts.character_end_times_seconds);
+      sp.starts.push(...(ts.character_start_times_seconds ?? []));
     }
     if (m.audio_end) sp.genEnded = true;
     if (m.terminated) {
@@ -1768,8 +1824,15 @@ export class Session {
   pumpVoice(sp) {
     if (this.speaking !== sp || sp.stopping) return;
     const now = Date.now();
-    const sentS = () => sp.sentBytes / sp.bps;
-    while (sp.queue.length && (sp.firstAt == null || sentS() < (now - sp.firstAt) / 1000 + VOICE_LEAD_S)) {
+    if (sp.paused) {
+      const wait = Number(this.env.VOICE_RESUME_WAIT_MS ?? VOICE_RESUME_WAIT_MS);
+      if (now - sp.paused.at >= wait) {
+        this.finishSpeak(sp, "interrupted", `Claude's voice dropped on the device (${sp.paused.why}) and wasn't back within ${Math.round(wait / 1000)}s`);
+      }
+      return;
+    }
+    const sentS = () => (sp.sentBytes - sp.base.pos) / sp.bps;
+    while (sp.queue.length && (sp.base == null || sentS() < (now - sp.base.at) / 1000 + VOICE_LEAD_S)) {
       let chunk = sp.queue[0];
       if (chunk.length > sp.chunk) {
         sp.queue[0] = chunk.subarray(sp.chunk);
@@ -1779,14 +1842,82 @@ export class Session {
       }
       if (chunk.length % 2) chunk = chunk.subarray(0, chunk.length - 1);   // a split sample: not worth carrying
       sp.firstAt ??= now;
+      sp.base ??= { at: now, pos: sp.sentBytes };
+      if (!sp.phone) sp.sent.push({ pos: sp.sentBytes, chunk });
       sp.sentBytes += chunk.length;
       if (sp.phone) this.toCall(sp, chunk);
       else { try { this.voiceOut?.send(voicePacket(chunk)); } catch {} }
     }
-    if (sp.genEnded && !sp.queue.length && sp.firstAt != null) {
-      const endsAt = sp.firstAt + sentS() * 1000 + this.playoutDelayMs() + (sp.phone ? MARK_GRACE_MS : 0);
-      if ((sp.phone && sp.markedBytes >= sp.sentBytes) || now >= endsAt) this.finishSpeak(sp, "done");
+    // Audio that should have played by now hasn't: the voice is down, whatever the page's connection says.
+    if (sp.reports && sp.base && this.clockPlayed(sp, now, false) - sp.heard > VOICE_STALL_S) {
+      this.toHolder({ type: "voice_restart" });
+      return this.pauseSpeech(sp, "no playback");
     }
+    if (sp.genEnded && !sp.queue.length && sp.base) {
+      const endsAt = sp.base.at + sentS() * 1000 + this.playoutDelayMs() + (sp.phone ? MARK_GRACE_MS : 0);
+      // A page that reports must have played it, give or take a few lost packets.
+      const heardAll = !sp.reports || sp.sentBytes / sp.bps - sp.heard < 0.5;
+      if ((sp.phone && sp.markedBytes >= sp.sentBytes) || (now >= endsAt && heardAll)) this.finishSpeak(sp, "done");
+    }
+  }
+
+  // Stops feeding the track and mutes the page; what was in flight goes unheard,
+  // and the line resumes from the start of the word being played.
+  pauseSpeech(sp, why) {
+    if (this.speaking !== sp || sp.paused || sp.stopping || sp.phone) return;
+    this.voiceReady = false;
+    const s = this.wordStart(sp, this.played(sp));
+    const pos = Math.floor((s * sp.bps) / 2) * 2;
+    const back = [];
+    const kept = [];
+    for (const c of sp.sent) {
+      const end = c.pos + c.chunk.length;
+      if (end <= pos) kept.push(c);
+      else if (c.pos >= pos) back.push(c.chunk);
+      else {
+        kept.push({ pos: c.pos, chunk: c.chunk.subarray(0, pos - c.pos) });
+        back.push(c.chunk.subarray(pos - c.pos));
+      }
+    }
+    sp.sent = kept;
+    sp.queue.unshift(...back);
+    sp.sentBytes = pos;
+    sp.base = null;
+    sp.heard = s;
+    sp.paused = { at: Date.now(), why, s };
+    this.toHolder({ type: "tts_stop", sid: sp.sid });
+  }
+
+  resumeSpeech(sp) {
+    if (this.speaking !== sp || !sp.paused) return;
+    sp.pausedMs += Date.now() - sp.paused.at;
+    sp.heardBase = { page: sp.lastPage, pos: sp.paused.s };
+    sp.paused = null;
+    this.toHolder({ type: "tts_start", sid: sp.sid });
+  }
+
+  // Seconds into the line where the word playing at `s` began.
+  wordStart(sp, s) {
+    let start = 0;
+    for (let i = 0; i < sp.chars.length; i++) {
+      if (/\s/.test(sp.chars[i]) || (i && !/\s/.test(sp.chars[i - 1]))) continue;
+      const at = sp.starts[i] ?? (i ? sp.ends[i - 1] : 0);
+      if (at > s) break;
+      start = at;
+    }
+    return start;
+  }
+
+  // The page's count of what it has played, mapped onto the line: it counts
+  // replayed audio again, so each resume rebases it.
+  onVoiceHeard(sid, s) {
+    const sp = this.speaking;
+    if (!sp || sp.phone || sid !== sp.sid || !Number.isFinite(s)) return;
+    sp.lastPage = s;
+    if (sp.paused) return;
+    sp.reports = true;
+    const pos = sp.heardBase.pos + (s - sp.heardBase.page);
+    sp.heard = Math.max(sp.heard, Math.min(pos, sp.sentBytes / sp.bps));
   }
 
   // Each chunk, as L16, is followed by a mark naming how far the audio reaches;
@@ -1813,9 +1944,17 @@ export class Session {
 
   played(sp) {
     if (sp.phone) return sp.markedBytes / sp.bps;
-    if (sp.firstAt == null) return 0;
-    const s = (Date.now() - sp.firstAt - this.playoutDelayMs()) / 1000;
-    return Math.max(0, Math.min(s, sp.sentBytes / sp.bps));
+    if (sp.paused) return sp.paused.s;
+    if (sp.reports) return sp.heard;
+    return this.clockPlayed(sp);
+  }
+
+  // How far the page should have got, by the relay's clock since pacing (re)started.
+  clockPlayed(sp, now = Date.now(), capped = true) {
+    if (!sp.base) return sp.sentBytes / sp.bps;
+    const from = sp.base.pos / sp.bps;
+    const s = from + (now - sp.base.at - this.playoutDelayMs()) / 1000;
+    return Math.max(from, capped ? Math.min(s, sp.sentBytes / sp.bps) : s);
   }
 
   // The page mutes at once, and a call drops its queue; what was still in
@@ -1873,6 +2012,7 @@ export class Session {
       ...(reason ? { reason } : {}),
       ...(status === "interrupted" ? { heard_so_far: this.tail()?.text ?? "" } : {}),
       audio_s: Math.round((sp.sentBytes / sp.bps) * 10) / 10,
+      ...(sp.pausedMs ? { paused_s: Math.round(sp.pausedMs / 100) / 10 } : {}),
     };
     if (sp.rid) await this.rememberSpeak(sp.rid, out).catch(() => {});
     sp.resolve(out);

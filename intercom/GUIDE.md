@@ -366,7 +366,9 @@ EOF
   voice rules below still cap how much you say. If he cuts in, `interrupted`
   says how far he got.
 - It blocks until he has heard it, then returns a `status`:
-  - `done`: he heard all of it. Nothing else comes back but `audio_s`.
+  - `done`: he heard all of it. Nothing else comes back but `audio_s`, and
+    `paused_s` if his connection dropped mid-line: your voice paused and
+    picked up where it left off, so he heard it all, a little late.
   - `not_spoken`: nothing was played, because he said something you hadn't
     read (`turns` has it) or is still mid-sentence (`heard_so_far`). Read his
     turn, then decide what to say now; your line may no longer fit.
@@ -377,12 +379,14 @@ EOF
     audio, wait for him to turn it back on. Then decide whether what he missed
     still matters, said differently, or not at all. If the audio moved to
     another device, say `unspoken` again right away: `speak` waits for the new
-    device.
+    device. If `reason` says your voice dropped and wasn't back in time, his
+    page is still reconnecting it on its own: try `unspoken` again, and if it
+    comes back `not_delivered`, tell him in chat.
   - `not_delivered`: nothing in the room holds the audio. If `reason` says he
     left audio, wait for him to turn it back on; otherwise tell him in chat.
 - A dropped connection doesn't lose the answer: `speak` asks the relay again
   and reports what was really played. If his page is reconnecting, it waits
-  for it (up to 10s).
+  for it (up to 10s), and a drop mid-line pauses your voice for up to 30s.
 - **Don't leave him hanging.** If what he asked will take more than a few
   seconds (lookups, edits, a build), acknowledge it in one line first ("Sure,
   checking the logs now"), then do the work. On a call, silence sounds like

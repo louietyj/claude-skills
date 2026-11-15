@@ -1073,14 +1073,31 @@ class Speak(unittest.TestCase):
         self.assertEqual(len(subs), 2)
         ws.send(json.dumps({"type": "voice_answer", "vid": 2, "sdp": {"type": "answer", "sdp": "v=0 two"}}))
         ws.send(json.dumps({"type": "voice_ready", "vid": 2, "ms": 1400}))
-        es = wait_entries(sid, lambda es: any("voice connected in 1.4s" in t for t in texts(es, "net")))
-        winner = [a["session"] for a in FAKE.sfu["answers"] if a["sessionDescription"]["sdp"] == "v=0 two"][-1]
+        wait_entries(sid, lambda es: any("voice connected in 1.4s" in t for t in texts(es, "net")))
         end = time.time() + 5
+        while time.time() < end and not any(a["sessionDescription"]["sdp"] == "v=0 two" for a in FAKE.sfu["answers"]):
+            time.sleep(0.1)
+        winner = [a["session"] for a in FAKE.sfu["answers"] if a["sessionDescription"]["sdp"] == "v=0 two"][-1]
         while time.time() < end and len(FAKE.sfu["subs_closed"]) == closed:
             time.sleep(0.1)
         self.assertEqual([c["session"] for c in FAKE.sfu["subs_closed"][closed:]], list(subs - {winner}))
         self.assertTrue(FAKE.sfu["subs_closed"][-1]["force"])
         self.assertEqual(http("/speak", "POST", {"text": "one"}, id=sid, timeout=20)[1]["status"], "done")
+        ws.close()
+
+    def test_attempts_arriving_together_share_the_voice_track_being_made(self):
+        sid, _ = create_talk()
+        ws = device(sid)
+        wait_entries(sid, lambda es: es)
+        # The second lands while the SFU has dialled the relay but not yet answered (fake: 0.3 s).
+        ws.send(json.dumps({"type": "voice_request", "vid": 1}))
+        time.sleep(0.15)
+        ws.send(json.dumps({"type": "voice_request", "vid": 2}))
+        got = {}
+        while len(got) < 2:
+            m = recv_until(ws, lambda m: m.get("type") in ("voice_offer", "voice_failed"))
+            got[m.get("vid")] = m["type"]
+        self.assertEqual(got, {1: "voice_offer", 2: "voice_offer"})
         ws.close()
 
     def test_speak_asks_a_page_whose_voice_is_down_to_reconnect_it(self):

@@ -1579,8 +1579,9 @@ export class Session {
 
   // One publication per session, made when first needed and remade if its socket dies.
   async ensureVoice(forPage = false) {
-    if (this.voiceOut) return this.meta.voice;
+    // Pending first: the SFU dials /tts-in (setting voiceOut) before meta.voice is saved.
     if (this.voicePending) return this.voicePending;
+    if (this.voiceOut) return this.meta.voice;
     this.voicePending = (async () => {
       this.meta.voice_key = randomKey();
       await this.saveMeta();

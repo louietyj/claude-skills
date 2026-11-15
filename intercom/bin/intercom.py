@@ -455,7 +455,8 @@ def cmd_speak(cfg, args):
     if status != 200 or not isinstance(body, dict) or ("error" in body and "status" not in body):
         die(f"not spoken: {status} {error_text(body)}")
     if body.get("status") == "done":
-        emit({"status": "done", "audio_s": body.get("audio_s")})
+        emit({"status": "done", "audio_s": body.get("audio_s"),
+              **({"paused_s": body["paused_s"]} if body.get("paused_s") else {})})
         return
     out = dict(body)
     if body.get("status") == "interrupted" and "audio moved" in (body.get("reason") or ""):

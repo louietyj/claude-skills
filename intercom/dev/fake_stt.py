@@ -200,6 +200,7 @@ class Fake:
                     self.sfu["packets"].append({"adapter": rec["adapterId"], "t": time.time(),
                                                 "len": self.payload_len(msg.data), "size": len(msg.data)})
         asyncio.ensure_future(drain())
+        await asyncio.sleep(0.3)        # the socket is up before the answer: a window the relay must handle
         return web.json_response({"tracks": [{"trackName": t["trackName"], "adapterId": rec["adapterId"],
                                               "sessionId": rec["sessionId"], "endpoint": t["endpoint"]}]})
 

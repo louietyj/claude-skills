@@ -302,6 +302,8 @@ cmd_start() {
       *) die "unknown option $a" ;;
     esac
   done
+  # tailscaled starts before it finds there's no TUN, so launch kernel can't be trusted to fail.
+  [ -e /dev/net/tun ] || want=userspace
   mkdir -p "$HOME_DIR" "$STATE"
   local cur up=""
   cur=$(cat "$MODEFILE" 2>/dev/null)

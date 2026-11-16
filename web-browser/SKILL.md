@@ -1,6 +1,6 @@
 ---
 name: web-browser
-description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~18s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- 'show more', flows, forms, pagination. If you are about to call a page inaccessible, or answer from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's accounts, or drives Louie's own logged-in Chrome (pinchtab-windows) once he approves, for a tab he hands over."
+description: "Fetches a page when web_fetch didn't -- through a browser that ordinary bot detection does not turn away. One script, ~10s, no second step. Use it whenever web_fetch returned nothing, a consent/paywall/'enable JavaScript' stub, or less than the page should hold: a thin result is the trigger, not just an error, and a fetch that silently drops JS-rendered content looks exactly like a successful one, so check what came back against the search snippet that led you there. Go straight here, skipping web_fetch, for SPAs, dashboards, JS-rendered tables, infinite scroll, and anything interactive -- 'show more', flows, forms, pagination. If you are about to call a page inaccessible, or answer from snippets instead of the page, stop and run this: you wanted to read that page for a reason and the reason has not gone away. It is cheap; do not talk yourself out of it. Also logs in to the user's accounts, or drives Louie's own logged-in Chrome (pinchtab-windows) once he approves, for a tab he hands over."
 ---
 
 # Web Browser (pinchtab)
@@ -159,9 +159,9 @@ over directly only for short, precise finishing work (option 3).
 The runtime is
 [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), a
 patched Chromium that sites do not reject on fingerprint the way they reject a
-plain headless Chrome. That is why setup takes ~18s rather than ~7s, and it is
-why a nav that would have hit a block page does not. Do not go looking for a
-faster mode: the difference is one browser download, once per sandbox.
+plain headless Chrome, and it is why a nav that would have hit a block page
+does not. Its download, once per sandbox, is most of setup's ~10s. Do not go
+looking for a faster mode.
 
 If the download fails, setup falls back to the sandbox's own Chrome, says so
 in the summary, and everything else still works -- so a nav that comes back

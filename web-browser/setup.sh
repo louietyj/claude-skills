@@ -501,7 +501,7 @@ if [ $CLOAK -eq 1 ]; then
     if [ -z "$CLOAK_PID" ]; then
       echo "cloakbrowser-offline already installed in this sandbox"
     else
-      echo "downloading cloakbrowser-offline $CLOAK_VERSION (~190MB, cached afterwards)"
+      echo "downloading cloakbrowser-offline $CLOAK_VERSION (~150MB, cached afterwards)"
       echo "Budget ~${SETUP_TIMEOUT:-300}s; past that this step gives up and the"
       echo "boot continues on plain Chrome. It is not hung."
       if ! wait "$CLOAK_PID"; then

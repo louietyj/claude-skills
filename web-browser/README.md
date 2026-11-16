@@ -73,7 +73,7 @@ It installs pinchtab globally if missing, locates a system Chrome or pulls puppe
 
 ## Cloak mode (default)
 
-The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. Measured in the claude.ai sandbox: **17.5s cold** against **6.6s** for plain Chrome, and **4.4s** when the binary is already cached (`/root/.cloakbrowser/*/chrome`) — ~12s of the difference is the browser download itself.
+The browser runtime is [CloakBrowser](https://pinchtab.com/blog/pinchtab-0-14-0-cloakbrowser), the patched Chromium pinchtab 0.14.0 added support for: sites that reject a plain headless Chrome on fingerprint alone accept it. A cold boot took 40s on 2026-11-16 in a cloud Claude Code sandbox, and 24s of that was single-threaded bzip2 unpacking the 580MB tree. The tarball is now a `.tar.xz` made with `xz -T0`, so its 25 blocks unpack on every core. Streamed through tar as it downloads, a cold boot is **10–14s**, depending mostly on Backblaze's download speed (4–8s for the 150MB). A re-run that attaches to the running browser takes 1.2s.
 
 It was briefly opt-in, when the same run cost 161s. That turned out to be npm, not the download; with the solve pinned, ~11s is a fair price for not being turned away, so it is the default again. `bash setup.sh --no-cloak` (or `HEADLESS_BROWSER_CLOAK=0`) forces plain Chrome.
 

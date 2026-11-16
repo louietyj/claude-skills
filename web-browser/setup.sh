@@ -76,7 +76,7 @@ finish() {
     printf 'minutes into several calls. If a call is moved to the background anyway,\n'
     printf 'just end your turn: you are woken when it finishes, and your work goes\n'
     printf 'on from there. Never poll it; each check costs a turn.\n'
-  else
+  elif [ $NO_LOCAL -eq 0 ]; then
     printf '\nYour latest screenshot is always %s/latest-small.jpg\n' "$SHOT_DIR"
   fi
 
@@ -100,11 +100,20 @@ finish() {
     printf '  %s/latest-small.jpg\n' "$PROXY_SHOT_DIR"
   fi
 
+  local cmd=pinchtab
+  if [ $NO_LOCAL -eq 1 ]; then
+    cmd=pinchtab-cloud
+    printf '\n%s NO LOCAL BROWSER HERE %s\n' "$RULE_H" "$RULE_H"
+    printf 'This environment cannot run Chrome, so `pinchtab`, `pinchtab-local` and\n'
+    printf '`pinchtab-proxy` do not work. Use `pinchtab-cloud` for every page, whatever\n'
+    printf 'SKILL.md says about it being a last resort: same commands, same batches.\n'
+  fi
+
   # Last, because it is what an agent reads right before its first command.
   prefix=${AGENT:+export PINCHTAB_AGENT=$AGENT; }
   printf '\nNext -- every browser step is a line of a batch, even a single one, and\n'
   printf 'you view latest-small.jpg in the same message:\n\n'
-  printf "%spinchtab execute-batch <<'EOF'\n" "$prefix"
+  printf "%s%s execute-batch <<'EOF'\n" "$prefix" "$cmd"
   printf 'nav <url>\nEOF\n'
 
   if [ $failed -ne 0 ]; then
@@ -140,6 +149,13 @@ while [ $# -gt 0 ]; do
 done
 # pinchtab reads the name from the environment for this agent's tab and shots.
 [ -n "${PINCHTAB_AGENT:-}" ] && export PINCHTAB_AGENT
+
+# An environment that can't run Chrome says so with this file (agent-box's
+# Android image: under Kelivo's PRoot every Chrome helper process dies at
+# launch). It gets pinchtab for the remote tiers, and pinchtab-cloud as its browser.
+NO_LOCAL_MARK=/etc/agent-box/no-local-browser
+NO_LOCAL=0
+[ -e "$NO_LOCAL_MARK" ] && NO_LOCAL=1 CLOAK=0
 
 printf '%s WEB BROWSER SETUP %s\n' "$RULE_H" "$RULE_H"
 printf "What follows is a transcript of %d steps, ending with pinchtab's own\n" "$TOTAL"
@@ -215,7 +231,9 @@ PY
     note 'cloud browser' 'FAILED -- could not write its bridge config'
     return
   fi
-  note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; use it only when pinchtab is blocked"
+  local when='use it only when pinchtab is blocked'
+  [ $NO_LOCAL -eq 1 ] && when='the only browser here'
+  note 'cloud browser' "OK -- pinchtab-cloud, Browser Use key ...${CLOUD_KEY: -4}; $when"
 }
 
 setup_proxy() {
@@ -372,7 +390,7 @@ open_session() {
 # so once one has passed its test nav, later runs only open their own session.
 # `docs` exists only in a fork build this script linked in, so an older install
 # (a shell shim, or npm's launcher) gets the full setup.
-if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && [ -L "$SHIM" ] && "$SHIM" docs >/dev/null 2>&1; then
+if [ $NO_LOCAL -eq 0 ] && [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && [ -L "$SHIM" ] && "$SHIM" docs >/dev/null 2>&1; then
   TOTAL=2
   begin "open a session${AGENT:+ for agent $AGENT} in the running browser"
   open_session
@@ -570,7 +588,10 @@ WRAPPER
   fi
 fi
 
-if [ $CLOAK -eq 0 ]; then
+if [ $NO_LOCAL -eq 1 ]; then
+  echo "no local browser in this environment ($NO_LOCAL_MARK); skipping"
+  BROWSER_NOTE='NONE -- this environment cannot run one; use pinchtab-cloud'
+elif [ $CLOAK -eq 0 ]; then
   # A previous cloak run in this sandbox left browsers.default set, and
   # --no-cloak has to mean it. Best-effort: an older pinchtab refuses the write.
   "$REAL" config set browsers.default chrome >/dev/null 2>&1 || true
@@ -674,7 +695,8 @@ note 'captcha solver' "$SOLVER_NOTE"
 begin 'start server and mint a session'
 
 "$REAL" server stop >/dev/null 2>&1 || true
-"$REAL" server restart >/dev/null
+# Without a browser to launch, the local server would only restart it in a loop.
+[ $NO_LOCAL -eq 1 ] || "$REAL" server restart >/dev/null
 
 # npm's bin/pinchtab is a Node launcher that exits 0 whatever the binary
 # returned, so `pinchtab` is linked straight to the binary and callers get real
@@ -1064,14 +1086,27 @@ if [ -n "$CLOUD_KEY" ]; then
   { wrapper_header cloud pinchtab-cloud; cat "$SHIM_BODY"; } > "$CLOUD_SHIM"
   chmod +x "$CLOUD_SHIM"
 fi
-{ wrapper_header proxy pinchtab-proxy; cat "$SHIM_BODY"; } > "$PROXY_SHIM"
-chmod +x "$PROXY_SHIM"
+rm -f "$PROXY_SHIM"
+if [ $NO_LOCAL -eq 0 ]; then
+  { wrapper_header proxy pinchtab-proxy; cat "$SHIM_BODY"; } > "$PROXY_SHIM"
+  chmod +x "$PROXY_SHIM"
+fi
 rm -f "$SHIM_BODY"
 
 setup_windows
-open_session
+if [ $NO_LOCAL -eq 0 ]; then
+  open_session
+else
+  echo "no local browser to test; pinchtab-cloud is the browser here"
+  end 0
+  note 'server + session' 'SKIPPED -- no local browser in this environment'
+fi
 windows_status
 setup_cloud
-setup_proxy
+if [ $NO_LOCAL -eq 1 ] && [ -z "$CLOUD_KEY" ]; then
+  fatal=1   # no local browser and no cloud one: nothing to drive
+else
+  [ $NO_LOCAL -eq 1 ] || setup_proxy
+fi
 print_docs
 finish

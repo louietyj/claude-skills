@@ -289,7 +289,9 @@ summary() {
     echo "  native TCP/UDP to tailnet IPs and those ranges, no proxy needed (unset HTTPS_PROXY for curl)"
   else
     echo "  SOCKS5: socks5h://127.0.0.1:$SOCKS_PORT   HTTP: http://127.0.0.1:$HTTP_PORT"
-    [ "$mode" = "userspace exit" ] && echo "  internet via the exit node: $(via_socks https://ipinfo.io/ip 2>/dev/null)"
+    if [ "$mode" = "userspace exit" ]; then
+      echo "  internet via the exit node: $(via_socks https://ipinfo.io/ip 2>/dev/null)"
+    fi
   fi
 }
 

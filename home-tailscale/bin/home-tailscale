@@ -14,15 +14,18 @@
 set -uo pipefail
 
 VERSION=1.104.5
-SHA256=720cbbccbfc03d8b55df72afc19e5a72e31b0f65934700aa6fa38074d4ad7bf7
-TARBALL="tailscale_${VERSION}_amd64.tgz"
+case "$(uname -m)" in
+  aarch64|arm64) ARCH=arm64 SHA256=e900b0e6e25023a1e504b2c237ce2a32ea0535e006f8c1a1097a490886493b6c ;;
+  *) ARCH=amd64 SHA256=720cbbccbfc03d8b55df72afc19e5a72e31b0f65934700aa6fa38074d4ad7bf7 ;;
+esac
+TARBALL="tailscale_${VERSION}_$ARCH.tgz"
 URL="https://pkgs.tailscale.com/stable/$TARBALL"
 
 SOCKS_PORT=${HOME_TAILSCALE_SOCKS_PORT:-1055}
 HTTP_PORT=${HOME_TAILSCALE_HTTP_PORT:-1056}
 EXIT_NODE=${HOME_TAILSCALE_EXIT_NODE:-}
 HOME_DIR=${HOME_TAILSCALE_HOME:-$HOME/.cache/home-tailscale}
-BIN="$HOME_DIR/tailscale_${VERSION}_amd64"
+BIN="$HOME_DIR/tailscale_${VERSION}_$ARCH"
 STATE="$HOME_DIR/state"
 SOCK="$HOME_DIR/tailscaled.sock"
 LOG="$HOME_DIR/tailscaled.log"

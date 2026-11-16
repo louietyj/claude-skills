@@ -403,22 +403,28 @@ fi
 # staging dir keeps a cut-off stream from leaving a half tree that has `chrome`.
 OFFLINE_DIR=/root/.cloakbrowser-offline
 CLOAK_LOG=/tmp/cloakbrowser-fetch.log
-CLOAK_VERSION='' BROWSER_URL='' CLOAK_PID=''
+CLOAK_VERSION='' BROWSER_URL='' CLOAK_ARCH='' CLOAK_PID=''
 fetch_cloak() {
+  local tree=cloakbrowser-offline-$CLOAK_VERSION-$CLOAK_ARCH
   local stage=$OFFLINE_DIR/.partial dec=(bzip2 -dc)
   case "$BROWSER_URL" in *.tar.xz*) dec=(xz -dc -T0) ;; esac
   rm -rf "$stage" && mkdir -p "$stage" || return 1
   curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" "$BROWSER_URL" | "${dec[@]}" | tar x -C "$stage" || return 1
-  [ -x "$stage/cloakbrowser-offline-$CLOAK_VERSION/chrome" ] || { echo "extracted tree missing chrome"; return 1; }
-  rm -rf "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION"
-  mv "$stage/cloakbrowser-offline-$CLOAK_VERSION" "$OFFLINE_DIR/" && rm -rf "$stage"
+  [ -x "$stage/$tree/chrome" ] || { echo "extracted tree missing chrome"; return 1; }
+  rm -rf "$OFFLINE_DIR/$tree"
+  mv "$stage/$tree" "$OFFLINE_DIR/" && rm -rf "$stage"
 }
 if [ $CLOAK -eq 1 ] && [ -f "$SKILL_DIR/offline.json" ] &&
-   read -r CLOAK_VERSION BROWSER_URL < <(python3 -c '
-import json, sys
+   read -r CLOAK_VERSION BROWSER_URL CLOAK_ARCH < <(python3 -c '
+import json, platform, sys
 c = json.load(open(sys.argv[1]))
-print(c["version"], c["browser_url"])' "$SKILL_DIR/offline.json") &&
-   [ ! -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+arch = platform.machine()
+tag = "linux-x64" if arch in ("x86_64", "AMD64") else "linux-arm64"
+url = c["browsers"].get(arch)
+if not url:
+    url, tag = c["browsers"]["x86_64"], "linux-x64"
+print(c["version"], url, tag)' "$SKILL_DIR/offline.json") &&
+   [ ! -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION-$CLOAK_ARCH/chrome" ]; then
   fetch_cloak > "$CLOAK_LOG" 2>&1 &
   CLOAK_PID=$!
 fi
@@ -497,13 +503,12 @@ if [ $CLOAK -eq 1 ]; then
   # The download itself started at the top of the script (fetch_cloak).
   if [ -n "$CLOAK_VERSION" ]; then
     CLOAK_BIN="$OFFLINE_DIR/browser-wrapper.sh"
+    CLOAK_TREE="$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION-$CLOAK_ARCH"
 
     if [ -z "$CLOAK_PID" ]; then
       echo "cloakbrowser-offline already installed in this sandbox"
     else
-      echo "downloading cloakbrowser-offline $CLOAK_VERSION (~150MB, cached afterwards)"
-      echo "Budget ~${SETUP_TIMEOUT:-300}s; past that this step gives up and the"
-      echo "boot continues on plain Chrome. It is not hung."
+      echo "downloading cloakbrowser-offline $CLOAK_VERSION (${CLOAK_ARCH#linux-}, ~150MB, cached afterwards)"
       if ! wait "$CLOAK_PID"; then
         cat "$CLOAK_LOG" >&2
         echo "cloakbrowser-offline install failed; falling back to ordinary Chrome" >&2
@@ -513,13 +518,16 @@ if [ $CLOAK -eq 1 ]; then
       rm -f "$CLOAK_LOG"
     fi
 
-    if [ $CLOAK -eq 1 ] && [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+    if [ $CLOAK -eq 1 ] && [ -x "$CLOAK_TREE/chrome" ]; then
       cat > "$CLOAK_BIN" <<WRAPPER
 #!/bin/bash
-BROWSER_DIR="\${BROWSER_DIR:-\$(dirname "\$0")/cloakbrowser-offline-$CLOAK_VERSION}"
+BROWSER_DIR="\${BROWSER_DIR:-$CLOAK_TREE}"
 export CLOAKBROWSER_LICENSE_API="\${CLOAKBROWSER_LICENSE_API:-https://cloak-license.louietyj.workers.dev}"
 export CLOAKBROWSER_LICENSE_KEY="\${CLOAKBROWSER_LICENSE_KEY:-cb_14f9767c54143fd714eb15bbc5acefcd}"
-exec "\$BROWSER_DIR/chrome" --license-route=proxy \${HTTPS_PROXY:+--proxy-server=\$HTTPS_PROXY} "\$@"
+# proxy with nothing to route through hangs the browser, so only when set.
+ROUTE=auto
+[ -n "\${HTTPS_PROXY:-}" ] && ROUTE=proxy
+exec "\$BROWSER_DIR/chrome" --license-route=\$ROUTE \${HTTPS_PROXY:+--proxy-server=\$HTTPS_PROXY} "\$@"
 WRAPPER
       chmod +x "$CLOAK_BIN"
     fi

@@ -28,8 +28,8 @@ MEMBERS = ["SKILL.md", "setup.sh", "cloak/package.json",
 WINDOWS = "windows.json"
 # Optional: the Browser Use key behind pinchtab-cloud.
 BROWSER_USE_KEY = "browser-use.key"
-# Optional: cloakbrowser-offline's version + tarball URL (gitignored, so the
-# Dropbox link stays out of this public repo).
+# Optional: cloakbrowser-offline's version + per-arch tarball URLs (gitignored,
+# so the download links stay out of this public repo).
 OFFLINE_JSON = "offline.json"
 
 
@@ -39,9 +39,11 @@ def read_offline() -> dict:
         return {}
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
-    for field in ("version", "browser_url"):
-        if not str(cfg.get(field, "")).strip():
-            raise SystemExit(f"{OFFLINE_JSON} lacks {field}.")
+    if not str(cfg.get("version", "")).strip():
+        raise SystemExit(f"{OFFLINE_JSON} lacks version.")
+    browsers = cfg.get("browsers") or {}
+    if not str(browsers.get("x86_64", "")).strip():
+        raise SystemExit(f"{OFFLINE_JSON} lacks browsers.x86_64.")
     return cfg
 
 

@@ -388,7 +388,8 @@ rm -f "$READY_MARK"
 
 # --- downloads, started now so they overlap the npm install -------------------
 # Each runs in the background, logging to a file the step that needs it prints.
-FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-amd64}
+case "$(uname -m)" in aarch64|arm64) PT_ARCH=arm64 ;; *) PT_ARCH=amd64 ;; esac
+FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-$PT_ARCH}
 FORK_TMP=/tmp/pinchtab-fork
 FORK_LOG=/tmp/pinchtab-fork.log
 FORK_PID=''
@@ -464,7 +465,7 @@ fi
 # bugs around it. Only the binary is replaced -- the npm package's bundled docs
 # and layout, which later steps read, stay as they are.
 FORK_NOTE='upstream npm build'
-MANAGED=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+MANAGED=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name "pinchtab-linux-$PT_ARCH" 2>/dev/null | head -1)
 if [ -n "$FORK_PID" ]; then
   if [ -z "$MANAGED" ]; then
     echo "no managed binary to replace; staying on the npm build" >&2
@@ -527,7 +528,11 @@ export CLOAKBROWSER_LICENSE_KEY="\${CLOAKBROWSER_LICENSE_KEY:-cb_14f9767c54143fd
 # proxy with nothing to route through hangs the browser, so only when set.
 ROUTE=auto
 [ -n "\${HTTPS_PROXY:-}" ] && ROUTE=proxy
-exec "\$BROWSER_DIR/chrome" --license-route=\$ROUTE \${HTTPS_PROXY:+--proxy-server=\$HTTPS_PROXY} "\$@"
+# No writable /dev/shm (PRoot on Android): Chrome's shared memory and its own
+# sandbox both fail there.
+EXTRA=()
+[ -w /dev/shm ] || EXTRA=(--disable-dev-shm-usage --no-sandbox)
+exec "\$BROWSER_DIR/chrome" --license-route=\$ROUTE \${HTTPS_PROXY:+--proxy-server=\$HTTPS_PROXY} "\${EXTRA[@]}" "\$@"
 WRAPPER
       chmod +x "$CLOAK_BIN"
     fi
@@ -674,7 +679,7 @@ begin 'start server and mint a session'
 # npm's bin/pinchtab is a Node launcher that exits 0 whatever the binary
 # returned, so `pinchtab` is linked straight to the binary and callers get real
 # exit codes.
-GO_BIN=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+GO_BIN=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name "pinchtab-linux-$PT_ARCH" 2>/dev/null | head -1)
 [ -x "$GO_BIN" ] || GO_BIN=$REAL
 
 # Screenshots after every page-changing command, and one agent session per

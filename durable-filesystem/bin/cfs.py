@@ -166,8 +166,14 @@ def rpc(endpoint: str, payload: dict) -> dict:
 
 
 def content_upload(payload: dict, data: bytes) -> dict:
+    if len(data) > MAX_SIMPLE_UPLOAD:
+        return _session_upload(payload, data)
+    return _content_post("/2/files/upload", payload, data)
+
+
+def _content_post(endpoint: str, payload: dict, data: bytes) -> dict:
     req = urllib.request.Request(
-        f"{CONTENT}/2/files/upload",
+        f"{CONTENT}{endpoint}",
         data=data,
         headers={
             "Authorization": f"Bearer {access_token()}",
@@ -176,6 +182,24 @@ def content_upload(payload: dict, data: bytes) -> dict:
         },
     )
     return _send(req)
+
+
+# Past /files/upload's 150 MiB cap, Dropbox takes the file in pieces through an
+# upload session; the commit (path, mode, rev) only applies at finish, so a
+# failure part-way leaves the old file untouched.
+SESSION_CHUNK = 16 * 1024 * 1024
+
+
+def _session_upload(payload: dict, data: bytes) -> dict:
+    first = data[:SESSION_CHUNK]
+    session = _content_post("/2/files/upload_session/start", {"close": False}, first)["session_id"]
+    offset = len(first)
+    while len(data) - offset > SESSION_CHUNK:
+        cursor = {"session_id": session, "offset": offset}
+        _content_post("/2/files/upload_session/append_v2", {"cursor": cursor}, data[offset:offset + SESSION_CHUNK])
+        offset += SESSION_CHUNK
+    cursor = {"session_id": session, "offset": offset}
+    return _content_post("/2/files/upload_session/finish", {"cursor": cursor, "commit": payload}, data[offset:])
 
 
 def content_download(payload: dict) -> tuple[bytes, dict]:
@@ -1999,12 +2023,6 @@ def cmd_upload(args) -> str:
             data = fh.read()
     except OSError as exc:
         raise CfsError(f"Could not read local file '{args.source}': {exc.strerror}") from exc
-
-    if len(data) > MAX_SIMPLE_UPLOAD:
-        raise CfsError(
-            f"'{args.source}' is {human_size(len(data))}, over the {human_size(MAX_SIMPLE_UPLOAD)} "
-            "single-request limit. Chunked upload is not implemented."
-        )
 
     meta = upload_bytes(path, data, args, verb="upload")
     return f"Uploaded {args.source} -> {path} ({human_size(len(data))}).\nnew rev: {meta['rev']}"

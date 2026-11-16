@@ -247,9 +247,13 @@ PY
   note 'proxied browser' 'OK -- pinchtab-proxy, a second browser behind a proxy you name'
 }
 
+# Started before the test nav and collected after it (windows_status): the gate
+# check takes ~1s when the laptop answers and up to 15s when it is asleep.
+WIN_NOTE='' WIN_PID=''
+WIN_STATUS=/tmp/.pinchtab-windows-status
 setup_windows() {
   if [ ! -f "$WINDOWS_JSON" ]; then
-    note "Louie's Chrome" 'not configured -- no windows.json in the skill'
+    WIN_NOTE='not configured -- no windows.json in the skill'
     return
   fi
   # The shim reads both files on every call; neither is ever printed.
@@ -266,12 +270,24 @@ with open(conf, "w") as f:
     f.write(f"WIN_BASE='{base}'\n")
 PY
   then
-    note "Louie's Chrome" 'FAILED -- windows.json is unreadable'
+    WIN_NOTE='FAILED -- windows.json is unreadable'
     return
   fi
-  local base status
+  local base
   base=$(. "$WIN_CONF"; printf '%s' "$WIN_BASE")
-  status=$(curl -sS -m 15 -H @"$WIN_HEADERS" "$base/gate/status" 2>&1)
+  curl -sS -m 15 -H @"$WIN_HEADERS" "$base/gate/status" > "$WIN_STATUS" 2>&1 &
+  WIN_PID=$!
+}
+
+windows_status() {
+  if [ -z "$WIN_PID" ]; then
+    note "Louie's Chrome" "$WIN_NOTE"
+    return
+  fi
+  wait "$WIN_PID"
+  local status
+  status=$(cat "$WIN_STATUS" 2>/dev/null)
+  rm -f "$WIN_STATUS"
   case "$status" in
     *"\"protocol\": $WINDOWS_PROTOCOL"*) note "Louie's Chrome" 'OK -- pinchtab-windows, his laptop answers' ;;
     *'"protocol"'*) note "Louie's Chrome" "MISMATCH -- his gate speaks another protocol: $status" ;;
@@ -370,6 +386,43 @@ if [ $RECONFIGURE -eq 0 ] && [ -f "$READY_MARK" ] && [ -L "$SHIM" ] && "$SHIM" d
 fi
 rm -f "$READY_MARK"
 
+# --- downloads, started now so they overlap the npm install -------------------
+# Each runs in the background, logging to a file the step that needs it prints.
+FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-amd64}
+FORK_TMP=/tmp/pinchtab-fork
+FORK_LOG=/tmp/pinchtab-fork.log
+FORK_PID=''
+if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
+  rm -f "$FORK_TMP"
+  curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" -o "$FORK_TMP" "$FORK_BIN_URL" > "$FORK_LOG" 2>&1 &
+  FORK_PID=$!
+fi
+
+# Unpacking, not the ~5s download, is the cost: ~24s for single-threaded bzip2,
+# ~3s for a .tar.xz made with `xz -T0`, whose blocks unpack on every core. The
+# staging dir keeps a cut-off stream from leaving a half tree that has `chrome`.
+OFFLINE_DIR=/root/.cloakbrowser-offline
+CLOAK_LOG=/tmp/cloakbrowser-fetch.log
+CLOAK_VERSION='' BROWSER_URL='' CLOAK_PID=''
+fetch_cloak() {
+  local stage=$OFFLINE_DIR/.partial dec=(bzip2 -dc)
+  case "$BROWSER_URL" in *.tar.xz*) dec=(xz -dc -T0) ;; esac
+  rm -rf "$stage" && mkdir -p "$stage" || return 1
+  curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" "$BROWSER_URL" | "${dec[@]}" | tar x -C "$stage" || return 1
+  [ -x "$stage/cloakbrowser-offline-$CLOAK_VERSION/chrome" ] || { echo "extracted tree missing chrome"; return 1; }
+  rm -rf "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION"
+  mv "$stage/cloakbrowser-offline-$CLOAK_VERSION" "$OFFLINE_DIR/" && rm -rf "$stage"
+}
+if [ $CLOAK -eq 1 ] && [ -f "$SKILL_DIR/offline.json" ] &&
+   read -r CLOAK_VERSION BROWSER_URL < <(python3 -c '
+import json, sys
+c = json.load(open(sys.argv[1]))
+print(c["version"], c["browser_url"])' "$SKILL_DIR/offline.json") &&
+   [ ! -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+  fetch_cloak > "$CLOAK_LOG" 2>&1 &
+  CLOAK_PID=$!
+fi
+
 # --- 1. the package ----------------------------------------------------------
 begin 'install pinchtab'
 
@@ -404,27 +457,30 @@ fi
 # then abandoned; the fork implements it and fixes the detection and reporting
 # bugs around it. Only the binary is replaced -- the npm package's bundled docs
 # and layout, which later steps read, stay as they are.
-FORK_BIN_URL=${PINCHTAB_FORK_BIN_URL:-https://github.com/louietyj/pinchtab/releases/latest/download/pinchtab-linux-amd64}
 FORK_NOTE='upstream npm build'
-if [ "${PINCHTAB_USE_FORK:-1}" = "1" ]; then
-  MANAGED=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+MANAGED=$(find "$NPM_ROOT/pinchtab/.managed-bin" -type f -name 'pinchtab-linux-amd64' 2>/dev/null | head -1)
+if [ -n "$FORK_PID" ]; then
   if [ -z "$MANAGED" ]; then
     echo "no managed binary to replace; staying on the npm build" >&2
-  elif curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" -o /tmp/pinchtab-fork "$FORK_BIN_URL" \
-       && [ -s /tmp/pinchtab-fork ]; then
+    kill "$FORK_PID" 2>/dev/null
+  elif wait "$FORK_PID" && [ -s "$FORK_TMP" ]; then
     # Replace by rename so a half-written download can never become the binary.
-    chmod +x /tmp/pinchtab-fork && mv -f /tmp/pinchtab-fork "$MANAGED"
+    chmod +x "$FORK_TMP" && mv -f "$FORK_TMP" "$MANAGED"
     echo "fork build installed: $MANAGED"
     FORK_NOTE="fork build ($("$REAL" --version 2>/dev/null || echo unknown))"
   else
+    cat "$FORK_LOG" >&2
     echo "fork build download failed; continuing on the npm build -- captcha" >&2
     echo "solving will not work, everything else will" >&2
-    rm -f /tmp/pinchtab-fork
     failed=1
     FORK_NOTE='FORK DOWNLOAD FAILED -- no captcha solving'
   fi
+  rm -f "$FORK_TMP" "$FORK_LOG"
 fi
 note 'pinchtab install' "OK -- $FORK_NOTE"
+
+# Skip npm's Node launcher: it doubles the cost of each of the ~25 config calls.
+[ -x "$MANAGED" ] && REAL=$MANAGED
 
 # --- 2. a browser for it to drive --------------------------------------------
 begin 'find a browser runtime'
@@ -434,37 +490,27 @@ BROWSER_NOTE=''
 "$REAL" server stop >/dev/null 2>&1 || true
 
 # A patched Chromium that ordinary bot detection does not reject on
-# fingerprint. Default at 17.5s cold against 6.6s for plain Chrome, ~12s of
-# which is the download; it was only ever expensive because npm re-solved.
+# fingerprint.
 if [ $CLOAK -eq 1 ]; then
   t0=$SECONDS
 
-  if [ -f "$SKILL_DIR/offline.json" ] &&
-     read -r CLOAK_VERSION BROWSER_URL < <(python3 -c '
-import json, sys
-c = json.load(open(sys.argv[1]))
-print(c["version"], c["browser_url"])' "$SKILL_DIR/offline.json"); then
-    OFFLINE_DIR=/root/.cloakbrowser-offline
+  # The download itself started at the top of the script (fetch_cloak).
+  if [ -n "$CLOAK_VERSION" ]; then
     CLOAK_BIN="$OFFLINE_DIR/browser-wrapper.sh"
 
-    if [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
+    if [ -z "$CLOAK_PID" ]; then
       echo "cloakbrowser-offline already installed in this sandbox"
     else
-      mkdir -p "$OFFLINE_DIR" && cd "$OFFLINE_DIR"
       echo "downloading cloakbrowser-offline $CLOAK_VERSION (~190MB, cached afterwards)"
       echo "Budget ~${SETUP_TIMEOUT:-300}s; past that this step gives up and the"
       echo "boot continues on plain Chrome. It is not hung."
-      ok=1
-      curl -fsSL --max-time "${SETUP_TIMEOUT:-300}" -o browser.tar.bz2 "$BROWSER_URL" || ok=0
-      if [ $ok -eq 1 ]; then
-        tar xjf browser.tar.bz2
-        [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ] || { ok=0; echo "extracted tree missing chrome" >&2; }
-      fi
-      rm -f browser.tar.bz2
-      if [ $ok -ne 1 ]; then
+      if ! wait "$CLOAK_PID"; then
+        cat "$CLOAK_LOG" >&2
         echo "cloakbrowser-offline install failed; falling back to ordinary Chrome" >&2
+        rm -rf "$OFFLINE_DIR/.partial"
         CLOAK=0
       fi
+      rm -f "$CLOAK_LOG"
     fi
 
     if [ $CLOAK -eq 1 ] && [ -x "$OFFLINE_DIR/cloakbrowser-offline-$CLOAK_VERSION/chrome" ]; then
@@ -515,6 +561,11 @@ if [ $CLOAK -eq 0 ]; then
   # A previous cloak run in this sandbox left browsers.default set, and
   # --no-cloak has to mean it. Best-effort: an older pinchtab refuses the write.
   "$REAL" config set browsers.default chrome >/dev/null 2>&1 || true
+  # It also left browser.binary on the cloak wrapper, which hides the system
+  # Chrome from `doctor` below -- and is a dead path once cloak fails to install.
+  case "$("$REAL" config get browser.binary 2>/dev/null)" in
+    */browser-wrapper.sh) "$REAL" config set browser.binary '' >/dev/null 2>&1 ;;
+  esac
 
   # Most sandboxes ship a Chromium. If not, pull puppeteer's bundled build.
   if "$REAL" doctor 2>&1 | grep -qi "OK.*chrome_present"; then
@@ -611,7 +662,6 @@ begin 'start server and mint a session'
 
 "$REAL" server stop >/dev/null 2>&1 || true
 "$REAL" server restart >/dev/null
-sleep 2
 
 # npm's bin/pinchtab is a Node launcher that exits 0 whatever the binary
 # returned, so `pinchtab` is linked straight to the binary and callers get real
@@ -1005,8 +1055,9 @@ fi
 chmod +x "$PROXY_SHIM"
 rm -f "$SHIM_BODY"
 
-open_session
 setup_windows
+open_session
+windows_status
 setup_cloud
 setup_proxy
 print_docs

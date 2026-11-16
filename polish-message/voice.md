@@ -53,11 +53,11 @@ sentence or two, backs it with exact facts, and stops.
 - **Default to no sign-off.** The last sentence is the point, the
   position, or a question like `What do you think?`, and the message
   stops there.
-- **`Thanks!` only when it's earned:** the recipient is being asked to do
-  something for him, or has just done something. Then it goes on its own
-  line, sometimes as `Thanks a lot!` or `Thanks so much!`. Confirmations,
-  updates, answers, and replies that already opened with thanks don't
-  get one.
+- **`Thanks!` is the exception, not a reflex.** He reaches for it only when
+  stopping with no sign-off would feel abrupt, e.g. a cold request to a
+  stranger that ends on a bare fact. Most emails, requests included, end
+  fine on their last sentence. When it is used it goes on its own line,
+  sometimes as `Thanks a lot!` or `Thanks so much!`.
 - **Never** "Best regards", "Warm regards", "Cheers", "Sincerely".
   (`Regards,` was his default through about 2019 and then dropped out.
   Don't bring it back.)
@@ -71,10 +71,20 @@ sentence or two, backs it with exact facts, and stops.
 
 - **Short.** A confirmation is one sentence. A request is one short
   paragraph. Emails only get longer when there are several questions or a
-  case to make, and then the length goes into structure, not prose.
-- **Numbered lists for multiple questions,** introduced with `A few
-  questions:` or `My questions:`. One question per item. Bullets for
-  supporting points or grounds.
+  case to make, and even then he keeps the prose tight.
+- **Questions in prose by default.** Two or three questions, or questions
+  that build on each other, read better as a sentence or short paragraph.
+  A short list where prose would do reads like an AI wrote it. Use a
+  numbered list (`A few questions:`, one question per item) only when there
+  are genuinely many independent questions and each one needs its own
+  answer. Bullets are for supporting points or grounds.
+- **Few questions, each one earning its place.** For every question, ask:
+  do we already know the answer, or could we find it ourselves (their
+  website, the terms, the booking confirmation)? If so, drop it, unless
+  getting it from them in writing is the point, e.g. the general terms say
+  one thing and he wants their answer for his specific case on record.
+  "What is your cancellation policy?" when it's on their site wastes their
+  time and shows he didn't check.
 - **Exact facts up front, inline:** booking, ticket and claim numbers,
   amounts to the cent, dates, links, and which card or account. The
   recipient should never have to ask "which one?".
@@ -226,6 +236,9 @@ If a draft contains any of these, it isn't in his voice yet:
   the recipient on high alert.
 - Restating the recipient's email back to them before answering.
 - A closing paragraph that summarizes what the email already said.
+- `Thanks!` tacked onto the end by habit.
+- A two- or three-item list where a sentence would do, and questions
+  whose answers are already known or easy to look up.
 - Em dashes, semicolon-heavy sentences, "Additionally," / "Furthermore," /
   "Moreover,".
 - A long backstory before the ask.

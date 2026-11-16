@@ -84,9 +84,12 @@ make any, starting with the biggest units:
    dashes, stacked hedges)? And is it overdone: traits piled on beyond
    what this recipient calls for, or wording lifted from the examples in
    `voice.md`?
-4. **Check the facts:** every identifier, amount and date he gave you is
+4. **Check every question.** Do we already know the answer, or could we
+   look it up? Cut it unless getting it from them in writing is the
+   point. Are the survivors in a list that would read better as prose?
+5. **Check the facts:** every identifier, amount and date he gave you is
    present and correct, and the recipient won't have to ask "which one?".
-5. **Words last.**
+6. **Words last.**
 
 His messages are short. Your v1 is almost certainly too long. Assume the
 right length is a fraction of it, and keep cutting until the next cut

@@ -56,6 +56,17 @@ class Fake:
         """Call audio from Louie's end, as one media frame on the call's stream."""
         self.run(self._send_media(ccid, data))
 
+    def reconnect(self, ccid, close_old=False, delay=0.0):
+        """Telnyx re-dialling the call's stream (same stream_id), as it does when the socket dies.
+        The old socket goes silent, as when its path dies: no more marks, audio or close. With
+        close_old, it is closed first instead, `delay` seconds before the new one opens."""
+        self.run(self._reconnect(ccid, close_old, delay))
+
+    def drop_stream(self, ccid, close=True):
+        """The stream's socket closes mid-call (or, with close=False, just goes silent) and
+        Telnyx never reconnects it."""
+        self.run(self._reconnect(ccid, close, None))
+
     def last(self):
         return list(self.calls)[-1]
 
@@ -111,6 +122,17 @@ class Fake:
     # Telnyx dials the stream_url it was given once the call is answered, signing
     # `{timestamp}|{stream_url}`, then sends connected, start, and media frames.
 
+    async def _reconnect(self, ccid, close_old, delay):
+        call = self.calls[ccid]
+        old = call["stream"]
+        call["dead"].add(old)
+        if close_old:
+            asyncio.ensure_future(old.close())       # the close frame goes now; no waiting on the handshake
+        if delay is None:
+            return
+        await asyncio.sleep(delay)
+        await self._open_stream(ccid)
+
     async def _open_stream(self, ccid):
         call = self.calls[ccid]
         url = call["body"].get("stream_url")
@@ -129,8 +151,12 @@ class Fake:
         bidi = body.get("stream_bidirectional_codec")
         fmt = {"encoding": "L16" if bidi == "L16" else "PCMU",
                "sample_rate": int(body.get("stream_bidirectional_sampling_rate") or 8000), "channels": 1}
-        call.update(stream=ws, stream_id=str(uuid.uuid4()), seq=itertools.count(1), chunk=itertools.count(1),
-                    received=[], media_format=fmt)
+        # A reconnect keeps the stream_id and the media counters, as Telnyx's did.
+        if "stream" not in call:
+            call.update(stream_id=str(uuid.uuid4()), chunk=itertools.count(1), streams=[], dead=set())
+        received = []
+        call.update(stream=ws, seq=itertools.count(1), received=received, media_format=fmt)
+        call["streams"].append({"ws": ws, "received": received})
         await ws.send_str(json.dumps({"event": "connected", "version": "1.0.0"}))
         await ws.send_str(json.dumps({"event": "start", "sequence_number": str(next(call["seq"])),
                                       "start": {"call_control_id": ccid, "call_session_id": call["session"],
@@ -146,6 +172,8 @@ class Fake:
 
         async def give_back(m, at):
             await asyncio.sleep(max(0.0, at - time.time()))
+            if ws in call["dead"]:
+                return
             if m in play["marks"]:
                 play["marks"].remove(m)
                 await ws.send_str(json.dumps({"event": "mark", "stream_id": call["stream_id"],
@@ -156,7 +184,7 @@ class Fake:
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
                 m = json.loads(msg.data)
-                call["received"].append(m)
+                received.append(m)
                 if m.get("event") == "media":
                     secs = len(base64.b64decode(m["media"]["payload"])) / (fmt["sample_rate"] * 2)
                     play["until"] = max(play["until"], time.time()) + secs

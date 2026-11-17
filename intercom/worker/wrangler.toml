@@ -22,6 +22,10 @@ type = "Text"
 globs = ["**/aec/*.js"]
 fallthrough = true
 
+# Workers Logs: keeps the phone line's stream log (logLine) after a room is gone.
+[observability]
+enabled = true
+
 [[durable_objects.bindings]]
 name = "SESSION"
 class_name = "Session"

@@ -44,6 +44,7 @@ WRANGLER_VARS = (f"--var CLI_TOKEN:{CLI} --var DEVICE_TOKEN:{DEV} --var DEEPGRAM
                  f"--var SFU_URL:http://127.0.0.1:8798/v1/apps --var VOICE_PLAYOUT_MS:{PLAYOUT_MS} "
                  "--var VOICE_READY_WAIT_MS:2000 --var LISTEN_BATCH_MS:1500 --var TALK_HOLD_MS:1000 "
                  "--var RESUME_GRACE_MS:2000 --var VOICE_RESUME_WAIT_MS:3000 --var SPEAK_GEN_TIMEOUT_MS:15000 "
+                 "--var LINE_GRACE_MS:1500 "
                  "--var DEEPGRAM_URL:http://127.0.0.1:8798/v1/listen "
                  f"--var TELNYX_API_URL:http://127.0.0.1:8797 --var TELNYX_API_KEY:txkey "
                  f"--var TELNYX_PUBLIC_KEY:{fake_telnyx.PUBLIC_KEY} --var TELNYX_CONNECTION_ID:conn1 "
@@ -1733,6 +1734,90 @@ class PhoneAudio(unittest.TestCase):
         for bad in (url + "wrong", url + k):            # a wrong key; the right key, unsigned
             with self.assertRaises(Exception):
                 connect(bad, open_timeout=10).recv(timeout=2)
+
+    FRAME = b"\x01\x00" * 320                            # 20 ms of L16 at 16 kHz
+
+    def back(self, sid, n):
+        """Waits for the n-th reconnected stream's first audio to be logged."""
+        return wait_entries(sid, lambda es: len([t for t in texts(es, "net") if "line audio back" in t]) >= n)
+
+    def test_telnyx_reconnecting_the_stream_mid_speech_moves_nothing_and_the_speech_carries_on(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        n = stream_count()
+        th, got = speak_in_background(sid, "one two three four five six seven eight nine ten")
+        call = TELNYX.calls[ccid]
+        end = time.time() + 10
+        while time.time() < end and not any(m["event"] == "mark" for m in call["received"]):
+            time.sleep(0.05)
+        time.sleep(0.6)
+        TELNYX.reconnect(ccid)                           # the old socket goes silent, unclosed
+        TELNYX.send_audio(ccid, self.FRAME)
+        th.join(30)
+        self.assertEqual((got["out"]["status"], got["out"]["unspoken"]), ("done", ""), got)
+        self.assertGreater(got["out"].get("paused_s", 0), 0, got)
+        old, new = call["streams"]
+        secs = [sum(len(base64.b64decode(m["media"]["payload"])) for m in s["received"] if m["event"] == "media") / 32000
+                for s in (old, new)]
+        # The new stream picked up partway, from a word the old one hadn't finished: some is said twice.
+        self.assertLess(secs[1], got["out"]["audio_s"] - 0.3, secs)
+        self.assertGreater(sum(secs), got["out"]["audio_s"], secs)
+        self.assertTrue(old["ws"].closed)                # the relay let go of it
+        es = self.back(sid, 1)
+        self.assertFalse([t for t in texts(es, "event") if "moved" in t or "dropped" in t], texts(es, "event"))
+        self.assertTrue(any(t.startswith("line stream #2 started") and "#1" in t for t in texts(es, "net")))
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "line")
+        self.assertEqual(stream_count(), n)              # the transcriber kept its stream
+
+    def test_a_short_gap_on_the_line_stays_quiet_and_a_long_one_is_news(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        TELNYX.send_audio(ccid, self.FRAME)
+        time.sleep(0.3)
+        TELNYX.reconnect(ccid)
+        TELNYX.send_audio(ccid, self.FRAME)
+        es = self.back(sid, 1)
+        self.assertFalse([t for t in texts(es, "event") if "dropped" in t])
+        time.sleep(2.5)                                  # Telnyx sends audio all the time: this is a dead line
+        TELNYX.reconnect(ccid)
+        TELNYX.send_audio(ccid, self.FRAME)
+        wait_entries(sid, lambda es: any("line's audio dropped for" in t and "was lost" in t
+                                         for t in texts(es, "event")))
+
+    def test_a_stream_that_closes_mid_call_keeps_the_audio_while_telnyx_reconnects(self):
+        sid = create(mode="talk")
+        ws = screen(sid, "watch")
+        ccid, _ = self.answered(sid, ws)
+        TELNYX.reconnect(ccid, close_old=True, delay=0.5)
+        TELNYX.send_audio(ccid, self.FRAME)
+        es = self.back(sid, 1)
+        self.assertTrue(any("line stream #1 closed" in t for t in texts(es, "net")))
+        self.assertFalse([t for t in texts(es, "event") if "moved" in t or "stream closed" in t])
+        self.assertEqual(http("/status", id=sid)[1]["device"]["audio"], "line")
+        ws.close()
+
+    def test_speech_on_a_line_that_goes_silent_for_good_ends_interrupted_not_done(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        th, got = speak_in_background(sid, "one two three four five six")
+        call = TELNYX.calls[ccid]
+        end = time.time() + 10
+        while time.time() < end and not any(m["event"] == "mark" for m in call["received"]):
+            time.sleep(0.05)
+        time.sleep(0.6)                                  # some marks have come back
+        TELNYX.drop_stream(ccid, close=False)            # no marks, no close, no reconnect
+        th.join(30)
+        self.assertEqual(got["out"]["status"], "interrupted", got)
+        self.assertIn("stopped playing Claude's voice", got["out"]["reason"])
+        self.assertTrue(got["out"]["unspoken"], got)
+
+    def test_a_stream_that_closes_and_never_comes_back_leaves_the_room_without_audio(self):
+        sid = create(mode="talk")
+        ccid, _ = self.answered(sid)
+        TELNYX.drop_stream(ccid)
+        wait_entries(sid, lambda es: any("hasn't reconnected it" in t for t in texts(es, "event")))
+        dev = http("/status", id=sid)[1]["device"]
+        self.assertEqual((dev["audio"], dev["no_audio_why"]), (None, "line dropped"))
 
 
 class Isolation(unittest.TestCase):

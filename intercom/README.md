@@ -380,6 +380,26 @@ the audio, or leaving it, hangs up; nothing redials, since a drop and a hang-up
 can't reliably be told apart. A call counts as presence, so it can open a room
 no screen has, and keep it. Only the number's last four digits are stored.
 
+**The line's stream reconnects by itself.** Telnyx re-dials the stream URL
+when its socket dies (`enable_reconnect`, on by default; the same `stream_id`,
+a fresh `connected` + `start`, and no webhook). The old socket usually never
+closes on our side: on the 2026-11-17 call GQHL (six reconnects in 25 minutes),
+each replaced socket lingered for ~17 minutes, TCP's give-up time, and each new
+one came in through a different Cloudflare data centre, so the path was
+black-holed rather than closed (most likely an anycast reroute). The relay used
+to read each new `start` as the audio moving ("audio moved from the device to
+the line") and cut Claude off. Now a `start` while the call's old stream holds
+the audio swaps sockets quietly: the transcriber keeps its stream, the old
+socket is closed, and speech picks up on the new one from the start of the word
+its marks had reached (Telnyx's queue died with the old socket). What Louie
+said in the gap is lost; Claude is told only if the gap reached 2 s. Once a
+call has returned marks, a line whose marks stop isn't `done` until they catch
+up: a reconnect replays the rest, and with none for 30 s the line is
+`interrupted`. A socket that does close mid-call keeps the audio for 10 s
+awaiting Telnyx's reconnect. Every stream socket is logged quietly (`net`
+entries and Workers Logs): data centre, Telnyx's IP, how it ended, the gap, and
+how far Telnyx's media timestamps jumped.
+
 **Quick start: the room opens before Claude does.** When Claude starts the
 room, Louie waits for a container to boot and a first turn to run; the phone
 used to ring only after that. Now a press goes to the relay (`POST /quick`,

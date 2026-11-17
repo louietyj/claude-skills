@@ -60,7 +60,7 @@ const LISTEN_BATCH_MS = 10_000;          // like watch's --interval
 const NO_AUDIO_MAX_MS = 60 * 60_000;
 // Why speech stopped, as `speak` reports it, when the audio left its holder.
 const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding the audio disconnected",
-                       "call ended": "the phone line ended" };
+                       "call ended": "the phone line ended", "line dropped": "the phone line's audio stream dropped" };
 const TELNYX_API_URL = "https://api.telnyx.com";
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 const RING_S = 20;                       // rings out before a voicemail would answer
@@ -123,6 +123,12 @@ const TTS_CONFIG = { model: "tts-rt-v2", language: "en", voice: "Hazel", audio_f
 // back, the line is taken to have played its audio this much later.
 const PHONE_RATE = 16000;
 const MARK_GRACE_MS = 2000;
+// Telnyx reconnects a call's stream by itself when its socket dies, usually
+// without a close reaching the relay (README: the line's stream reconnects).
+// A gap shorter than this is a blip Claude isn't told about.
+const LINE_BLIP_MS = 2000;
+// A stream socket that does close mid-call gets this long for Telnyx to reconnect.
+const LINE_GRACE_MS = 10_000;
 const VOICE_TRACK = "claude";
 const PUMP_MS = 50;
 const VOICE_LEAD_S = 0.2;
@@ -160,6 +166,7 @@ const json = (o, c = 200) =>
   new Response(JSON.stringify(o), { status: c, headers: { "content-type": "application/json" } });
 const pad = (n) => String(n).padStart(6, "0");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const secsSince = (t) => Math.round((Date.now() - t) / 1000);
 
 // What a page saw when its socket went quiet: ", wifi rtt 50ms 10Mb/s hidden 12 KB unsent".
 function netNote(m) {
@@ -475,6 +482,11 @@ export class Session {
     this.holder = null;          // the screen whose mic is the room's audio, or the phone line
     this.phone = null;           // Telnyx's media socket for the room's call
     this.phoneFormat = null;     // Soniox's raw-audio settings for it
+    this.lines = new Map();      // each stream socket of the call -> {n, at, ip, colo, lastAt, ts}
+    this.lineN = 0;
+    this.lineMarks = false;      // the call has returned a mark: from then on, played means marked
+    this.lineGrace = null;       // the stream socket closed mid-call: Telnyx's reconnect is awaited
+    this.lineResume = null;      // Telnyx reconnected: {quietSince, prev} until the new stream's first audio
     this.stt = null;             // current transcriber websocket
     this.sttOpening = false;
     this.quickFails = 0;
@@ -1004,6 +1016,8 @@ export class Session {
     if (old === ws) return;
     if (this.grace) { clearTimeout(this.grace.timer); this.grace = null; }
     delete this.meta.grace;
+    clearTimeout(this.lineGrace);
+    this.lineGrace = this.lineResume = null;
     this.segRec = null;
     this.segChunks = 0;
     this.resuming = null;
@@ -1109,6 +1123,8 @@ export class Session {
     }
     await this.goLive();
     this.meta.call = { state: "dialing", ccid: data.call_control_id, key, to4: to.slice(-4), at: Date.now() };
+    this.lineN = 0;
+    this.lineMarks = false;
     await this.addEntry("event", { text: `${byLouie ? "Louie asked for a call: " : ""}calling his phone (…${to.slice(-4)})` });
     this.sendRoom();
     return { ok: true, state: "dialing" };
@@ -1180,6 +1196,9 @@ export class Session {
                                        : "the call to Louie's phone was not answered";
       await this.addEntry("event", { text: `${what}${how ? ` (${how})` : ""}` });
       await this.armTimer();
+    } else if (type?.startsWith("streaming.")) {
+      // Telnyx's own reconnects send none of these: a failure is the one worth keeping.
+      return this.logLine(`Telnyx ${type}${p.failure_reason ? `: ${p.failure_reason}` : ""}`);
     } else {
       return;
     }
@@ -1187,39 +1206,123 @@ export class Session {
   }
 
   // Telnyx's media stream for the call. Once it starts, the line holds the
-  // room's audio, and whatever held it lets go.
-  acceptPhone() {
+  // room's audio, and whatever held it lets go. Each socket is logged quietly
+  // (where it came in, how it ended), so drops can be traced afterwards.
+  acceptPhone(req) {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
+    const line = { n: ++this.lineN, at: Date.now(), ip: req.headers.get("cf-connecting-ip") ?? "?",
+                   colo: req.headers.get("x-colo") || "?", lastAt: 0, ts: null, closed: false };
+    this.lines.set(server, line);
     server.addEventListener("message", (m) => this.onPhoneFrame(server, m.data).catch(() => {}));
-    const gone = async () => {
+    const gone = async (c) => {
+      if (line.closed) return;
+      line.closed = true;
+      try { server.close(1000); } catch {}             // completes Telnyx's close handshake
+      this.lines.delete(server);
+      const last = line.lastAt ? `${secsSince(line.lastAt)}s ago` : "never";
+      await this.logLine(`line stream #${line.n} closed (${c?.code ?? "error"}${c?.reason ? ` ${c.reason}` : ""}) ` +
+                         `after ${secsSince(line.at)}s; its audio last came ${last}`);
       if (this.phone !== server) return;
+      if (this.holder === server && !line.stopped && this.meta.call?.state === "up") return this.lineDropped(server, line);
       if (this.holder === server) await this.setHolder(null, "call ended");
       this.phone = null;
     };
     server.addEventListener("close", gone);
-    server.addEventListener("error", gone);
+    server.addEventListener("error", () => gone(null));
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async onPhoneFrame(ws, raw) {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
+    const line = this.lines.get(ws);
     if (m.event === "start") {
       const f = m.start?.media_format ?? {};
+      const format = { ...(PHONE_FORMATS[f.encoding] ?? PHONE_FORMATS.PCMU),
+                       ...(f.sample_rate ? { sample_rate: Number(f.sample_rate) } : {}) };
+      const old = this.phone;
+      const prev = old && this.lines.get(old);
+      const note = `line stream #${line?.n} started via ${line?.colo} from ${line?.ip} ` +
+        `(stream ${String(m.stream_id ?? "?").slice(0, 8)}${prev ? `; #${prev.n} via ${prev.colo} still open, ` +
+        `its audio last came ${prev.lastAt ? `${secsSince(prev.lastAt)}s ago` : "never"}` : ""})`;
+      // Swapped before anything awaits: the stream's audio is right behind its start.
+      if (old && old !== ws && this.holder === old) {
+        await this.resumeLine(ws, old, format);
+        return this.logLine(note);
+      }
       this.phone = ws;
-      this.phoneFormat = { ...(PHONE_FORMATS[f.encoding] ?? PHONE_FORMATS.PCMU),
-                           ...(f.sample_rate ? { sample_rate: Number(f.sample_rate) } : {}) };
+      this.phoneFormat = format;
       await this.takeAudio(ws);
       await this.startSegment(this.phoneFormat);
+      await this.logLine(note);
     } else if (m.event === "media" && ws === this.holder && (m.media?.track ?? "inbound") === "inbound") {
+      const now = Date.now();
+      if (this.lineResume) this.lineBack(now, m.media);
+      if (line) Object.assign(line, { lastAt: now, ts: Number(m.media.timestamp) });
       await this.onAudio(Uint8Array.from(atob(m.media.payload ?? ""), (c) => c.charCodeAt(0)));
-    } else if (m.event === "mark") {
+    } else if (m.event === "mark" && ws === this.phone) {
       this.onMark(m.mark?.name);
+    } else if (m.event === "error") {
+      const e = m.payload ?? {};
+      await this.logLine(`Telnyx stream error ${e.code ?? "?"} ${e.title ?? ""}: ${String(e.detail ?? "").slice(0, 120)}`);
     } else if (m.event === "stop") {
+      if (line) line.stopped = true;
       if (ws === this.holder) await this.setHolder(null, "call ended");
       try { ws.close(1000); } catch {}
     }
+  }
+
+  // Telnyx reconnecting the call's stream: the same call, so the audio hasn't moved.
+  async resumeLine(ws, old, format) {
+    clearTimeout(this.lineGrace);
+    this.lineGrace = null;
+    this.lineResume ??= { quietSince: this.lastAudioAt || Date.now(), prev: this.lines.get(old) };
+    this.phone = this.holder = ws;
+    try { old.close(1000, "replaced"); } catch {}
+    const sp = this.speaking;
+    if (sp?.phone === old) this.rewindLine(sp, ws);
+    if (format.sample_rate !== this.phoneFormat?.sample_rate || format.audio_format !== this.phoneFormat?.audio_format) {
+      this.phoneFormat = format;
+      await this.startSegment(format);
+    }
+  }
+
+  // The reconnected stream's first audio says how long nothing was heard; Telnyx's
+  // media timestamps, if they carry on across streams, how much call audio was skipped.
+  lineBack(now, media) {
+    const { quietSince, prev } = this.lineResume;
+    this.lineResume = null;
+    const gap = now - quietSince;
+    const skipped = prev?.ts != null && Number.isFinite(Number(media.timestamp))
+      ? `; Telnyx timestamps skip ${Number(media.timestamp) - prev.ts} ms` : "";
+    const s = (gap / 1000).toFixed(1);
+    // A gap long enough to be called a stall is reported when the audio returns (onAudio).
+    if (!this.audioStalledAt && gap >= Number(this.env.LINE_BLIP_MS ?? LINE_BLIP_MS)) {
+      this.addEntry("event", { text: `the phone line's audio dropped for ${s}s and came back: anything Louie said in between was lost` }).catch(() => {});
+    }
+    this.logLine(`line audio back after ${s}s${skipped}`).catch(() => {});
+  }
+
+  // Closed mid-call without a `stop`: until Telnyx reconnects, the line still holds the audio.
+  lineDropped(server, line) {
+    clearTimeout(this.lineGrace);
+    this.lineResume ??= { quietSince: this.lastAudioAt || Date.now(), prev: line };
+    const ms = Number(this.env.LINE_GRACE_MS ?? LINE_GRACE_MS);
+    this.lineGrace = setTimeout(async () => {
+      this.lineGrace = null;
+      if (this.phone !== server) return;
+      if (this.holder === server) await this.setHolder(null, "line dropped");
+      this.phone = null;
+      await this.addEntry("event", { text: `the phone line's audio stream closed ${Math.round(ms / 1000)}s ago and Telnyx ` +
+        "hasn't reconnected it: no audio, though the call may still be up (hang up and call again)" });
+    }, ms);
+  }
+
+  // Quiet, for tracing drops: a transcript entry nobody is woken by, and the worker's log.
+  async logLine(text) {
+    console.log(JSON.stringify({ room: this.meta?.id, line: text }));
+    if (this.live()) await this.addEntry("net", { text });
   }
 
   async acceptDevice() {
@@ -1793,7 +1896,7 @@ export class Session {
       bargeIn: body?.barge_in !== false,
       // A call reports, by marks, how much of the audio has played. Chunks are
       // 100 ms: at 48 kHz, doubled to stereo, under the SFU's 32 KB packet cap.
-      phone: onPhone ? this.phone : null, markedBytes: 0, bps: rate * 2, chunk: rate * 2 / 10,
+      phone: onPhone ? this.phone : null, markedBytes: 0, markAt: null, bps: rate * 2, chunk: rate * 2 / 10,
       // A page's own count of what it played (`heard`) and what was sent, so a pause can resume.
       base: null, sent: [], heard: 0, heardBase: { page: 0, pos: 0 }, lastPage: 0, reports: false,
       paused: null, pausedMs: 0,
@@ -1859,7 +1962,7 @@ export class Session {
       if (chunk.length % 2) chunk = chunk.subarray(0, chunk.length - 1);   // a split sample: not worth carrying
       sp.firstAt ??= now;
       sp.base ??= { at: now, pos: sp.sentBytes };
-      if (!sp.phone) sp.sent.push({ pos: sp.sentBytes, chunk });
+      sp.sent.push({ pos: sp.sentBytes, chunk });
       sp.sentBytes += chunk.length;
       if (sp.phone) this.toCall(sp, chunk);
       else { try { this.voiceOut?.send(voicePacket(chunk)); } catch {} }
@@ -1871,9 +1974,19 @@ export class Session {
     }
     if (sp.genEnded && !sp.queue.length && sp.base) {
       const endsAt = sp.base.at + sentS() * 1000 + this.playoutDelayMs() + (sp.phone ? MARK_GRACE_MS : 0);
+      if (sp.phone) {
+        // Marks that stop coming mean the stream died under the audio: Telnyx's
+        // reconnect replays the rest (rewindLine), so it isn't done until then.
+        const wait = Number(this.env.VOICE_RESUME_WAIT_MS ?? VOICE_RESUME_WAIT_MS);
+        if (sp.markedBytes >= sp.sentBytes || (!this.lineMarks && now >= endsAt)) this.finishSpeak(sp, "done");
+        else if (now >= endsAt + wait) {
+          this.finishSpeak(sp, "interrupted", `the phone line stopped playing Claude's voice and wasn't back within ${Math.round(wait / 1000)}s`);
+        }
+        return;
+      }
       // A page that reports must have played it, give or take a few lost packets.
       const heardAll = !sp.reports || sp.sentBytes / sp.bps - sp.heard < 0.5;
-      if ((sp.phone && sp.markedBytes >= sp.sentBytes) || (now >= endsAt && heardAll)) this.finishSpeak(sp, "done");
+      if (now >= endsAt && heardAll) this.finishSpeak(sp, "done");
     }
   }
 
@@ -1883,6 +1996,25 @@ export class Session {
     if (this.speaking !== sp || sp.paused || sp.stopping || sp.phone) return;
     this.voiceReady = false;
     const s = this.wordStart(sp, this.played(sp));
+    this.rewind(sp, s);
+    sp.heard = s;
+    sp.paused = { at: Date.now(), why, s };
+    this.toHolder({ type: "tts_stop", sid: sp.sid });
+  }
+
+  // On a reconnected stream: Telnyx's queue on the old socket is gone, so the
+  // line picks up from the start of the word its marks had reached.
+  rewindLine(sp, ws) {
+    const s = this.wordStart(sp, this.played(sp));
+    sp.markedBytes = this.rewind(sp, s);
+    sp.pausedMs += Date.now() - (sp.markAt ?? sp.firstAt ?? Date.now());
+    sp.markAt = null;
+    sp.phone = ws;
+  }
+
+  // Back to `s` seconds into the line: what was sent after it goes back on the
+  // queue, and pacing restarts from there. Returns the byte position.
+  rewind(sp, s) {
     const pos = Math.floor((s * sp.bps) / 2) * 2;
     const back = [];
     const kept = [];
@@ -1899,9 +2031,7 @@ export class Session {
     sp.queue.unshift(...back);
     sp.sentBytes = pos;
     sp.base = null;
-    sp.heard = s;
-    sp.paused = { at: Date.now(), why, s };
-    this.toHolder({ type: "tts_stop", sid: sp.sid });
+    return pos;
   }
 
   resumeSpeech(sp) {
@@ -1954,6 +2084,8 @@ export class Session {
     const [sid, bytes] = String(name ?? "").split(":");
     if (!sp?.phone || sp.stopping || sid !== sp.sid) return;
     sp.markedBytes = Math.max(sp.markedBytes, Number(bytes) || 0);
+    sp.markAt = Date.now();
+    this.lineMarks = true;
   }
 
   playoutDelayMs() { return Number(this.env.VOICE_PLAYOUT_MS ?? VOICE_PLAYOUT_MS); }
@@ -2122,7 +2254,7 @@ export class Session {
     if (path === "/phone") {
       if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected a websocket" }, 426);
       if (!this.meta.call?.key || q.get("k") !== this.meta.call.key) return json({ error: "unauthorized" }, 401);
-      return this.acceptPhone();
+      return this.acceptPhone(req);
     }
     if (path === "/tts-in") {
       if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected a websocket" }, 426);
@@ -2375,6 +2507,12 @@ export default {
     const id = (q.get("id") ?? "").toUpperCase();
     if (!ID_RE.test(id)) return json({ error: "need ?id= (4 characters)" }, 400);
     const stub = env.SESSION.get(env.SESSION.idFromName(id));
+    if (path === "/phone") {
+      // Which Cloudflare data centre Telnyx's stream came in through, for the line's log.
+      const headers = new Headers(req.headers);
+      headers.set("x-colo", req.cf?.colo ?? "");
+      return stub.fetch(new Request(req, { headers }));
+    }
     if (req.headers.get("Upgrade") === "websocket") return stub.fetch(req);
     // Buffered: a streamed body the object never reads is still being pumped
     // after it responds, and workerd then fails the next request.

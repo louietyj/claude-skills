@@ -379,9 +379,10 @@ EOF
     audio, wait for him to turn it back on. Then decide whether what he missed
     still matters, said differently, or not at all. If the audio moved to
     another device, say `unspoken` again right away: `speak` waits for the new
-    device. If `reason` says your voice dropped and wasn't back in time, his
-    page is still reconnecting it on its own: try `unspoken` again, and if it
-    comes back `not_delivered`, tell him in chat.
+    device. If `reason` says your voice dropped, or the phone line stopped
+    playing it, and it wasn't back in time, the connection is still recovering
+    on its own: try `unspoken` again, and if it comes back `not_delivered`,
+    tell him in chat.
   - `not_delivered`: nothing in the room holds the audio. If `reason` says he
     left audio, wait for him to turn it back on; otherwise tell him in chat.
 - A dropped connection doesn't lose the answer: `speak` asks the relay again

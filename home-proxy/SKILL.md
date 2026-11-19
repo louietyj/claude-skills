@@ -35,7 +35,7 @@ ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:1080 %h %p' user@host
 
 ## How it works
 
-A gost client (fetched once from the cfs store, SHA-256 pinned) offers SOCKS5 and HTTP locally and tunnels to
+A gost client (fetched once from Louie's public Backblaze bucket, SHA-256 pinned) offers SOCKS5 and HTTP locally and tunnels to
 `proxy.home.louietyj.me:443` as WebSocket over TLS, through the sandbox's egress proxy. That host is a spare
 Android phone on his home Wi-Fi ([home-relay](https://github.com/louietyj/home-relay)), which makes the
 outbound connections. Password-protected; the credentials come from `gost-auth.env` beside this file,

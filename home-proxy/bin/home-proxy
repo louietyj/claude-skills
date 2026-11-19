@@ -10,7 +10,7 @@ set -uo pipefail
 
 SHA256=4f975bbf4890ebc182c1bacafeb0a468e63f2edb2cc9c896f9cacd82fa9e8848   # gost, linux/amd64, stripped
 GOST_MODULE=github.com/go-gost/gost/cmd/gost@v0.0.0-20261102125854-3d514c57230b
-STORE_BIN=/_devfiles/home-relay/gost-linux-amd64
+GOST_URL=https://f001.backblazeb2.com/file/louietyj-public/gost-0.0.0-20261102125854-3d514c5-go1.26.10-linux-amd64/9b049b41-387e-42aa-abd5-dabcbe6c91e8
 STORE_AUTH=/_devfiles/home-relay/secrets/gost-auth.env
 SERVER=${HOME_PROXY_SERVER:-proxy.home.louietyj.me:443}
 
@@ -54,14 +54,14 @@ fetch_gost() {
   [ -x "$BIN" ] && return 0
   mkdir -p "$HOME_DIR"
   local tmp="$BIN.part"
-  if command -v cfs >/dev/null 2>&1 && cfs download "$STORE_BIN" --to "$tmp" >/dev/null 2>&1; then
-    echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 || { rm -f "$tmp"; die "the stored gost binary failed its SHA-256 check."; }
+  if curl -fsSL --max-time 300 -o "$tmp" "$GOST_URL"; then
+    echo "$SHA256  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1 || { rm -f "$tmp"; die "the downloaded gost binary failed its SHA-256 check."; }
   elif command -v go >/dev/null 2>&1; then
     echo "home-proxy: no stored client; building gost from source (a few minutes)..." >&2
     GOBIN="$HOME_DIR/gobin" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -trimpath -ldflags='-s -w' "$GOST_MODULE" >&2 \
       && mv "$HOME_DIR/gobin/gost" "$tmp" || die "could not build gost."
   else
-    die "no gost client: the cfs store (durable-filesystem skill) has it at $STORE_BIN."
+    die "no gost client: could not download $GOST_URL, and there is no Go toolchain to build it."
   fi
   chmod +x "$tmp" && mv "$tmp" "$BIN"
 }

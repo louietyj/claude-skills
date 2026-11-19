@@ -570,7 +570,11 @@ WRAPPER
     "$REAL" config set browser.binary "$CLOAK_BIN" >/dev/null
     "$REAL" config set browser.cloak.fingerprintSeed "$CLOAK_SEED" >/dev/null
     "$REAL" config set browser.cloak.platform "${CLOAK_PLATFORM:-windows}" >/dev/null
-    "$REAL" config set browser.cloak.timezone "${CLOAK_TIMEZONE:-America/New_York}" >/dev/null
+    # The exit IP's timezone: a mismatch with it is a bot signal. The browser
+    # leaves through $HTTPS_PROXY, and so does this curl.
+    tz=${CLOAK_TIMEZONE:-$(curl -sf -m 5 https://ipinfo.io/timezone 2>/dev/null)}
+    "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 ||
+      "$REAL" config set browser.cloak.timezone America/New_York >/dev/null
     "$REAL" config set browser.cloak.locale "${CLOAK_LOCALE:-en-US}" >/dev/null
     # Fixed, not random: past ~1.15MP claude.ai shrinks screenshots and clicks
     # read off them land short (see README). Older builds lack the key.
@@ -924,7 +928,7 @@ if [ "$TIER" = proxy ]; then
       # Chrome's socks5 already leaves name lookups to the proxy; it has no socks5h.
       url=$3
       case "$url" in socks5h://*) url=socks5://${url#socks5h://} ;; esac
-      platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-America/New_York}
+      platform=${CLOAK_PLATFORM:-windows} tz=${CLOAK_TIMEZONE:-}
       if [ "$url" = home ]; then
         home_proxy || exit 1
         # The home proxy is an Android phone: sites read its TCP/IP fingerprint as
@@ -935,6 +939,9 @@ if [ "$TIER" = proxy ]; then
         http://*|https://*|socks4://*|socks5://*) ;;
         *) echo "$NAME: unsupported proxy $3: use home, socks5://, socks4://, http:// or https://" >&2; exit 2 ;;
       esac
+      # The exit's timezone, looked up through the proxy itself (socks5h: the proxy resolves).
+      [ -n "$tz" ] || tz=$(curl -sf -m 15 --proxy "$(echo "$url" | sed 's|^socks5://|socks5h://|')" https://ipinfo.io/timezone 2>/dev/null)
+      [ -n "$tz" ] || tz=America/New_York
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.proxy.server "$url" >/dev/null 2>&1 || exit 1
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.platform "$platform" >/dev/null 2>&1 || exit 1
       PINCHTAB_CONFIG=$CONF "$REAL" config set browser.cloak.timezone "$tz" >/dev/null 2>&1 || exit 1

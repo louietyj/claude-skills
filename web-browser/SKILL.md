@@ -168,8 +168,9 @@ in the summary, and everything else still works -- so a nav that comes back
 blocked is worth checking against that summary line before you conclude the
 site is unreadable.
 
-`CLOAK_PLATFORM`, `CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override
-the fingerprint it presents. `--no-cloak` forces plain Chrome.
+Its timezone is the exit IP's, looked up at setup. `CLOAK_PLATFORM`,
+`CLOAK_TIMEZONE`, `CLOAK_LOCALE` and `CLOAK_SEED` override the fingerprint it
+presents. `--no-cloak` forces plain Chrome.
 
 The window is a fixed 1440x900 (a 1440x779 viewport). Do not enlarge it with
 `pinchtab set viewport`: past ~1.15 megapixels screenshots are shrunk before
@@ -313,7 +314,8 @@ EOF
   home network is reachable through it too (his router is `http://172.16.0.1/`).
   It is his real IP: don't keep retrying a site that blocks it.
 - Any other `start --proxy <url>` (re)starts it with that proxy, which must
-  already be running, and the usual Windows fingerprint. Behind socks5 the proxy
+  already be running, and the usual Windows fingerprint in the exit's timezone
+  (looked up through the proxy, else New York). Behind socks5 the proxy
   resolves names, so `.onion` works and lookups stay off this sandbox's DNS.
 - `CLOAK_PLATFORM` and `CLOAK_TIMEZONE` on `start` override the fingerprint.
 - It keeps the proxy: if the sandbox was recycled, the next command brings the

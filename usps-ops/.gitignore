@@ -1,5 +1,7 @@
 # Built by package.py.
 *.zip
+# USPS login for iv_track.py; snapshot at /_devfiles/claude-skills/usps-ops/usps-iv.env.
+usps-iv.env
 .venv/
 __pycache__/
 .pytest_cache/

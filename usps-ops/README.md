@@ -12,6 +12,7 @@ scripts/
   fill_template.py    .dotx + spec.json -> .docx
   preview.sh          .docx -> PNG via LibreOffice
   tracking_dat.py     prepend a line to QuickLetterTracker's tracking.dat
+  iv_track.py         look a piece up in USPS Informed Visibility; compare two snapshots
 fonts/                Figtree (OFL) and USPSIMBStandard (USPS license, in the same folder), for previews
 tests/test_usps_ops.py
 ```
@@ -21,11 +22,11 @@ The scripts are mechanical primitives. Judgement, such as reading an unfamiliar 
 ## Tests
 
 ```bash
-pip install pdfplumber pypdfium2 lxml pillow pytest
+pip install pdfplumber pypdfium2 lxml pillow pytest requests
 pytest tests
 ```
 
-The encoder, serial and `tracking.dat` tests are self-contained. The PDF and template tests read his Dropbox (`~/Dropbox/Sent Mail`, `~/Dropbox/Custom Office Templates`, or `$USPS_DROPBOX`) and skip when it isn't there.
+The encoder, serial, `tracking.dat` and tracking-snapshot tests are self-contained; nothing calls USPS. The PDF and template tests read his Dropbox (`~/Dropbox/Sent Mail`, `~/Dropbox/Custom Office Templates`, or `$USPS_DROPBOX`) and skip when it isn't there.
 
 ## Package for claude.ai
 

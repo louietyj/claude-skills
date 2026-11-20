@@ -17,6 +17,7 @@ from PIL import Image
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fill_template  # noqa: E402
 import imb  # noqa: E402
+import iv_track  # noqa: E402
 import next_serial  # noqa: E402
 import stamps_pdf  # noqa: E402
 import tracking_dat  # noqa: E402
@@ -94,6 +95,36 @@ def test_tracking_dat_prepends_crlf_line(tmp_path):
     )
     with pytest.raises(SystemExit):
         tracking_dat.prepend(str(path), line)
+
+
+def _scan(when, code):
+    return {"scan_date_time": when, "scan_event_code": code, "scan_facility_name": "SAN FRANCISCO",
+            "mail_phase": "Phase 1a - Origin Primary Processing"}
+
+
+def _snapshot(*scans, expected="2026-10-30"):
+    return {"message": None, "data": {"expected_delivery_date": expected, "scans": list(scans),
+                                      "imb": POSTCARD_IMB}}
+
+
+def test_iv_track_dumps_matches_saved_format():
+    assert iv_track.dumps({"message": None, "data": {"scans": []}}) == (
+        '{\r\n    "message": null,\r\n    "data": {\r\n        "scans": []\r\n    }\r\n}\r\n'
+    )
+
+
+def test_iv_track_compare_verdicts():
+    a, b = _scan("2026-10-27T22:25:43", "481"), _scan("2026-10-29T13:54:21", "893")
+    assert iv_track.compare(None, {"message": "No data", "data": None})["verdict"] == "empty"
+    assert iv_track.compare(None, _snapshot(a))["verdict"] == "first"
+    assert iv_track.compare(_snapshot(a), _snapshot(a))["verdict"] == "same"
+    gained = iv_track.compare(_snapshot(a), _snapshot(b, a))
+    assert gained["verdict"] == "changed" and len(gained["gained"]) == 1
+    assert gained["latest_scan"].startswith("2026-10-29T13:54:21 893")
+    # A scan that vanishes is lost even when another one arrived, and so is a field going null.
+    assert iv_track.compare(_snapshot(a), _snapshot(b))["verdict"] == "lost"
+    lost = iv_track.compare(_snapshot(a), _snapshot(a, expected=None))
+    assert lost["verdict"] == "lost" and lost["lost"] == ["expected_delivery_date: '2026-10-30' -> None"]
 
 
 @pytest.mark.parametrize("expected", STAMPS_IMBS)

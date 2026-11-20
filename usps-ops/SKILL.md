@@ -1,6 +1,6 @@
 ---
 name: usps-ops
-description: Prepares Louie's physical mail — letters on his letterhead, and stamps.com postage turned into a print-ready envelope or postcard that carries his own Intelligent Mail barcode (IMb) for tracking — and logs each piece to QuickLetterTracker. Use when he wants to write or send a letter or postcard by mail, attaches a stamps.com postage PDF, mentions IMb, mail tracking, envelopes, postcards, or "Sent Mail", or asks to opt out of arbitration by mail.
+description: Prepares Louie's physical mail — letters on his letterhead, and stamps.com postage turned into a print-ready envelope or postcard that carries his own Intelligent Mail barcode (IMb) for tracking — logs each piece to QuickLetterTracker, and tracks pieces through USPS Informed Visibility day by day. Use when he wants to write or send a letter or postcard by mail, attaches a stamps.com postage PDF, mentions IMb, mail tracking, envelopes, postcards, or "Sent Mail", or asks to opt out of arbitration by mail.
 ---
 
 # usps-ops
@@ -27,7 +27,8 @@ Every stamped piece also gets: the stamps.com PDF renamed `(Postage).pdf`, and a
    - address → address block;
    - for a postcard, the message as well.
 6. **Preview, then deliver** the files under his naming convention. He does the final polish in Word and prints.
-7. **Log** our IMb to `tracking.dat`.
+7. **Log** our IMb to `tracking.dat`, and add the piece to the tracking list.
+8. **Track** it daily until it settles (see Tracking a piece). The Duet check-in does this.
 
 ## Setup
 
@@ -59,6 +60,7 @@ If `cfs` isn't available or he declines a move, deliver those files as downloads
 - `<stem>.docx` — letter
 - `<stem> (Postage).pdf` — his stamps.com PDF, renamed
 - `<stem> (Envelope) - <our IMb>.docx` or `<stem> (Postcard) - <our IMb>.docx`
+- `<stem> (Tracking).json` for an envelope, `<stem> (Postcard) (Tracking).json` for a postcard
 
 A file name carries an IMb only if that barcode is tracked: ours names the piece, while stamps.com's is replaced on the piece and stays out of the postage PDF's name.
 
@@ -169,3 +171,44 @@ Write it back **in place**. Never delete and recreate it: the file gets a new ID
 7. Confirm the `id` is unchanged and that `list_shared_links` on the path still shows the same link.
 
 The file is missing from its folder between steps 3 and 6, so do them back to back.
+
+Then add the piece to the tracking list, `/mail-tracking/pieces.md` in `cfs` (format in its header).
+
+## Tracking a piece
+
+USPS Informed Visibility reports a piece's scans by IMb, but only for pieces under his MID, so pieces made before 2026-09-23 with stamps.com's barcode can't be tracked any more. Its answers are unreliable twice over:
+- Two lookups a minute apart can return different scans. `fetch` asks 5 times and keeps the answer with the most data.
+- Scans sometimes **vanish** for good. So a version is never thrown away once it holds something the newer one lacks.
+
+```bash
+python3 "$SK/scripts/iv_track.py" fetch <IMb> > new.json      # best of 5, in the saved file format
+python3 "$SK/scripts/iv_track.py" compare <old.json|-> new.json
+```
+
+`fetch` needs `pip install requests` if it's missing. It logs in with `USPS_USERNAME`, `USPS_PASSWORD` and `USPS_CLIENT_ID`, read from the environment, from `usps-iv.env` beside this file, or from `cfs` at `/_devfiles/claude-skills/usps-ops/usps-iv.env`. It reaches `services.usps.com` and `iv.usps.com`.
+
+`compare` reports a `verdict`, plus the scans gained and lost, the latest scan and the expected delivery date:
+
+| verdict | meaning | do |
+|---|---|---|
+| `empty` | no data yet (IV can lag a day or two after mailing) | nothing |
+| `first` | no saved snapshot yet | save `new.json` as the piece's `(Tracking).json` |
+| `same` | nothing changed | nothing |
+| `changed` | new data, nothing lost | overwrite the `(Tracking).json` in place |
+| `lost` | the saved snapshot holds a scan or field the new one lacks | keep the old version under a new name, then save the new one |
+
+Moving files works as for `tracking.dat`, and the connector's `move` needs no approval, so an unattended run can do all of it:
+- **Save a new file:** `cfs upload /outbox/<name> --from new.json --new`, then `move` it from `/Apps/louietyj-claude-ai/outbox/<name>` to `/Sent Mail/<name>`.
+- **Overwrite in place:** `move` the file into `/Apps/louietyj-claude-ai/`, `cfs read` it for the rev, `cfs upload --rev` over it, and `move` it back.
+- **Keep the old version:** rename it with `move`, adding ` (as of YYYY-MM-DD)` before `.json`, where the date is its `server_modified` date in PT. Then save `new.json` under the plain name.
+
+To get the saved snapshot to compare against, `download_link` the `(Tracking).json` and `curl` it.
+
+### How long to track
+
+- Daily for at least 7 days after mailing, and until it settles: no new scans for 2 days, the last one in a destination phase (`Phase 3`, carrier sortation), and the expected delivery date passed.
+- Then one last check 7 days after the expected delivery date (14 days after mailing if IV never gave one), and move it to Done in the list.
+
+Use judgement over the rule when a piece doesn't look settled: no destination scan by the expected date, scans that head somewhere other than the recipient's area, or a scan that looks like a return. Keep checking it daily and tell him.
+
+**Tell him** when scans are lost (list them), when a piece has no scans 3 days after mailing, or when something above looks wrong. A piece that is simply moving along needs no message.

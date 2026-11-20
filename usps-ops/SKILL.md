@@ -28,7 +28,7 @@ Every stamped piece also gets: the stamps.com PDF renamed `(Postage).pdf`, and a
    - for a postcard, the message as well.
 6. **Preview, then deliver** the files under his naming convention. He does the final polish in Word and prints.
 7. **Log** our IMb to `tracking.dat`, and add the piece to the tracking list.
-8. **Track** it daily until it settles (see Tracking a piece). The Duet check-in does this.
+8. **Track** it: the Duet check-in does this daily, using Tracking a piece.
 
 ## Setup
 
@@ -204,11 +204,9 @@ Moving files works as for `tracking.dat`, and the connector's `move` needs no ap
 
 To get the saved snapshot to compare against, `download_link` the `(Tracking).json` and `curl` it.
 
-### How long to track
+### Reading a snapshot
 
-- Daily for at least 7 days after mailing, and until it settles: no new scans for 2 days, the last one in a destination phase (`Phase 3`, carrier sortation), and the expected delivery date passed.
-- Then one last check 7 days after the expected delivery date (14 days after mailing if IV never gave one), and move it to Done in the list.
+- **Settled:** no new scans for a couple of days, the last one in a destination phase (`Phase 3`, carrier sortation), and the expected delivery date passed. IV has no delivery scan for letters, so this is as close to "delivered" as it gets.
+- **Worth a look:** no scans 3 days after mailing, no destination scan by the expected date, scans heading somewhere other than the recipient's area, a scan that looks like a return, or scans that vanished.
 
-Use judgement over the rule when a piece doesn't look settled: no destination scan by the expected date, scans that head somewhere other than the recipient's area, or a scan that looks like a return. Keep checking it daily and tell him.
-
-**Tell him** when scans are lost (list them), when a piece has no scans 3 days after mailing, or when something above looks wrong. A piece that is simply moving along needs no message.
+How often to check and when to stop is up to whoever is tracking; the Duet check-in's schedule is in its prompt.

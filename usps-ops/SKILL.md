@@ -10,7 +10,7 @@ description: Prepares Louie's physical mail — letters on his letterhead, and s
 | Letter | letter `.docx` + envelope `.docx` with postage |
 | Postcard | one postcard `.docx` (message + postage) |
 
-Every stamped piece also gets: the stamps.com PDF renamed `(Postage) - <stamps IMb>.pdf`, and a line in `tracking.dat`.
+Every stamped piece also gets: the stamps.com PDF renamed `(Postage).pdf`, and a line in `tracking.dat`.
 
 ## Workflow
 
@@ -57,8 +57,10 @@ If `cfs` isn't available or he declines a move, deliver those files as downloads
 `YYYY-MM-DD - <Recipient> - <Subject>` is the stem, e.g. `2026-10-02 - Acme - Arbitration opt-out`. List `/Sent Mail/` and match how earlier pieces to the same kind of recipient were named.
 
 - `<stem>.docx` — letter
-- `<stem> (Postage) - <stamps.com IMb>.pdf` — his stamps.com PDF, renamed
+- `<stem> (Postage).pdf` — his stamps.com PDF, renamed
 - `<stem> (Envelope) - <our IMb>.docx` or `<stem> (Postcard) - <our IMb>.docx`
+
+An IMb goes in a file name if and only if that barcode is meant to be tracked. Ours is, so it names the piece. stamps.com's isn't: we replace it on the piece, so it stays out of the postage PDF's name.
 
 ## Writing the message
 

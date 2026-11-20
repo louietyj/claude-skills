@@ -10,7 +10,7 @@ description: Prepares Louie's physical mail — letters on his letterhead, and s
 | Letter | letter `.docx` + envelope `.docx` with postage |
 | Postcard | one postcard `.docx` (message + postage) |
 
-Every stamped piece also gets: the stamps.com PDF renamed `(Postage) - <stamps IMb>.pdf`, and a line in `tracking.dat`.
+Every stamped piece also gets: the stamps.com PDF renamed `(Postage).pdf`, and a line in `tracking.dat`.
 
 ## Workflow
 
@@ -43,7 +43,7 @@ Read through the Dropbox connector. For binaries, get a `download_link` and `cur
 
 - Templates: `/Custom Office Templates/` — `Letterhead (US).dotx`, `Postcard.dotx`, `Envelope #10 (USPS).dotx`, `Envelope #6 (USPS).dotx`. Always fetch fresh; never reuse a copy from an earlier conversation.
 - Finished mail: `/Sent Mail/`
-- Tracker: `/QuickLetterTracker/tracking.dat`. Never touch `prefs.dat` or `qlprefs` beside it.
+- Tracker: `/QuickLettertracker/tracking.dat`. Never touch `prefs.dat` or `qlprefs` beside it.
 
 The connector cannot upload binaries, but it can move them. Put each `.docx`/`.pdf` into `Sent Mail` in two steps:
 
@@ -57,8 +57,10 @@ If `cfs` isn't available or he declines a move, deliver those files as downloads
 `YYYY-MM-DD - <Recipient> - <Subject>` is the stem, e.g. `2026-10-02 - Acme - Arbitration opt-out`. List `/Sent Mail/` and match how earlier pieces to the same kind of recipient were named.
 
 - `<stem>.docx` — letter
-- `<stem> (Postage) - <stamps.com IMb>.pdf` — his stamps.com PDF, renamed
+- `<stem> (Postage).pdf` — his stamps.com PDF, renamed
 - `<stem> (Envelope) - <our IMb>.docx` or `<stem> (Postcard) - <our IMb>.docx`
+
+A file name carries an IMb only if that barcode is tracked: ours names the piece, while stamps.com's is replaced on the piece and stays out of the postage PDF's name.
 
 ## Writing the message
 
@@ -156,9 +158,14 @@ The name is the stem's recipient, e.g. `ACME`.
 
 *Automates:* prepending `M/D/YYYY<TAB>zip9<TAB>dpc<TAB>tracking20<TAB>RECIPIENT` (no zero padding, CRLF endings, newest first), and refusing duplicates.
 
-Writing it back means replacing the file through the connector:
+Write it back **in place**. Never delete and recreate it: the file gets a new ID, which breaks its public shared link, and the tracker app reads `tracking.dat` through that link. A move keeps the ID, and so does a `cfs` overwrite, so round-trip it through the app folder:
 
 1. Tell him the exact line being added.
-2. `delete` the old file. That moves it to Dropbox's deleted files, so it's recoverable.
-3. `create_file` at the same path with the new full content, keeping `\r\n` line endings.
-4. Download it again and `cmp` it with your local copy. If they differ, say so and stop.
+2. `get_file_metadata` on `/QuickLettertracker/tracking.dat` and note its `id`.
+3. Connector `move` from that `id` to `/Apps/louietyj-claude-ai/tracking.dat`. He approves it.
+4. `cfs read /tracking.dat` (the rev rule), then `cfs download` it and `cmp` it with the copy you edited from. If they differ, someone changed it in the meantime, so redo your edit on the current bytes.
+5. `cfs upload /tracking.dat --from tracking.dat --rev <rev>`. Use upload, not `edit`, so the `\r\n` line endings survive byte for byte. Download it again and `cmp`.
+6. Connector `move` from the same `id` back to `/QuickLettertracker/tracking.dat`. He approves it.
+7. Confirm the `id` is unchanged and that `list_shared_links` on the path still shows the same link.
+
+The file is missing from its folder between steps 3 and 6, so do them back to back.

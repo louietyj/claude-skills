@@ -156,9 +156,14 @@ The name is the stem's recipient, e.g. `ACME`.
 
 *Automates:* prepending `M/D/YYYY<TAB>zip9<TAB>dpc<TAB>tracking20<TAB>RECIPIENT` (no zero padding, CRLF endings, newest first), and refusing duplicates.
 
-Writing it back means replacing the file through the connector:
+Write it back **in place**. Never delete and recreate it: that gives the file a new ID, and the public shared link on `tracking.dat` (which follows the file ID) breaks. A move keeps the ID, and so does a `cfs` overwrite, so round-trip it through the app folder:
 
 1. Tell him the exact line being added.
-2. `delete` the old file. That moves it to Dropbox's deleted files, so it's recoverable.
-3. `create_file` at the same path with the new full content, keeping `\r\n` line endings.
-4. Download it again and `cmp` it with your local copy. If they differ, say so and stop.
+2. `get_file_metadata` on `/QuickLettertracker/tracking.dat` and note its `id`.
+3. Connector `move` from that `id` to `/Apps/louietyj-claude-ai/tracking.dat`. He approves it.
+4. `cfs read /tracking.dat` (the rev rule), then `cfs download` it and `cmp` it with the copy you edited from. If they differ, someone changed it in the meantime, so redo your edit on the current bytes.
+5. `cfs upload /tracking.dat --from tracking.dat --rev <rev>`. Use upload, not `edit`, so the `\r\n` line endings survive byte for byte. Download it again and `cmp`.
+6. Connector `move` from the same `id` back to `/QuickLettertracker/tracking.dat`. Note the folder's casing: it's `QuickLettertracker`. He approves it.
+7. Confirm the `id` is unchanged and that `list_shared_links` on the path still shows the same link.
+
+The file is missing from its folder between steps 3 and 6, so do them back to back.

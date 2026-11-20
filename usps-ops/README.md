@@ -30,7 +30,7 @@ The encoder, serial, `tracking.dat` and tracking-snapshot tests are self-contain
 
 ## Package for claude.ai
 
-`python package.py` writes `usps-ops.zip`; upload it under Settings → Capabilities → Skills.
+`python package.py` writes `usps-ops.zip`; upload it under Settings → Capabilities → Skills. It bundles the gitignored `usps-iv.env` (his USPS login, snapshot at `/_devfiles/claude-skills/usps-ops/usps-iv.env`) when present, so treat the zip as a secret.
 
 `fonts/USPSIMBStandard.ttf` is redistributed under the [USPS IMb license](https://postalpro.usps.com/onecodesolution), which allows it provided the copyright notice, conditions and disclaimer travel with it (`fonts/USPS-IMb-LICENSE.txt`, included in the zip) and the font isn't sold on its own.
 

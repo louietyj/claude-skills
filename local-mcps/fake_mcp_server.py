@@ -13,6 +13,9 @@
     eatstdin swallows the first request before serving, as a cold `npx` does
     echoenv  tools/call returns the value of $FAKE_TOKEN
     annotated `add` declares readOnlyHint true, `boom` false
+    install  "installs" for $FAKE_INSTALL_SECS into $FAKE_INSTALL_DIR before
+             serving, and crashes if another install is under way there, as
+             two `npx` installs of one package do
 """
 import base64
 import json
@@ -106,6 +109,18 @@ def main():
         t = threading.Thread(target=sys.stdin.readline, daemon=True)
         t.start()
         t.join(5)
+
+    if MODE == "install":
+        marker = os.path.join(os.environ["FAKE_INSTALL_DIR"], "installing")
+        try:
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            print("fake: ENOTEMPTY, another install is writing this tree",
+                  file=sys.stderr)
+            sys.exit(1)
+        os.close(fd)
+        time.sleep(float(os.environ.get("FAKE_INSTALL_SECS", "1")))
+        os.remove(marker)
 
     if MODE == "hang":
         print("fake: waiting on a lock held by nobody", file=sys.stderr)

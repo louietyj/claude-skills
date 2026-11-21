@@ -201,31 +201,44 @@ class TestTools(Base):
         self.assertEqual(self.run_lmcps("tools", "adder", "--refresh").returncode, 1)
 
 
-class TestWarm(Base):
-    """`warm` exists because a cold `npx -y <pkg>` install can outlast the
-    sandbox's tool-call limit, killing the model's first real call however
-    patient lmcps is."""
+@unittest.skipIf(os.name == "nt", "no flock on Windows")
+class TestStartLock(Base):
+    """The fake server's `install` mode crashes if two installs overlap."""
 
-    def test_returns_at_once_and_names_what_it_started(self):
-        self.write_config({"adder": fake_server()})
-        r = self.run_lmcps("warm", timeout=15)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("adder", r.stdout)
+    def setUp(self):
+        super().setUp()
+        install_dir = self.tmp / "npx"
+        install_dir.mkdir()
+        self.install_env = {"FAKE_INSTALL_DIR": str(install_dir)}
 
-    def test_skips_http_servers(self):
-        """Nothing to install, and an HTTP server answers in about a second."""
-        self.write_config({"tomtom": {"type": "http", "url": "https://example.invalid"},
-                           "adder": fake_server()})
-        r = self.run_lmcps("warm", timeout=15)
-        self.assertIn("adder", r.stdout)
-        self.assertNotIn("tomtom", r.stdout)
+    def start_call(self, secs, timeout=None):
+        e = dict(os.environ)
+        e.update(LMCPS_HOME=str(self.tmp / "home"), LMCPS_CONFIG=str(self.config_path),
+                 FAKE_INSTALL_SECS=str(secs), **self.install_env)
+        pre = ["--timeout", str(timeout)] if timeout else []
+        return subprocess.Popen([sys.executable, str(LMCPS), *pre, "call", "adder", "add",
+                                 '{"a": 1, "b": 2}'], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=e)
 
-    def test_an_unstartable_server_is_not_fatal(self):
-        self.write_config({"broken": {"command": "definitely-not-a-real-binary"},
-                           "adder": fake_server()})
-        r = self.run_lmcps("warm", timeout=15)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("adder", r.stdout)
+    def test_concurrent_first_calls_take_turns(self):
+        self.write_config({"adder": fake_server("install")})
+        procs = [self.start_call(1.5) for _ in range(2)]
+        for p in procs:
+            out, err = p.communicate(timeout=30)
+            self.assertEqual(p.returncode, 0, err)
+            self.assertEqual(out.strip(), "3")
+
+    def test_an_install_orphaned_by_a_timeout_still_holds_the_lock(self):
+        """A call killed mid-install leaves npx running. The next call must wait
+        for it rather than start a second install beside it."""
+        self.write_config({"adder": fake_server("install")})
+        killed = self.start_call(4, timeout=1)
+        killed.communicate(timeout=30)
+        self.assertNotEqual(killed.returncode, 0)
+        retry = self.start_call(0)
+        out, err = retry.communicate(timeout=30)
+        self.assertEqual(retry.returncode, 0, err)
+        self.assertIn("waiting for another start of 'adder'", err)
 
 
 class TestDescribe(Base):

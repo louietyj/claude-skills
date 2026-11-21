@@ -41,6 +41,11 @@ import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Windows: no flock, so starts there go unserialized
+    fcntl = None
+
 HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
 LMCPS_HOME = Path(os.environ.get("LMCPS_HOME", Path.home() / ".lmcps"))
@@ -663,6 +668,26 @@ def call_http(name, cfg, method, params, before_send=None):
     return resp
 
 
+def start_lock(name, cmd):
+    """Serialize starts of one command. Two cold `npx -y <pkg>` installs into
+    the same directory corrupt each other (ENOTEMPTY, MODULE_NOT_FOUND, or a
+    tree left broken). The fd is also handed to the server, so an install
+    orphaned by a killed lmcps keeps holding the lock until it finishes."""
+    if fcntl is None:
+        return None
+    locks = LMCPS_HOME / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(json.dumps(cmd).encode()).hexdigest()[:16]
+    fd = os.open(locks / f"{key}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"lmcps: waiting for another start of '{name}' to finish "
+              f"(a first start installs its package)", file=sys.stderr)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 def call_stdio(name, cfg, method, params, before_send=None):
     keyenv = server_env(name, cfg)
     env = dict(os.environ)
@@ -685,13 +710,14 @@ def call_stdio(name, cfg, method, params, before_send=None):
     ACTIVE_STDERR = errf
     work = LMCPS_HOME / "work"
     work.mkdir(parents=True, exist_ok=True)
+    lock = start_lock(name, cmd)
     try:
         # MCP stdio is UTF-8 by specification. `text=True` alone would decode
         # with the locale encoding, silently mangling non-ASCII rather than failing.
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=errf, env=env, cwd=str(work),
                              text=True, encoding="utf-8", errors="replace",
-                             bufsize=1)
+                             bufsize=1, pass_fds=() if lock is None else (lock,))
     except OSError as e:
         # `which` already proved it exists, so this is unrunnable, not absent.
         die(f"'{name}': cannot execute {cmd[0]}: {e}")
@@ -754,6 +780,11 @@ def call_stdio(name, cfg, method, params, before_send=None):
                 capabilities={}, clientInfo=CLIENT_INFO)
     send(hello)
     init = await_id("lmcps-init", resend=hello)
+    # Any answer means the install is done. Unlocking here also unlocks the
+    # server's inherited copy: a flock belongs to the open file, not the fd.
+    if lock is not None:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
     if init is None:
         die(f"'{name}' exited before responding to initialize." + stderr_tail())
     LAST_INIT.update(init.get("result") or {})
@@ -1166,43 +1197,6 @@ def cmd_index(args):
     print(summary, file=sys.stderr)
 
 
-def cmd_warm(args):
-    """Start each stdio server once, detached, and return immediately.
-
-    A cold `npx -y <pkg>` install can outlast the sandbox's tool-call limit, so
-    the first real call is killed however patient lmcps itself is. Nothing here
-    can shorten that install -- but it can happen at conversation start, off the
-    path of anything the model is waiting for. stdin is /dev/null, so each
-    server exits on EOF once it is up; the point is the populated npx cache it
-    leaves behind."""
-    servers = load_servers()
-    started = []
-    for name, cfg in sorted(servers.items()):
-        if cfg.get("type") == "http" or cfg.get("url") or not cfg.get("command"):
-            continue  # nothing to install: an HTTP server answers in about a second
-        keyenv = server_env(name, cfg)
-        command = expand(cfg["command"], keyenv)
-        resolved = shutil.which(command, path=os.environ.get("PATH"))
-        if resolved is None:
-            continue
-        cmd = [resolved] + [expand(a, keyenv) for a in cfg.get("args") or []]
-        env = dict(os.environ)
-        for k, v in (cfg.get("env") or {}).items():
-            env[k] = expand(str(v), keyenv)
-        try:
-            # Detached, so it outlives this process and the shell that ran it.
-            kwargs = {"start_new_session": True} if os.name != "nt" else {}
-            subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             env=env, **kwargs)
-            started.append(name)
-        except OSError:
-            continue  # warming is best-effort by definition
-    if started:
-        print(f"warming in the background: {', '.join(started)}")
-    return started
-
-
 def cmd_refresh(args):
     for stale in LMCPS_HOME.glob("tools/*.json"):
         stale.unlink()
@@ -1240,10 +1234,6 @@ def main():
                     help="seconds before giving up (default: 300, or 900 for `index`, "
                          "which spawns every server in turn)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sub.add_parser("warm", help="start stdio servers detached to fill their "
-                   "package cache; returns at once"
-                   ).set_defaults(fn=cmd_warm)
 
     sub.add_parser("servers", help="configured servers; reads the config, spawns nothing"
                    ).set_defaults(fn=cmd_servers)

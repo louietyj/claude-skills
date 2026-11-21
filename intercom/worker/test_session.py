@@ -1697,6 +1697,25 @@ class PhoneAudio(unittest.TestCase):
         self.assertEqual((dev["audio"], dev["no_audio_why"], dev["call"]), (None, "left", None))
         ws.close()
 
+    def test_stopping_the_room_hangs_up_the_call(self):
+        for stop in ("screen", "claude"):
+            with self.subTest(stop=stop):
+                sid = create()
+                ws = screen(sid, "watch")
+                ccid, _ = self.answered(sid, ws)
+                if stop == "screen":
+                    ws.send(json.dumps({"type": "stop"}))
+                else:
+                    self.assertEqual(http("/stop", "POST", {}, id=sid)[0], 200)
+                recv_until(ws, lambda m: m.get("type") == "ended")
+                self.assertIn(ccid, TELNYX.hangups)
+                time.sleep(0.5)  # the hangup webhook lands after the end, and is ignored
+                events = texts(entries(sid), "event")
+                self.assertIn("hung up the phone line", events)
+                self.assertTrue(events[-1].startswith("session ended"), events)
+                self.assertIsNone(http("/status", id=sid)[1]["device"]["call"])
+                ws.close()
+
     def test_louie_hanging_up_leaves_the_room_without_audio(self):
         sid = create()
         ws = screen(sid, "watch")

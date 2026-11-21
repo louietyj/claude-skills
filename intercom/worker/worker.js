@@ -959,6 +959,12 @@ export class Session {
     if (!this.meta || this.meta.state === "ended") return;
     if (this.grace) { clearTimeout(this.grace.timer); this.grace = null; }
     if (this.speaking) await this.finishSpeak(this.speaking, "interrupted", `session ended: ${reason}`);
+    if (this.meta.call) {
+      // Cleared so the late hangup webhook is ignored: it would re-arm over the alarm the end sets.
+      const out = await this.hangUp();
+      this.meta.call = null;
+      await this.addEntry("event", { text: out.ok ? "hung up the phone line" : `could not hang up the phone line: ${out.error}` });
+    }
     await this.closeVoice();
     await this.closeTranscriber();          // its last finals land before the end entry
     await this.flushTurn();

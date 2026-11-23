@@ -1263,7 +1263,7 @@ def cmd_agent_push(cfg, args):
     llm = live_spec.pop("retell_llm")
     for name, path, body in (
             ("llm", f"/update-retell-llm/{cfg['llm_id']}",
-             {k: llm[k] for k in ("model", "general_prompt", "general_tools")}),
+             {k: llm[k] for k in ("model_config", "general_prompt", "general_tools")}),
             ("agent", f"/update-agent/{cfg['agent_id']}",
              {"handbook_config": live_spec["handbook_config"]})):
         status, resp = retell(cfg, path, method="PATCH", body=body)

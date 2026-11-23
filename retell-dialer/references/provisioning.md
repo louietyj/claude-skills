@@ -77,23 +77,32 @@ reworded where they assumed the business side. Filler words and the ~70-word
 turn ceiling were dropped: both fit a business explaining things, not a caller.
 [`retell-handbook.md`](retell-handbook.md) has the presets' text.
 
-`consult_supervisor` has `speak_during_execution` off. Retell speaks any text
-the model writes alongside a tool call, so the agent decides whether a consult
-needs "one sec" or silence; `NO_RESPONSE_NEEDED` is its way to say nothing.
-`dev/e2e/README.md` has the tests behind this.
+The model is `gpt-6.1-terra` (from 2026-11-23), about half Sonnet 5's price on
+Retell. Over 24 scripted text calls it got every account number, date and
+keypress right and asked one question per turn; Sonnet 5 rambled and chained
+questions, Sonnet 5.5 spoke its reasoning, and `tell-1` dropped digits and
+garbled spellings. `dev/e2e/README.md` has the method.
 
-`think` is a scratchpad, since Retell runs Sonnet 5 without thinking. It's a
-code tool that returns "ok": Retell's docs say code tools take no model
-arguments, but it accepts and passes a `parameters` schema (2026-11-23). Each
-use costs a second model call, about a second of silence. Sonnet 5.5 is still
-out: it ignored the scratchpad and sometimes wrote its reasoning as the reply.
+`consult_supervisor` and `end_call` speak their own `execution_message`
+(`speak_during_execution` on), and the prompt says to put the words there
+rather than in a reply. Terra tends to end a reply at "Let me check." or
+"Thanks, bye." without the tool call that should follow; with the words inside
+the call that can't happen. Retell speaks text written alongside a tool call
+and then drops the execution message, but `end_call` speaks both, hence "write
+nothing else". An empty message is silent; `NO_RESPONSE_NEEDED` works only as a
+whole reply and is read out if put in a tool. Sonnet worked the other way round
+(text plus a silent tool), so switching back means switching these too.
+
+A `think` scratchpad tool (a code tool returning "ok": Retell accepts
+`parameters` on code tools despite its docs) was tried and dropped: no model
+called it once in about 70 test turns.
 
 Retell also adds a current date and time block to the newest user turn
 ("Current Time Awareness"), and no setting turns it off. On short turns the
 agent took it for the other party's words ("that message looks like a block of
 calendar text") until the prompt described it.
 
-The model stays on `claude-5-sonnet`. On `claude-5.5-sonnet` the agent spoke its
+On `claude-5.5-sonnet` the agent spoke its
 reasoning aloud ("The transcript shows only 'Sure'… I'll repeat the intro") and
 dismissed short turns as system text; the same prompt on Sonnet 5 did neither.
 Sonnet 5.5 cannot fully disable thinking (`disabled` is a 400; the lowest

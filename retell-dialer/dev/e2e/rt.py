@@ -23,13 +23,13 @@ STATE = os.path.join(HERE, "test.json")
 NUMBER = CFG["from_number"]
 
 
-def api(path, method="GET", body=None):
+def api(path, method="GET", body=None, timeout=30):
     req = urllib.request.Request(
         f"https://api.retellai.com{path}", method=method,
         data=None if body is None else json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {CFG['retell_api_key']}", "content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:

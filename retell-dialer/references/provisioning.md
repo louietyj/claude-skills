@@ -82,6 +82,12 @@ the model writes alongside a tool call, so the agent decides whether a consult
 needs "one sec" or silence; `NO_RESPONSE_NEEDED` is its way to say nothing.
 `dev/e2e/README.md` has the tests behind this.
 
+`think` is a scratchpad, since Retell runs Sonnet 5 without thinking. It's a
+code tool that returns "ok": Retell's docs say code tools take no model
+arguments, but it accepts and passes a `parameters` schema (2026-11-23). Each
+use costs a second model call, about a second of silence. Sonnet 5.5 is still
+out: it ignored the scratchpad and sometimes wrote its reasoning as the reply.
+
 Retell also adds a current date and time block to the newest user turn
 ("Current Time Awareness"), and no setting turns it off. On short turns the
 agent took it for the other party's words ("that message looks like a block of

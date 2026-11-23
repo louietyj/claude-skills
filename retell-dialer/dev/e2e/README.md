@@ -66,8 +66,22 @@ python chat.py teardown
 ```
 
 Each line of the JSON list is sent as their turn; the agent's messages and tool
-calls come back, with an empty reply for `NO_RESPONSE_NEEDED`. Keep scripts
-consult-free, or answer consults with the dialer: they reach the real queue.
+calls come back, with an empty reply for `NO_RESPONSE_NEEDED`. Consults reach
+the real queue and hold the turn open until answered with the dialer.
+
+Better than a script: play the business turn by turn and react to what it
+does, the way a real menu or receptionist would (re-prompt after silence,
+"invalid option", a refusal). The agent only experiences turns, not time, so
+for its decisions this is as good as a call:
+
+```bash
+python chat.py start harbor.vars.json
+python chat.py say "Thanks for calling Harbor Car Rental, this is Sam."
+python chat.py end
+```
+
+A fixed script can't do this. It plays on regardless of what the agent did, so
+it checks mechanics (what's spoken, what's silent), not behaviour.
 
 ## What the 2026-11-23 runs established
 

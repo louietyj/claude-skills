@@ -80,8 +80,9 @@ npx wrangler secret put TELNYX_FROM             # the Telnyx number, E.164
 ```
 
 No number to call is in the repo: `intercom call --to` and the page pass one
-each time (the repo is public). `intercom health` says whether the phone line
-is set up.
+each time (the repo is public). A SIP URI works too (`sip:user@host`): it's
+how retell-dialer's `dev/e2e` reaches a Retell agent without the PSTN.
+`intercom health` says whether the phone line is set up.
 
 Quick start (a button opens the room and wakes Claude; see "Quick start"
 below) needs a claude.ai routine with an API trigger, whose prompt is

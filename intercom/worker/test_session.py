@@ -1467,6 +1467,15 @@ class PhoneLine(unittest.TestCase):
         self.assertEqual(TELNYX.hangups[-1], ccid)
         ws.close()
 
+    def test_a_sip_uri_is_dialed_as_is_and_only_its_host_is_kept(self):
+        sid = create()
+        uri = "sip:+16692152039@sip.retellai.com;transport=tcp"
+        ccid = self.dial(sid, uri)
+        self.assertEqual(TELNYX.calls[ccid]["body"]["to"], uri)
+        self.assertIn("calling sip:…@sip.retellai.com", call_events(sid))
+        self.assertEqual(http("/status", id=sid)[1]["device"]["call"]["to"], "sip:…@sip.retellai.com")
+        self.assertEqual(http("/call", "POST", {"to": "sip:nohost"}, id=create())[0], 400)
+
     def test_bad_numbers_and_a_second_call_are_refused(self):
         sid = create()
         ws = screen(sid, "phone")

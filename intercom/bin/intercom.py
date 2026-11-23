@@ -1041,7 +1041,8 @@ def main():
     sp.set_defaults(fn=cmd_speak)
 
     ca = sub.add_parser("call", help="have Telnyx ring a phone (Louie's) for the room's audio")
-    ca.add_argument("--to", required=True, help="E.164, e.g. +14155550123; Louie's is in memory, never in config")
+    ca.add_argument("--to", required=True, help="E.164, e.g. +14155550123, or a SIP URI, e.g. "
+                    "sip:+16692152039@sip.retellai.com; Louie's is in memory, never in config")
     ca.add_argument("--id")
     ca.set_defaults(fn=cmd_call)
 

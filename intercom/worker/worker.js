@@ -63,6 +63,7 @@ const SPEAK_CUT_BY = { left: "Louie left audio", dropped: "the screen holding th
                        "call ended": "the phone line ended", "line dropped": "the phone line's audio stream dropped" };
 const TELNYX_API_URL = "https://api.telnyx.com";
 const E164_RE = /^\+[1-9]\d{6,14}$/;
+const SIP_RE = /^sips?:[^\s@]+@[^\s@;]+(;\S*)?$/i;
 const RING_S = 20;                       // rings out before a voicemail would answer
 // Telnyx's media_format encodings, as Soniox's raw-audio settings. Its L16 is
 // little-endian (see toCall).
@@ -1109,7 +1110,10 @@ export class Session {
     if (!this.env.TELNYX_API_KEY || !this.env.TELNYX_CONNECTION_ID || !this.env.TELNYX_FROM) {
       return { ok: false, error: "the relay has no phone line set up" };
     }
-    if (!E164_RE.test(String(to ?? ""))) return { ok: false, error: "the number must be E.164, like +14155550123" };
+    to = String(to ?? "").trim();
+    if (!E164_RE.test(to) && !SIP_RE.test(to)) {
+      return { ok: false, error: "the number must be E.164, like +14155550123, or a SIP URI like sip:user@host" };
+    }
     if (this.meta.call) return { ok: false, error: `a call is already ${this.meta.call.state}` };
     const key = randomKey();
     const origin = this.meta.origin;
@@ -1128,10 +1132,14 @@ export class Session {
       return { ok: false, error: e.message };
     }
     await this.goLive();
-    this.meta.call = { state: "dialing", ccid: data.call_control_id, key, to4: to.slice(-4), at: Date.now() };
+    // Only a number's last digits, or a SIP URI's host, are kept.
+    const isNumber = E164_RE.test(to);
+    const label = isNumber ? `…${to.slice(-4)}` : `sip:…@${to.split("@")[1].split(";")[0]}`;
+    this.meta.call = { state: "dialing", ccid: data.call_control_id, key, label, at: Date.now() };
     this.lineN = 0;
     this.lineMarks = false;
-    await this.addEntry("event", { text: `${byLouie ? "Louie asked for a call: " : ""}calling his phone (…${to.slice(-4)})` });
+    const what = isNumber ? `his phone (${label})` : label;
+    await this.addEntry("event", { text: `${byLouie ? "Louie asked for a call: " : ""}calling ${what}` });
     this.sendRoom();
     return { ok: true, state: "dialing" };
   }
@@ -1589,7 +1597,7 @@ export class Session {
       hidden_s: s(this.meta.hidden_since),
       mic: this.micHears() ? "live" : this.meta.mic_silent_since ? "silent" : "unknown",
       mic_silent_s: s(this.meta.mic_silent_since),
-      call: this.meta.call ? { state: this.meta.call.state, to: `…${this.meta.call.to4}`,
+      call: this.meta.call ? { state: this.meta.call.state, to: this.meta.call.label,
                                s: s(this.meta.call.up_at ?? this.meta.call.at) } : null,
       last_audio_s: s(this.lastAudioAt),
       transcriber: this.stt ? "open" : this.sttOpening ? "opening" : "closed",

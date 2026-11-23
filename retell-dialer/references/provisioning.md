@@ -72,9 +72,15 @@ Every `handbook_config` preset is off. They are written for an agent that *is*
 the business answering customers — persona, examples, empathy lines, intake-style
 name confirmation — and with them on, the agent kept answering as the business
 it had called ("who can you transfer you to"). The parts worth keeping (speech
-normalization, NATO spelling, filler words, hard ceilings) are copied into the
-prompt, reworded where they assumed the business side.
+normalization, NATO spelling, speakability) are copied into the prompt,
+reworded where they assumed the business side. Filler words and the ~70-word
+turn ceiling were dropped: both fit a business explaining things, not a caller.
 [`retell-handbook.md`](retell-handbook.md) has the presets' text.
+
+`consult_supervisor` has `speak_during_execution` off. Retell speaks any text
+the model writes alongside a tool call, so the agent decides whether a consult
+needs "one sec" or silence; `NO_RESPONSE_NEEDED` is its way to say nothing.
+`dev/e2e/README.md` has the tests behind this.
 
 Retell also adds a current date and time block to the newest user turn
 ("Current Time Awareness"), and no setting turns it off. On short turns the

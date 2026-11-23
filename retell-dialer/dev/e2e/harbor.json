@@ -1,0 +1,35 @@
+{
+ "lines": [
+  [
+   1,
+   "Thanks for calling Harbor Car Rental, this is Sam."
+  ],
+  [
+   6,
+   "Good question, let me check. Please hold."
+  ],
+  [
+   12,
+   "Your call is important to us. Ask about our winter ski packages, now twenty percent off."
+  ],
+  [
+   6,
+   "Thanks for holding. Yes, all our SUVs have studs this time of year. It's fifteen dollars a day."
+  ],
+  [
+   14,
+   "Okay, anything else?"
+  ]
+ ],
+ "answers": [
+  [
+   2,
+   "Noted."
+  ],
+  [
+   3,
+   "Fine. That's all we need, wrap up politely."
+  ]
+ ],
+ "tail_s": 12
+}

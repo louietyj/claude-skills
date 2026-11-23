@@ -126,7 +126,9 @@ and how specifically.
    or research the agent cannot do mid-call. "Accept if it's under $100 and
    better than anything else we could get" delegates a comparison to you.
 3. **Only Louie may commit.**
-4. **Pre-rejected** — the hard nos.
+4. **Pre-rejected** — the hard nos. The agent reads them literally: "never make a
+   reservation" stopped it answering a phone menu's "Are you calling to book a
+   new reservation?" until the brief added that a routing answer is fine.
 
 **The brief carries 1 and 4.** Anything between them is a consult, and you hold
 the line between 2 and 3 — so the agent needs the categories that escalate (a

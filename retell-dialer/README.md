@@ -31,6 +31,7 @@ to avoid.
 | `agent/agent.json` | the Retell agent + response engine, ids templated out |
 | `agent/prompt.md` | the agent's prompt, source of `general_prompt` in `agent.json` |
 | `dev/webcall/` | localhost launcher, for exercising the loop without PSTN |
+| `dev/e2e/` | a throwaway agent copy, tested by voice (intercom plays the business over SIP) or text (Retell's Chat API) |
 | `dev/monitor-frames.jsonl` | every monitor frame of a recorded browser call, with arrival times; `follow`'s tests replay it |
 | `references/provisioning.md` | deploying the Worker, the agent, PII settings |
 | `references/retell-handbook.md` | Retell's handbook presets, as the agent recited them, and why they're off |

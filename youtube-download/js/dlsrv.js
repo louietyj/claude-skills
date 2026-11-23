@@ -27,15 +27,36 @@
   if (touch.status !== 200) return done({ error: "touch_failed", status: touch.status, body: touch.text });
 
   const path = ["mp3", "m4a", "opus"].includes(req.format) ? "/api/download/mp3" : "/api/download/mp4";
-  let res;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    await sleep(1500);
-    res = await call("POST", path, req);
-    if (!(res.status === 403 && /not ready/i.test(res.text))) break;
+  const request = async (body) => {
+    let res;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await sleep(1500);
+      res = await call("POST", path, body);
+      if (!(res.status === 403 && /not ready/i.test(res.text))) break;
+    }
+    return res;
+  };
+  // "Request failed with status code N" is the backend's own fetch from YouTube failing.
+  const refused = (res) => done({
+    error: res.status === 429 ? "rate_limited"
+      : /Request failed with status code/i.test(res.text) ? "upstream_refused" : "download_refused",
+    status: res.status, body: res.text,
+  });
+
+  // Probe: each link's filename names what would be served; 2160 gets the video's best.
+  if (req.probe) {
+    const out = {};
+    for (const quality of ["2160", "1080"]) {
+      const res = await request({ ...req, probe: undefined, quality });
+      if (res.status !== 200 || res.json?.error) return refused(res);
+      const m = /\((\d+p), (\w+)\)\.\w+$/.exec(res.json?.filename || "");
+      out[quality === "2160" ? "best" : "at_1080"] = m ? `${m[1]} ${m[2]}` : res.json?.filename;
+    }
+    return done(out);
   }
-  if (res.status !== 200 || res.json?.error) {
-    return done({ error: "download_refused", status: res.status, body: res.text });
-  }
+
+  const res = await request(req);
+  if (res.status !== 200 || res.json?.error) return refused(res);
 
   // The page's v3 path answers with a job to poll instead of a URL; handle both.
   let result = res.json;

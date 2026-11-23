@@ -13,7 +13,7 @@ import urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "..", "js", "dlsrv.js")
 EMBED = "https://embed.dlsrv.online/v1/full?videoId={}"
-VIDEO_QUALITIES = ["1080", "720", "480", "360", "240", "144"]
+VIDEO_QUALITIES = ["2160", "1440", "1080", "720", "480", "360", "240", "144"]
 AUDIO_QUALITIES = ["320", "256", "128", "96", "64"]
 
 
@@ -53,6 +53,13 @@ def cmd_page(a):
 def cmd_js(a):
     fmt, q = a.format, a.quality
     allowed = VIDEO_QUALITIES if fmt == "mp4" else AUDIO_QUALITIES
+    if a.probe:
+        if fmt != "mp4" or q is not None:
+            sys.exit("ytdl: --probe takes neither --format nor --quality")
+        req = {"videoId": video_id(a.video), "format": "mp4", "probe": True}
+        with open(JS) as fh:
+            print(fh.read().replace("__REQUEST__", json.dumps(req)))
+        return
     if fmt in ("m4a", "opus"):
         q = "320"  # the page always sends 320 for these
     elif q is None:
@@ -90,8 +97,14 @@ def cmd_fetch(a):
               file=sys.stderr)
         return 3
     _, size, speed = r.stdout.split()
+    info = probe(out)
+    # Audio comes named .mp3 whatever was asked for, but has so far been AAC.
+    if os.path.isdir(a.output) and out.endswith(".mp3") and info.endswith("audio aac"):
+        m4a = out[:-4] + ".m4a"
+        os.replace(out, m4a)
+        out = m4a
     print(f"saved {out}  {int(size) / 1e6:.1f} MB at {float(speed) / 1e6:.1f} MB/s")
-    print(probe(out))
+    print(info)
     return 0
 
 
@@ -147,8 +160,10 @@ def main() -> int:
     s = sub.add_parser("js", help="print the page script, with the request filled in")
     s.add_argument("video")
     s.add_argument("--format", choices=["mp4", "mp3", "m4a", "opus"], default="mp4")
-    s.add_argument("--quality", help="mp4: 1080 720 480 360 240 144 (default 720); "
-                                     "mp3: 320 256 128 96 64 (default 128)")
+    s.add_argument("--quality", help="mp4: 2160 1440 1080 720 480 360 240 144 (default 720; "
+                                     "above 1080 is AV1); mp3: 320 256 128 96 64 (default 128)")
+    s.add_argument("--probe", action="store_true",
+                   help="instead of a link, report the best quality on offer and what 1080 gives")
     s.set_defaults(fn=cmd_js)
 
     s = sub.add_parser("fetch", help="download the file a page-script result points to")

@@ -45,10 +45,28 @@ ytdl fetch /tmp/link.json -o <dir-or-file>
 Run all of it in one bash call, straight through: the link expires about 80 s
 after the eval. `fetch` prints the size, speed and what ffprobe sees.
 
-- `--quality`: 1080 720 480 360 240 144 for mp4 (720 is plenty for frames).
-  Above 1080 the site wants its desktop app.
+- `--quality`: 2160 1440 1080 720 480 360 240 144 for mp4. **720 is the
+  default and plenty** for frames, checking what is on screen, or a clip.
+  Go higher only when the pixels are the product: a poster, a print, a crop
+  you will blow up. Up to 1080 is H.264; 1440 and 2160 come as AV1 (YouTube
+  has no H.264 above 1080), which ffmpeg and browsers read but some older
+  players don't. Asking for more than the video has quietly gives its best,
+  in AV1. The site's own page hides 1440 and up behind a desktop-app upsell;
+  the API serves them.
 - `--format mp3|m4a|opus` for audio only. Whatever the name, the file has so
-  far been AAC in an MP4 container at about 128 kbps; ffmpeg reads it.
+  far been AAC at about 128 kbps; `fetch` saves it as `.m4a` when it names the
+  file itself.
+
+**Probe**, only when the top quality matters: `ytdl js <video> --probe` in
+place of the link script prints `{"best":"2160p av1","at_1080":"1080p h264"}`.
+It asks for 2160 and 1080 and reads the filenames the backend would serve;
+the backend looks the video up but downloads nothing until a link is fetched.
+Each probe is still two download requests against the rate limit below.
+
+**Rate limit.** The front end answered 429 "Too many requests. Please slow
+down." to the seventh download request in about a minute (three probes,
+then a download; 2026-11-23). Space calls out; on `rate_limited`, wait a
+minute.
 
 `fetch` exits 2 when the eval returned an error instead of a link, and prints
 it:
@@ -57,8 +75,9 @@ it:
 |---|---|
 | `wrong_page` | the tab is not on the embed page; nav again |
 | `no_session` | the page never solved its captcha. Look at the screenshot. Retry once, then rung 2 |
+| `rate_limited` | too many requests; wait a minute, then once more |
 | `touch_failed`, `download_refused`, `progress_failed`, `no_url` | the API changed or refused this video. Go to rung 2; if rung 2 works, fix the script (below) |
-| `conversion_failed` | their backend could not get the video. Rung 2 will fail too; go to rung 3 |
+| `upstream_refused`, `conversion_failed` | their backend could not get the video from YouTube ("Request failed with status code 403/422"). Rung 2 fails identically; go to rung 3 |
 
 Exit 3 is a failed download, usually an expired link: eval again and fetch at
 once.
@@ -68,14 +87,18 @@ once.
 The site is plastered with ad hooks: **every Download click opens an ad tab
 and makes it current.** Close it and go back to the yt1s tab each time.
 
-1. `nav https://yt1s.com.co/en230/`, `fill` the "Search or paste Youtube link
-   here" box with the full YouTube URL. It converts on its own (no click);
-   the page moves to `/download/` and shows the dlsrv panel in an iframe.
+1. `nav https://yt1s.com.co/en230/`, then `fill first:css:input "<url>"`
+   with the full YouTube URL (`fill` takes a selector, not the box's
+   placeholder text). It converts on its own (no click); within ~8 s the page
+   moves to `/download/` and shows the dlsrv panel.
 2. Click **Video** (Audio is the default tab), then the row's **Download**.
    An invisible cover makes ref and `text:` clicks fail as occluded: click by
-   coordinates off the screenshot.
-3. Close the ad tab, back to the yt1s tab. A dialog shows **Download Now**:
-   click it (coordinates again). Another ad tab opens; close it.
+   coordinates off the screenshot. The 1440p and 2160p rows show **Install**
+   (a desktop-app upsell) instead: use rung 1 for those.
+3. Close the ad tab (`tab`, `tab close <id>`, `tab <yt1s id>`). A dialog
+   shows **Download Now**: click it (coordinates again). Another ad tab
+   opens; close it. A **Download Failed** dialog instead means the backend
+   could not get the video, as `upstream_refused` does in rung 1.
 4. The file downloads in the yt1s tab, not the current one, so `wait
    --download` on the ad tab times out. Run `downloads`, take the handle, then
    `wait --download <handle> -o <file>`.
@@ -112,8 +135,14 @@ Each piece is load-bearing (all tested 2026-11-22, 3 of 3 videos):
 
 Be gentle with his IP: one video at a time, and stop at the first "Sign in to
 confirm you're not a bot" through the proxy rather than retrying: his IP is
-walled for now. "This video is unavailable" from every rung is usually real
-(jNQXAC9IJRE, "Me at the zoo", is one).
+walled for now.
+
+"This video is unavailable" from every rung does not mean the video is gone.
+On 2026-11-23 dQw4w9WgXc0 played in Louie's Chrome at home, incognito too,
+while curl from his PC (IPv4 and IPv6), yt-dlp and CloakBrowser through his
+home IP all got "unavailable" and dlsrv got 403/422: some videos are served
+only to a genuine Chrome. Tell Louie that rather than calling it missing; no
+rung here gets them.
 
 ## Frames
 
@@ -148,7 +177,11 @@ the fix to claude-skills (`youtube-download/`).
    with its own touch.
 4. **Result.** `{"status":"tunnel","url":"https://yt1s-worker-N.dlsrv.online/tunnel?id=…&exp=…&sig=…&sec=…&iv=…","filename":…}`:
    cobalt's tunnel format, so the backend looks like a self-hosted cobalt
-   fleet. The URL needs no auth and expires in about 80 s.
+   fleet (cobalt's default tunnel lifespan is 90 s). The URL needs no auth
+   and expires in about 80 s. In cobalt, the API call only resolves YouTube's
+   stream URLs and caches them (`createStream` in `api/src/stream/manage.js`);
+   nothing streams from YouTube until `GET /tunnel`, which is what makes a
+   probe cheap. The filename ends `(<height>p, <codec>)`.
 5. **v3.** The bundle also has a job API: `POST /api/v3/download` returns
    `{job}`, polled at `GET /api/v3/progress?job=` until `{done, url}`. The
    script follows a `job` if the v1 endpoints start answering with one. The

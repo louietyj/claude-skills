@@ -7,12 +7,40 @@ agent, so the live one is never touched until `dialer agent-push`.
 | | Voice (intercom → Retell) | Text (Retell Chat API) |
 |---|---|---|
 | Tests | everything, including what gets *spoken*: tool-call speech, `NO_RESPONSE_NEEDED`, double turns, timing | what the model decides: turn length, menus, silence choices |
-| Cost | a normal call: ~$0.14/min Retell + Telnyx | $0.02 per agent message |
+| Cost | ~11¢/min on Terra (~17¢ on Sonnet 5), plus Telnyx | 1¢ per agent message on Terra (2¢ Sonnet), plus ~2¢ per chat |
 | Fidelity | the real voice pipeline | no TTS or turn-taking; menus can play out differently |
 
 Use text to iterate on wording, voice to confirm. They disagree sometimes: a
 speech menu question that came straight after a language prompt got silence on
 voice and a keypress in text (2026-11-23).
+
+## What it costs
+
+This is Louie's own money: Retell auto-recharges his card $11 at a time.
+On 2026-11-23 a day of testing cost about $16 (16 calls, $6.20; 110 chats,
+$9.88) and fired the recharge twice in 80 minutes, enough for his bank to flag
+it as a double charge. Chats feel free, and they aren't: they made up most of
+that day's bill.
+
+Per-unit rates, from that day's bills:
+
+- **Voice call:** 7¢/min for Retell's engine (5.5¢) and TTS (1.5¢), plus the
+  model (3.2¢/min Terra, 6.4¢/min Sonnet 5), plus a token surcharge once the
+  prompt passes 4k tokens, which it always does here (see the last bullet
+  below). The surcharge scales with the model's price and grows as the
+  transcript does: 0.3–1.3¢/min on Terra, 2.4–6.3¢/min on Sonnet. In total
+  that's 10.5–11.5¢/min on Terra and 16–20¢/min on Sonnet 5, plus a 0.3¢
+  surcharge on calls under 10s. A 2-minute test call costs 20–35¢; the
+  longest one (9.6 min on Sonnet) cost $1.90.
+- **Chat:** 1¢ per agent message on Terra, 2¢ on Sonnet 5/5.5, 1.1¢ on
+  `tell-1`. Every chat that ends adds 2.08¢ for Retell's post-chat analysis.
+  A 15-turn roleplay costs 17–32¢.
+
+Before a batch, say roughly what it will cost. Stop and ask Louie before
+anything past about $5 in one sitting. To see what you've spent, sum
+`call_cost.combined_cost` from `POST /v3/list-calls` and
+`chat_cost.combined_cost` from `POST /v3/list-chats` (`{"limit": 1000}`). Both
+are in **cents**.
 
 ## The copy
 

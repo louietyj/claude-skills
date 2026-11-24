@@ -77,9 +77,11 @@ reworded where they assumed the business side. Filler words and the ~70-word
 turn ceiling were dropped: both fit a business explaining things, not a caller.
 [`retell-handbook.md`](retell-handbook.md) has the presets' text.
 
-The model is `gpt-6.1-terra` (from 2026-11-23), about half Sonnet 5's price on
-Retell. Over 24 scripted text calls it got every account number, date and
-keypress right and asked one question per turn; Sonnet 5 rambled and chained
+The model is `gpt-6.1-terra` (from 2026-11-23). On Retell it costs half what
+Sonnet 5 does (3.2¢ vs 6.4¢/min), but a whole call only drops to about
+two-thirds (11¢ vs 17¢/min), since the engine and TTS cost the same either way
+(`dev/e2e/README.md`, "What it costs"). Over 24 scripted text calls it got
+every account number, date and keypress right and asked one question per turn; Sonnet 5 rambled and chained
 questions, Sonnet 5.5 spoke its reasoning, and `tell-1` dropped digits and
 garbled spellings. `dev/e2e/README.md` has the method.
 
